@@ -49,6 +49,7 @@ struct Vk_Context
 {
 	SDL_Window* window;
 	VkInstance instance;
+	VkDebugUtilsMessengerEXT debug_messenger;
 	VkPhysicalDevice physical_device;
 	VkDevice device;
 	VmaAllocator allocator;
@@ -64,9 +65,18 @@ struct Vk_Context
 	std::vector<VkImageView> swapchain_image_views;
 	Vk_Allocated_Buffer shader_binding_table;
 	uint32_t aligned_size;
+	VkQueue graphics_queue;
 };
 
+static VKAPI_ATTR VkBool32 VKAPI_CALL debug_callback(
+	VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+	VkDebugUtilsMessageTypeFlagsEXT messageType,
+	const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
+	void* pUserData) {
 
+	printf("validation layer: %s\n", pCallbackData->pMessage);
+	return VK_FALSE;
+}
 
 void create_vk_instance(Vk_Context* context)
 {
@@ -84,6 +94,7 @@ void create_vk_instance(Vk_Context* context)
 	assert(count != 0);
 	std::vector<const char*> instance_exts(count);
 	SDL_Vulkan_GetInstanceExtensions(context->window, &count, instance_exts.data());
+	instance_exts.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
 
 	create_info.enabledExtensionCount = (uint32_t)instance_exts.size();
 	create_info.ppEnabledExtensionNames = instance_exts.data();
@@ -95,11 +106,26 @@ void create_vk_instance(Vk_Context* context)
 	create_info.enabledLayerCount = (uint32_t)validation_layers.size();
 	create_info.ppEnabledLayerNames = validation_layers.data();
 
+	VkValidationFeatureEnableEXT enabled[] = { VK_VALIDATION_FEATURE_ENABLE_DEBUG_PRINTF_EXT };
+	VkValidationFeaturesEXT      features{ VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT };
+	features.disabledValidationFeatureCount = 0;
+	features.enabledValidationFeatureCount = 1;
+	features.pDisabledValidationFeatures = nullptr;
+	features.pEnabledValidationFeatures = enabled;
+
+	features.pNext = create_info.pNext;
+	create_info.pNext = &features;
+
 	VkInstance instance;
 	VK_CHECK(vkCreateInstance(&create_info, nullptr, &instance));
 
 	volkLoadInstance(instance);
 
+	VkDebugUtilsMessengerCreateInfoEXT ci{VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT};
+	ci.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;// | VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT;
+	ci.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT;// | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+	ci.pfnUserCallback = debug_callback;
+	VK_CHECK(vkCreateDebugUtilsMessengerEXT(instance, &ci, nullptr, &context->debug_messenger));
 	context->instance = instance;
 }
 
@@ -130,7 +156,8 @@ void vk_find_physical_device(Vk_Context* context)
 		VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
 		VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME,
 		VK_KHR_SWAPCHAIN_EXTENSION_NAME,
-		VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME
+		VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME,
+		VK_KHR_SHADER_NON_SEMANTIC_INFO_EXTENSION_NAME
 	};
 
 	uint32_t count;
@@ -242,6 +269,8 @@ void vk_find_physical_device(Vk_Context* context)
 	volkLoadDevice(dev);
 
 	context->device = dev;
+
+	vkGetDeviceQueue(context->device, context->graphics_idx, 0, &context->graphics_queue);
 }
 
 void vk_init_mem_allocator(Vk_Context* ctx)
@@ -285,7 +314,7 @@ Vk_Allocated_Image vk_allocate_image(Vk_Context* ctx, VkExtent3D extent)
 	cinfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 	cinfo.mipLevels = 1;
 	cinfo.samples = VK_SAMPLE_COUNT_1_BIT;
-	cinfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
+	cinfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 
 	VmaAllocationCreateInfo allocinfo{};
 	allocinfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
@@ -432,7 +461,7 @@ void vk_create_swapchain(Vk_Context* ctx)
 	cinfo.imageColorSpace = surface_format.colorSpace;
 	cinfo.imageExtent = extent;
 	cinfo.imageArrayLayers = 1;
-	cinfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+	cinfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 	cinfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
 	cinfo.queueFamilyIndexCount = 0;
 	cinfo.pQueueFamilyIndices = nullptr;
@@ -470,6 +499,26 @@ void vk_create_swapchain(Vk_Context* ctx)
 
 		VK_CHECK(vkCreateImageView(ctx->device, &cinfo, nullptr, &ctx->swapchain_image_views[i]));
 	}
+}
+
+VkFence vk_create_fence(Vk_Context* ctx)
+{
+	VkFenceCreateInfo cinfo{ VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
+	cinfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+	
+	VkFence fence;
+	VK_CHECK(vkCreateFence(ctx->device, &cinfo, nullptr, &fence));
+
+	return fence;
+}
+
+VkSemaphore vk_create_semaphore(Vk_Context* ctx)
+{
+	VkSemaphoreCreateInfo cinfo{ VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
+	
+	VkSemaphore sem;
+	VK_CHECK(vkCreateSemaphore(ctx->device, &cinfo, nullptr, &sem));
+	return sem;
 }
 
 Vk_Pipeline vk_create_rt_pipeline(Vk_Context* ctx)
@@ -515,7 +564,12 @@ Vk_Pipeline vk_create_rt_pipeline(Vk_Context* ctx)
 	rtsgci[raygen_group_index].intersectionShader = VK_SHADER_UNUSED_KHR;
 
 	rtsgci[miss_group_index] = rtsgci[raygen_group_index];
+	rtsgci[miss_group_index].sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
+	rtsgci[miss_group_index].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
 	rtsgci[miss_group_index].generalShader = miss_index;
+	rtsgci[miss_group_index].closestHitShader = VK_SHADER_UNUSED_KHR;
+	rtsgci[miss_group_index].anyHitShader = VK_SHADER_UNUSED_KHR;
+	rtsgci[miss_group_index].intersectionShader = VK_SHADER_UNUSED_KHR;
 	
 	rtsgci[hit_group_index].sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
 	rtsgci[hit_group_index].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
@@ -579,13 +633,12 @@ Vk_Pipeline vk_create_rt_pipeline(Vk_Context* ctx)
 		VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
 		VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR
 	);
-
 	void* mapped;
 	vmaMapMemory(ctx->allocator, rt_sbt_buffer.allocation, &mapped);
 	uint8_t* pdata = (uint8_t*)mapped;
 	for (uint32_t g = 0; g < group_count; ++g)
 	{
-		memcpy(mapped, shader_handle_storage.data() + g * group_handle_size,
+		memcpy(pdata, shader_handle_storage.data() + g * group_handle_size,
 			group_handle_size);
 		pdata += group_size_aligned;
 	}
@@ -596,6 +649,40 @@ Vk_Pipeline vk_create_rt_pipeline(Vk_Context* ctx)
 	return pl;
 }
 
+void vk_transition_layout(
+	VkCommandBuffer cmd,
+	VkImage img,
+	VkImageLayout src_layout,
+	VkImageLayout dst_layout,
+	VkAccessFlags src_access_mask,
+	VkAccessFlags dst_access_mask,
+	VkPipelineStageFlags src_stage_mask,
+	VkPipelineStageFlags dst_stage_mask)
+{
+	// Transition the fucking image
+	VkImageSubresourceRange range;
+	range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+	range.baseArrayLayer = 0;
+	range.baseMipLevel = 0;
+	range.layerCount = 1;
+	range.levelCount = 1;
+
+	VkImageMemoryBarrier img_barrier{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+	img_barrier.oldLayout = src_layout;
+	img_barrier.newLayout = dst_layout;
+	img_barrier.image = img;
+	img_barrier.subresourceRange = range;
+	img_barrier.srcAccessMask = src_access_mask;
+	img_barrier.dstAccessMask = dst_access_mask;
+
+	vkCmdPipelineBarrier(cmd,
+		src_stage_mask,
+		dst_stage_mask,
+		0,
+		0, nullptr,
+		0, nullptr,
+		1, &img_barrier);
+}
 
 int main(int argc, char** argv)
 {
@@ -615,10 +702,13 @@ int main(int argc, char** argv)
 	vk_create_descriptor_set_layout_and_pool(&vk_context);
 	vk_context.rt_pipeline = vk_create_rt_pipeline(&vk_context);
 
+	VkFence fence = vk_create_fence(&vk_context);
+	VkSemaphore semaphore = vk_create_semaphore(&vk_context);
+
 	Vk_Allocated_Image img = vk_allocate_image(&vk_context, { 1280, 720, 1 });
 
-	std::vector<float> vertices = { -1.f, -1.f, 0.f, 1.f, -1.f, 0.f, -1.f, 1.f, 0.f, 1.f, 1.f, 0.f };
-	std::vector<uint32_t> indices = { 0, 1, 2, 2, 1, 3 };
+	std::vector<float> vertices = { -0.5f, -0.5f, 0.f, 0.5f, -.5f, 0.f, 0.f, .5f, 0.f };//; 1.f, 1.f, 0.f};
+	std::vector<uint32_t> indices = { 0, 1, 2 };//,2, 1, 3};
 
 	Vk_Allocated_Buffer vertex_buffer = vk_allocate_buffer(&vk_context,
 		(uint32_t)(vertices.size() * sizeof(float)),
@@ -636,12 +726,14 @@ int main(int argc, char** argv)
 	VkDeviceAddress index_buffer_addr = vkGetBufferDeviceAddress(vk_context.device, &addr_info);
 
 	VkAccelerationStructureGeometryTrianglesDataKHR triangles{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR };
-	triangles.vertexFormat = VK_FORMAT_R32G32B32A32_SFLOAT;
+	triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
 	triangles.vertexData.deviceAddress = vertex_buffer_addr;
+	//triangles.vertexData.hostAddress = vertices.data();
 	triangles.vertexStride = 3 * sizeof(float);
 	triangles.indexType = VK_INDEX_TYPE_UINT32;
 	triangles.indexData.deviceAddress = index_buffer_addr;
-	triangles.maxVertex = uint32_t(vertices.size() - 1);
+	//triangles.indexData.hostAddress = indices.data();
+	triangles.maxVertex = vertices.size() / 3 - 1;
 	triangles.transformData = { 0 };
 
 	VkAccelerationStructureGeometryKHR geometry{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR };
@@ -651,7 +743,7 @@ int main(int argc, char** argv)
 
 	VkAccelerationStructureBuildRangeInfoKHR range_info;
 	range_info.firstVertex = 0;
-	range_info.primitiveCount = uint32_t(indices.size() / 2);
+	range_info.primitiveCount = indices.size() / 3;
 	range_info.primitiveOffset = 0;
 	range_info.transformOffset = 0;
 
@@ -669,7 +761,7 @@ int main(int argc, char** argv)
 
 	Vk_Allocated_Buffer buffer_blas = vk_allocate_buffer(&vk_context, (uint32_t)size_info.accelerationStructureSize,
 		VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-
+	//uint8_t* buffer_blas_host = new uint8_t[size_info.accelerationStructureSize];
 	VkAccelerationStructureKHR blas;
 	VkAccelerationStructureCreateInfoKHR create_info{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR };
 	create_info.type = build_geom_info.type;
@@ -688,8 +780,6 @@ int main(int argc, char** argv)
 	begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 	vkBeginCommandBuffer(vk_context.main_command_buffer, &begin_info);
 	vkCmdBuildAccelerationStructuresKHR(vk_context.main_command_buffer, 1, &build_geom_info, &p_range_info);
-	vkDeviceWaitIdle(vk_context.device);
-	vkEndCommandBuffer(vk_context.main_command_buffer);
 
 	VkAccelerationStructureDeviceAddressInfoKHR address_info{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR };
 	address_info.accelerationStructure = blas;
@@ -697,11 +787,12 @@ int main(int argc, char** argv)
 
 	VkAccelerationStructureInstanceKHR instance{};
 	const float rcp_sqrt_2 = sqrtf(0.5f);
-	instance.transform.matrix[0][0] = -rcp_sqrt_2;
-	instance.transform.matrix[0][2] = rcp_sqrt_2;
-	instance.transform.matrix[1][1] = 1.f;
-	instance.transform.matrix[2][0] = -rcp_sqrt_2;
-	instance.transform.matrix[2][2] = -rcp_sqrt_2;
+	//instance.transform.matrix[0][0] = -rcp_sqrt_2;
+	instance.transform.matrix[0][0] = instance.transform.matrix[1][1] = instance.transform.matrix[2][2] = 1.f;
+	//instance.transform.matrix[0][2] = rcp_sqrt_2;
+	//instance.transform.matrix[1][1] = 1.f;
+	//instance.transform.matrix[2][0] = -rcp_sqrt_2;
+	//instance.transform.matrix[2][2] = -rcp_sqrt_2;
 	instance.instanceCustomIndex = 0;
 	instance.mask = 0xFF;
 	instance.instanceShaderBindingTableRecordOffset = 0;
@@ -710,7 +801,6 @@ int main(int argc, char** argv)
 
 	Vk_Allocated_Buffer buffer_instances = vk_allocate_buffer(&vk_context, (uint32_t)sizeof(instance), VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
 	vk_upload(&vk_context, &buffer_instances, &instance, (uint32_t)sizeof(instance));
-	vkBeginCommandBuffer(vk_context.main_command_buffer, &begin_info);
 	VkMemoryBarrier barrier{ VK_STRUCTURE_TYPE_MEMORY_BARRIER };
 	barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
 	barrier.dstAccessMask = { VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR };
@@ -721,9 +811,8 @@ int main(int argc, char** argv)
 		1, &barrier,
 		0, nullptr,
 		0, nullptr);
-	vkDeviceWaitIdle(vk_context.device);
-	vkEndCommandBuffer(vk_context.main_command_buffer);
 
+	range_info = {};
 	range_info.primitiveOffset = 0;
 	range_info.primitiveCount = 1;
 	range_info.firstVertex = 0;
@@ -767,14 +856,34 @@ int main(int argc, char** argv)
 
 	build_geom_info.dstAccelerationStructure = tlas;
 
-	scratch_buffer = vk_allocate_buffer(&vk_context, (uint32_t)size_info.buildScratchSize,
+	Vk_Allocated_Buffer scratch_buffer2 = vk_allocate_buffer(&vk_context, (uint32_t)size_info.buildScratchSize,
 		VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-	build_geom_info.scratchData.deviceAddress = get_buffer_device_address(&vk_context, scratch_buffer);
+	build_geom_info.scratchData.deviceAddress = get_buffer_device_address(&vk_context, scratch_buffer2);
 
-	vkBeginCommandBuffer(vk_context.main_command_buffer, &begin_info);
 	vkCmdBuildAccelerationStructuresKHR(vk_context.main_command_buffer, 1, &build_geom_info, &p_range_info);
-	vkDeviceWaitIdle(vk_context.device);
+
+	vk_transition_layout(
+		vk_context.main_command_buffer,
+		img.image,
+		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+		0, VK_ACCESS_SHADER_READ_BIT,
+		VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
+
+	for (int i = 0; i < vk_context.swapchain_images.size(); ++i)
+	{
+		vk_transition_layout(vk_context.main_command_buffer, vk_context.swapchain_images[i],
+			VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+			0, VK_ACCESS_SHADER_WRITE_BIT,
+			VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
+	}
+
 	vkEndCommandBuffer(vk_context.main_command_buffer);
+
+	VkSubmitInfo s{ VK_STRUCTURE_TYPE_SUBMIT_INFO };
+	s.commandBufferCount = 1;
+	s.pCommandBuffers = &vk_context.main_command_buffer;
+	vkQueueSubmit(vk_context.graphics_queue, 1, &s, VK_NULL_HANDLE);
+	vkDeviceWaitIdle(vk_context.device);
 
 	bool quit = false;
 	while (!quit)
@@ -787,7 +896,28 @@ int main(int argc, char** argv)
 
 		}
 		VkCommandBuffer cmd = vk_context.main_command_buffer;
+			
+		VkSubmitInfo submit{ VK_STRUCTURE_TYPE_SUBMIT_INFO };
+		submit.commandBufferCount = 1;
+		submit.pCommandBuffers = &cmd;
+		submit.signalSemaphoreCount = 1;
+		submit.pSignalSemaphores = &semaphore;
+
+		vkWaitForFences(vk_context.device, 1, &fence, VK_TRUE, UINT64_MAX);
+		vkResetFences(vk_context.device, 1, &fence);
+		uint32_t image_index = 0;
+		vkAcquireNextImageKHR(vk_context.device, vk_context.swapchain, UINT64_MAX, 0, fence, &image_index);
+		VkImage next_image = vk_context.swapchain_images[image_index];
+
+
 		vkBeginCommandBuffer(cmd, &begin_info);
+
+		vk_transition_layout(cmd, next_image, 
+			VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_GENERAL,
+			0, VK_ACCESS_SHADER_WRITE_BIT, 
+			VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR
+		);
+
 		vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, vk_context.rt_pipeline.pipeline);
 
 		VkWriteDescriptorSet writes[2] = { {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}, {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET} };
@@ -814,18 +944,18 @@ int main(int argc, char** argv)
 		VkDeviceAddress base = get_buffer_device_address(&vk_context, vk_context.shader_binding_table);
 		VkStridedDeviceAddressRegionKHR raygen_region{};
 		raygen_region.deviceAddress = base + 0 * vk_context.aligned_size;
-		raygen_region.stride = vk_context.aligned_size;
-		raygen_region.size = vk_context.aligned_size;
+		raygen_region.stride = 32;
+		raygen_region.size = 32;
 
 		VkStridedDeviceAddressRegionKHR miss_region{};
 		miss_region.deviceAddress = base + 1 * vk_context.aligned_size;
-		miss_region.stride = vk_context.aligned_size;
-		miss_region.size = vk_context.aligned_size;
+		miss_region.stride = 32;
+		miss_region.size = 32;
 
 		VkStridedDeviceAddressRegionKHR hit_region{};
 		hit_region.deviceAddress = base + 2 * vk_context.aligned_size;
-		hit_region.stride = vk_context.aligned_size;
-		hit_region.size = vk_context.aligned_size;
+		hit_region.stride = 32;
+		hit_region.size = 32;
 
 		VkStridedDeviceAddressRegionKHR callable_region{};
 
@@ -837,8 +967,57 @@ int main(int argc, char** argv)
 			&callable_region,
 			1280, 720, 1
 		);
+		VkMemoryBarrier memory_barrier{ VK_STRUCTURE_TYPE_MEMORY_BARRIER };
+		memory_barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+		memory_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+		vkCmdPipelineBarrier(cmd,
+			VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+			VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+			0,
+			1, &memory_barrier,
+			0, nullptr,
+			0, nullptr
+		);
 
+		VkImageBlit region;
+		VkImageSubresourceLayers src_layer{};
+		src_layer.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		src_layer.baseArrayLayer = 0;
+		src_layer.mipLevel = 0;
+		src_layer.layerCount = 1;
+		region.srcSubresource = src_layer;
+		region.srcOffsets[0] = { 0, 0, 0 }; 
+		region.dstOffsets[0] = { 0, 0, 0 };
+		region.srcOffsets[1] = { 1280, 720, 1 };
+		region.dstOffsets[1] = { 1280, 720, 1 };
+		VkImageSubresourceLayers dst_layer{};
+		dst_layer.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		dst_layer.baseArrayLayer = 0;
+		dst_layer.mipLevel = 0;
+		dst_layer.layerCount = 1;
+		region.dstSubresource = dst_layer;
+
+
+		vkCmdBlitImage(cmd, img.image, VK_IMAGE_LAYOUT_GENERAL, next_image, VK_IMAGE_LAYOUT_GENERAL, 1, &region, VK_FILTER_LINEAR);
+		vk_transition_layout(
+			cmd, next_image,
+			VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+			0, 0,
+			VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT
+		);
 		vkEndCommandBuffer(cmd);
+
+		VkPresentInfoKHR present_info{ VK_STRUCTURE_TYPE_PRESENT_INFO_KHR };
+		present_info.swapchainCount = 1;
+		present_info.pSwapchains = &vk_context.swapchain;
+		present_info.pImageIndices = &image_index;
+
+
+		vkQueueSubmit(vk_context.graphics_queue, 1, &submit, VK_NULL_HANDLE);
+
+		present_info.waitSemaphoreCount = 1;
+		present_info.pWaitSemaphores = &semaphore;
+		VK_CHECK(vkQueuePresentKHR(vk_context.graphics_queue, &present_info));
 		vkDeviceWaitIdle(vk_context.device);
 	}
 	

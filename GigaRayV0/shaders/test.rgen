@@ -1,6 +1,48 @@
 #version 460
+#extension GL_EXT_debug_printf : enable
+#extension GL_EXT_ray_tracing : require
+
+struct Ray_Payload
+{
+    vec3 color;
+};
+
+layout(location = 0) rayPayloadEXT Ray_Payload pay;
+layout(binding = 0, set = 0, rgba32f) uniform image2D output_image;
+layout(binding = 3, set = 0) uniform accelerationStructureEXT scene;
 
 void main()
 {
-    
+    pay.color = vec3(0.0);
+
+    const vec2 pixel_center = vec2(gl_LaunchIDEXT.xy) + vec2(0.5);
+    const float aspect = float(gl_LaunchSizeEXT.x) / float(gl_LaunchSizeEXT.y);
+    vec2 uv = pixel_center / vec2(gl_LaunchSizeEXT.xy);
+    uv.y = 1.0 - uv.y;
+    uv = uv * 2.0 - 1.0;
+    uv.x *= aspect;
+
+    vec3 ro = vec3(0.f, 0.f, 2.0);
+    vec3 rd = normalize(vec3(uv, -1.0));
+
+    traceRayEXT(
+        scene,
+        gl_RayFlagsOpaqueEXT,
+        0xFF,
+        0,
+        0,
+        0,
+        ro,
+        0.0,
+        rd,
+        1000.0,
+        0
+    );
+    //if (pixel.xy == ivec2(0, 0))
+    //    debugPrintfEXT("test");
+    /*if (pixel.y < 50)
+        imageStore(output_image, ivec2(gl_LaunchIDEXT), vec4(1.0, 0.0, 1.0, 1.0));
+    else*/    
+    imageStore(output_image, ivec2(gl_LaunchIDEXT), vec4(pay.color, 1.0));
+
 }
