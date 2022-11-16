@@ -3,6 +3,8 @@ find_package(Vulkan REQUIRED)
 add_library(glm INTERFACE)
 add_library(vma INTERFACE)
 
+add_library(tinyobjloader STATIC)
+
 target_include_directories(vma INTERFACE vma)
 target_include_directories(glm INTERFACE glm)
 
@@ -16,5 +18,12 @@ elseif (UNIX)
 target_include_directories(sdl2 INTERFACE ${sdl2_DIR}/include/SDL2 ${sdl2_image_DIR}/include/SDL2)
 target_link_directories(sdl2 INTERFACE ${sdl2_DIR}/lib ${sdl2_image_DIR}/lib)
 endif()
+
+target_sources(tinyobjloader PRIVATE 
+    tinyobjloader/tiny_obj_loader.h
+    tinyobjloader/tiny_obj_loader.cc
+    )
+
+target_include_directories(tinyobjloader PUBLIC tinyobjloader)
 
 target_link_libraries(sdl2 INTERFACE SDL2 SDL2main)

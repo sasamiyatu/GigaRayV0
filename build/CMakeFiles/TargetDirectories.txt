@@ -1,4 +1,0 @@
-D:/Projects/GigaRayV0/build/CMakeFiles/Shaders.dir
-D:/Projects/GigaRayV0/build/CMakeFiles/ALL_BUILD.dir
-D:/Projects/GigaRayV0/build/CMakeFiles/ZERO_CHECK.dir
-D:/Projects/GigaRayV0/build/src/CMakeFiles/GigaRayV0.dir
