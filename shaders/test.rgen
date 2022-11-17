@@ -1,15 +1,37 @@
 #version 460
 #extension GL_EXT_debug_printf : enable
 #extension GL_EXT_ray_tracing : require
+#extension  GL_EXT_scalar_block_layout : require
 
 struct Ray_Payload
 {
     vec3 color;
+    vec3 barycentrics;
+    int prim_id;
+};
+
+struct Vertex_Data
+{
+    vec3 pos;
+};
+
+struct Index_Data
+{
+    uvec3 index;
 };
 
 layout(location = 0) rayPayloadEXT Ray_Payload pay;
 layout(binding = 0, set = 0, rgba32f) uniform image2D output_image;
 layout(binding = 1, set = 0) uniform accelerationStructureEXT scene;
+layout(binding = 2, set = 0, scalar) readonly buffer vertex_buffer_t
+{
+    Vertex_Data verts[];
+} vertex_buffer;
+
+layout(binding = 3, set = 0, scalar) readonly buffer index_buffer_t
+{
+    Index_Data indices[];
+} index_buffer;
 
 void main()
 {
@@ -38,11 +60,28 @@ void main()
         1000.0,
         0
     );
+
+    vec3 out_color = pay.color;
+    vec3 normal = vec3(0.0);
+    if (pay.prim_id != -1)
+    {
+        uvec3 inds = index_buffer.indices[pay.prim_id].index;
+        vec3 v0 = vertex_buffer.verts[inds.x].pos;
+        vec3 v1 = vertex_buffer.verts[inds.y].pos;
+        vec3 v2 = vertex_buffer.verts[inds.z].pos;
+        normal = normalize(cross(v2 - v0, v1 - v0));
+        if (dot(normal, rd) > 0.0) normal = normal * -1.f;
+
+        vec3 L = normalize(vec3(1.0));
+        float cos_theata = max(0.0, dot(L, normal));
+        out_color = cos_theata * vec3(0.7, 0.2, 0.4);
+        //out_color = normal * 0.5 + 0.5;
+    }
     //if (pixel.xy == ivec2(0, 0))
     //    debugPrintfEXT("test");
     /*f (pixel_center.y < 50.0)
         imageStore(output_image, ivec2(gl_LaunchIDEXT), vec4(1.0, 0.0, 1.0, 1.0));
     else*/
-        imageStore(output_image, ivec2(gl_LaunchIDEXT), vec4(pay.color, 1.0));
+    imageStore(output_image, ivec2(gl_LaunchIDEXT), vec4(out_color, 1.0));
 
 }

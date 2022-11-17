@@ -78,7 +78,7 @@ Mesh load_obj_from_file(const char* filepath)
             index_offset += fv;
 
             // per-face material
-            shapes[s].mesh.material_ids[f];
+            (void)shapes[s].mesh.material_ids[f];
         }
     }
     Mesh ret;

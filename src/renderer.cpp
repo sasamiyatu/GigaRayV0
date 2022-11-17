@@ -1,8 +1,11 @@
 #include "renderer.h"
 #include "common.h"
+#include "vk_helpers.h"
 
 #include <assert.h>
 #include <array>
+#include <r_mesh.h>
+#include <ecs.h>
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL debug_callback(
 	VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
@@ -14,6 +17,15 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debug_callback(
 	return VK_FALSE;
 }
 
+static void vk_transition_layout(
+	VkCommandBuffer cmd,
+	VkImage img,
+	VkImageLayout src_layout,
+	VkImageLayout dst_layout,
+	VkAccessFlags src_access_mask,
+	VkAccessFlags dst_access_mask,
+	VkPipelineStageFlags src_stage_mask,
+	VkPipelineStageFlags dst_stage_mask);
 static bool check_extensions(const std::vector<const char*>& device_exts, const std::vector<VkExtensionProperties>& props);
 static void vk_begin_command_buffer(VkCommandBuffer cmd);
 
@@ -302,7 +314,7 @@ void Renderer::vk_create_command_pool()
 // FIXME: We're gonna need more stuff than this 
 void Renderer::vk_create_descriptor_set_layout()
 {
-	std::array<VkDescriptorSetLayoutBinding, 2> bindings;
+	std::array<VkDescriptorSetLayoutBinding, 4> bindings;
 	bindings[0].binding = 0;
 	bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
 	bindings[0].descriptorCount = 1;
@@ -313,6 +325,16 @@ void Renderer::vk_create_descriptor_set_layout()
 	bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
 	bindings[1].descriptorCount = 1;
 	bindings[1].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+
+	bindings[2].binding = 2;
+	bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+	bindings[2].descriptorCount = 1;
+	bindings[2].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+
+	bindings[3].binding = 3;
+	bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+	bindings[3].descriptorCount = 1;
+	bindings[3].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
 
 	VkDescriptorSetLayoutCreateInfo layout_info{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
 	layout_info.bindingCount = uint32_t(bindings.size());
@@ -573,7 +595,7 @@ Vk_Pipeline Renderer::vk_create_rt_pipeline()
 }
 
 // Inserts a barrier into the command buffer to perform a specific layout transition
-void Renderer::vk_transition_layout(
+static void vk_transition_layout(
 	VkCommandBuffer cmd,
 	VkImage img,
 	VkImageLayout src_layout,
@@ -825,19 +847,22 @@ void Renderer::end_frame()
 
 	present_info.waitSemaphoreCount = 1;
 	present_info.pWaitSemaphores = &context.frame_objects[frame_index].render_finished_sem;
-	VK_CHECK(vkQueuePresentKHR(context.graphics_queue, &present_info));
+	vkQueuePresentKHR(context.graphics_queue, &present_info);
 
 	frame_counter++;
 }
 
-void Renderer::draw()
+void Renderer::draw(ECS* ecs)
 {
 	VkCommandBuffer cmd = get_current_frame_command_buffer();
 
 	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, rt_pipeline.pipeline);
 
 	// Update descriptor set
-	VkWriteDescriptorSet writes[2] = { {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}, {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET} };
+
+	VkWriteDescriptorSet writes[4] = { };
+	for (int i = 0; i < std::size(writes); ++i)
+		writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 	writes[0].descriptorCount = 1;
 	writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
 	writes[0].dstArrayElement = 0;
@@ -856,7 +881,29 @@ void Renderer::draw()
 	writes[1].dstBinding = 1;
 	writes[1].dstSet = 0;
 	writes[1].pNext = &acr;
-	vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, rt_pipeline.layout, 0, 2, writes);
+
+	Mesh* m = get_mesh(ecs, 0);
+	// Vertex buffer
+	VkDescriptorBufferInfo buffer_info[2] = {};
+	buffer_info[0].buffer = m->vertex_buffer.buffer;
+	buffer_info[0].offset = 0;
+	buffer_info[0].range = VK_WHOLE_SIZE;
+	buffer_info[1].buffer = m->index_buffer.buffer;
+	buffer_info[1].offset = 0;
+	buffer_info[1].range = VK_WHOLE_SIZE;
+	writes[2].descriptorCount = 1;
+	writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+	writes[2].dstBinding = 2;
+	writes[2].dstSet = 0;
+	writes[2].pBufferInfo = &buffer_info[0];
+
+	writes[3].descriptorCount = 1;
+	writes[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+	writes[3].dstBinding = 3;
+	writes[3].dstSet = 0;
+	writes[3].pBufferInfo = &buffer_info[1];
+
+	vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, rt_pipeline.layout, 0, (uint32_t)std::size(writes), writes);
 
 	// Trace rays
 
@@ -900,17 +947,25 @@ void Renderer::draw()
 	);
 }
 
-Vk_Acceleration_Structure Renderer::vk_create_top_level_acceleration_structure(Vk_Allocated_Buffer* instances, int instance_count)
+Vk_Acceleration_Structure Renderer::vk_create_top_level_acceleration_structure(Mesh* mesh)
 {
+	assert(mesh->blas.has_value());
+	VkAccelerationStructureInstanceKHR instance = vkinit::acceleration_structure_instance(mesh->blas.value().acceleration_structure_buffer_address);
+	
+	Vk_Allocated_Buffer buffer_instances = vk_allocate_buffer((uint32_t)sizeof(instance),
+		VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+		VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0);
+	vk_upload_cpu_to_gpu(buffer_instances.buffer, &instance, (uint32_t)sizeof(instance));
+
 	VkAccelerationStructureBuildRangeInfoKHR range_info = {};
 	range_info.primitiveOffset = 0;
-	range_info.primitiveCount = instance_count;
+	range_info.primitiveCount = 1;
 	range_info.firstVertex = 0;
 	range_info.transformOffset = 0;
 
 	VkAccelerationStructureGeometryInstancesDataKHR instance_vk{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR };
 	instance_vk.arrayOfPointers = VK_FALSE;
-	instance_vk.data.deviceAddress = get_buffer_device_address(*instances);
+	instance_vk.data.deviceAddress = get_buffer_device_address(buffer_instances);
 
 	VkAccelerationStructureGeometryKHR geometry{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR };
 	geometry.geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR;
@@ -972,8 +1027,8 @@ Vk_Acceleration_Structure Renderer::vk_create_top_level_acceleration_structure(V
 	as.acceleration_structure_buffer_address = get_buffer_device_address(buffer_tlas);
 	as.scratch_buffer = scratch_buffer;
 	as.scratch_buffer_address = get_buffer_device_address(scratch_buffer);
-	as.tlas_instances = *instances;
-	as.tlas_instances_address = get_buffer_device_address(*instances);
+	as.tlas_instances = buffer_instances;
+	as.tlas_instances_address = get_buffer_device_address(buffer_instances);
 
 	return as;
 }
@@ -1096,7 +1151,11 @@ uint32_t Mesh::get_index_buffer_size()
 void Mesh::create_vertex_buffer(Renderer* renderer)
 {
 	vertex_buffer = renderer->vk_allocate_buffer(get_vertex_buffer_size(),
-		VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+		VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+		VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | 
+		VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+		VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+		VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
 		VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0);
 
 	renderer->vk_upload_cpu_to_gpu(vertex_buffer.buffer, vertices.data(), get_vertex_buffer_size());
@@ -1106,7 +1165,11 @@ void Mesh::create_vertex_buffer(Renderer* renderer)
 void Mesh::create_index_buffer(Renderer* renderer)
 {
 	index_buffer = renderer->vk_allocate_buffer(get_index_buffer_size(),
-		VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+		VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT
+		| VK_BUFFER_USAGE_INDEX_BUFFER_BIT
+		| VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR
+		| VK_BUFFER_USAGE_TRANSFER_DST_BIT
+		| VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
 		VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0);
 
 	renderer->vk_upload_cpu_to_gpu(index_buffer.buffer, indices.data(), get_index_buffer_size());

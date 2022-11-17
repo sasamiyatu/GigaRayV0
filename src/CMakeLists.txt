@@ -3,10 +3,18 @@ add_executable(GigaRayV0
     common.h 
     common.cpp
     defines.h
+    ecs.h
+    ecs.cpp
+    resource_manager.h
+    resource_manager.cpp
+    misc.h 
+    misc.cpp
     obj.h 
     obj.cpp
     renderer.h 
     renderer.cpp
+    r_mesh.h 
+    r_mesh.cpp
     vk_helpers.h
 )
 

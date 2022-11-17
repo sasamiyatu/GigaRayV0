@@ -156,6 +156,7 @@ struct Scene
 };
 
 
+
 struct Renderer
 {
 	Vk_Context context;
@@ -195,18 +196,10 @@ struct Renderer
 	Vk_Pipeline vk_create_rt_pipeline();
 	void vk_upload_cpu_to_gpu(VkBuffer dst, void* data, uint32_t size);
 	Vk_Acceleration_Structure vk_create_acceleration_structure(Mesh* mesh);
-	Vk_Acceleration_Structure vk_create_top_level_acceleration_structure(Vk_Allocated_Buffer* instances, int instance_count);
-	void vk_transition_layout(
-		VkCommandBuffer cmd,
-		VkImage img,
-		VkImageLayout src_layout,
-		VkImageLayout dst_layout,
-		VkAccessFlags src_access_mask,
-		VkAccessFlags dst_access_mask,
-		VkPipelineStageFlags src_stage_mask,
-		VkPipelineStageFlags dst_stage_mask);
+	Vk_Acceleration_Structure vk_create_top_level_acceleration_structure(Mesh* mesh);
 
 	void begin_frame();
 	void end_frame();
-	void draw();
+	void draw(struct ECS* ecs);
 };
+
