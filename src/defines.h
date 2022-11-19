@@ -7,11 +7,15 @@
 #include <glm/gtx/quaternion.hpp>
 #include <optional>
 #include <functional>
+#include <array>
 
 #if _WIN32
 #define NOMINMAX
 #include "windows.h"
 #endif
+
+constexpr char* APP_NAME = "GigaRayV0";
+constexpr char* ENGINE_NAME = "GigaEngine";
 
 typedef uint64_t u64;
 typedef int64_t i64;

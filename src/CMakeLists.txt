@@ -11,10 +11,14 @@ add_executable(GigaRayV0
     misc.cpp
     obj.h 
     obj.cpp
+    platform.h
+    platform.cpp
     renderer.h 
     renderer.cpp
     r_mesh.h 
     r_mesh.cpp
+    r_vulkan.h 
+    r_vulkan.cpp
     vk_helpers.h
 )
 
