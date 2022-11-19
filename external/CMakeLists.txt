@@ -5,7 +5,7 @@ add_library(vma INTERFACE)
 
 add_library(tinyobjloader STATIC)
 
-target_include_directories(vma INTERFACE vma)
+target_include_directories(vma INTERFACE vma/include)
 target_include_directories(glm INTERFACE glm)
 
 add_library(sdl2 INTERFACE)
