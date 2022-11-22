@@ -31,6 +31,15 @@ struct Vk_Allocated_Image
 	VmaAllocation allocation;
 };
 
+struct GPU_Buffer
+{
+	Vk_Allocated_Buffer gpu_buffer;
+	Vk_Allocated_Buffer staging_buffer;
+	size_t size;
+
+	void upload(VkCommandBuffer cmd);
+};
+
 struct Vk_Context
 {
 	struct Per_Frame_Objects
@@ -41,7 +50,6 @@ struct Vk_Context
 		VkSemaphore image_available_sem;
 	};
 
-	int32_t width, height;
 	VkInstance instance;
 	VkDebugUtilsMessengerEXT debug_messenger;
 	VkPhysicalDevice physical_device;
@@ -49,7 +57,6 @@ struct Vk_Context
 	VmaAllocator allocator;
 	int graphics_idx, compute_idx, transfer_idx;
 	VkCommandPool command_pool;
-	VkDescriptorSetLayout descriptor_set_layout;
 	VkDescriptorPool descriptor_pool;
 	VkSurfaceKHR surface;
 	VkSwapchainKHR swapchain;
@@ -70,13 +77,16 @@ struct Vk_Context
 	void create_command_pool();
 	void create_swapchain(Platform* platform);
 	void create_sync_objects();
-	Vk_Allocated_Buffer allocate_buffer(uint32_t size, VkBufferUsageFlags usage, VmaMemoryUsage memory_usage, VmaAllocationCreateFlags flags);
+	Vk_Allocated_Buffer allocate_buffer(uint32_t size,
+		VkBufferUsageFlags usage, VmaMemoryUsage memory_usage, VmaAllocationCreateFlags flags, u64 alignment = 0);
 	Vk_Allocated_Image allocate_image(VkExtent3D extent, VkFormat format);
+	Vk_Allocated_Buffer create_buffer(VkCommandBuffer cmd, size_t size, void* data, VkBufferUsageFlags usage);
 	VkDeviceAddress get_buffer_device_address(const Vk_Allocated_Buffer& buf);
 	VkShaderModule create_shader_module_from_file(const char* filepath);
 	VkFence create_fence();
 	VkDeviceAddress get_acceleration_structure_device_address(VkAccelerationStructureKHR as);
 	VkSemaphore create_semaphore();
+	GPU_Buffer create_gpu_buffer(u32 size, VkBufferUsageFlags usage_flags, u32 alignment = 0);
 };
 
 

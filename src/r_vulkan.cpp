@@ -357,7 +357,7 @@ void Vk_Context::create_sync_objects()
 	}
 }
 
-Vk_Allocated_Buffer Vk_Context::allocate_buffer(uint32_t size, VkBufferUsageFlags usage, VmaMemoryUsage memory_usage, VmaAllocationCreateFlags flags)
+Vk_Allocated_Buffer Vk_Context::allocate_buffer(uint32_t size, VkBufferUsageFlags usage, VmaMemoryUsage memory_usage, VmaAllocationCreateFlags flags, u64 alignment)
 {
 	VkBufferCreateInfo buffer_info{ VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
 	buffer_info.size = size;
@@ -368,7 +368,7 @@ Vk_Allocated_Buffer Vk_Context::allocate_buffer(uint32_t size, VkBufferUsageFlag
 	alloc_info.flags = flags;
 
 	Vk_Allocated_Buffer buffer;
-	VK_CHECK(vmaCreateBuffer(allocator, &buffer_info, &alloc_info, &buffer.buffer, &buffer.allocation, nullptr));
+	VK_CHECK(vmaCreateBufferWithAlignment(allocator, &buffer_info, &alloc_info, alignment, &buffer.buffer, &buffer.allocation, nullptr));
 
 	return buffer;
 }
@@ -403,6 +403,31 @@ Vk_Allocated_Image Vk_Context::allocate_image(VkExtent3D extent, VkFormat format
 	vkCreateImageView(device, &view_info, nullptr, &img.image_view);
 
 	return img;
+}
+
+Vk_Allocated_Buffer Vk_Context::create_buffer(VkCommandBuffer cmd, size_t size, void* data, VkBufferUsageFlags usage)
+{
+	Vk_Allocated_Buffer buf = allocate_buffer((u32)size, usage,
+		VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0);
+
+	Vk_Allocated_Buffer tmp_staging_buffer = allocate_buffer(
+		(u32)size,
+		VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+		VMA_MEMORY_USAGE_AUTO, VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT, 0);
+
+	void* mapped;
+	vmaMapMemory(allocator, tmp_staging_buffer.allocation, &mapped);
+	memcpy(mapped, data, size);
+	vmaUnmapMemory(allocator, tmp_staging_buffer.allocation);
+
+	VkBufferCopy copy_region{};
+	copy_region.srcOffset = 0; // Optional
+	copy_region.dstOffset = 0; // Optional
+	copy_region.size = size;
+
+	vkCmdCopyBuffer(cmd, tmp_staging_buffer.buffer, buf.buffer, 1, &copy_region);
+
+	return buf;
 }
 
 VkDeviceAddress Vk_Context::get_buffer_device_address(const Vk_Allocated_Buffer& buf)
@@ -459,6 +484,17 @@ VkSemaphore Vk_Context::create_semaphore()
 	return sem;
 }
 
+GPU_Buffer Vk_Context::create_gpu_buffer(u32 size, VkBufferUsageFlags usage_flags, u32 alignment)
+{
+	GPU_Buffer buffer{};
+
+	buffer.size = (size_t)size;
+	buffer.gpu_buffer = allocate_buffer(size, usage_flags | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_AUTO, 0, alignment);
+	buffer.staging_buffer = allocate_buffer(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_AUTO, VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT, alignment);
+
+	return buffer;
+}
+
 static bool check_extensions(const std::vector<const char*>& device_exts, const std::vector<VkExtensionProperties>& props)
 {
 	for (const auto& ext : device_exts)
@@ -475,4 +511,14 @@ static bool check_extensions(const std::vector<const char*>& device_exts, const 
 		if (!found) return false;
 	}
 	return true;
+}
+
+void GPU_Buffer::upload(VkCommandBuffer cmd)
+{
+	VkBufferCopy copy_region{};
+	copy_region.srcOffset = 0; // Optional
+	copy_region.dstOffset = 0; // Optional
+	copy_region.size = size;
+
+	vkCmdCopyBuffer(cmd, staging_buffer.buffer, gpu_buffer.buffer, 1, &copy_region);
 }

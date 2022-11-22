@@ -22,6 +22,7 @@
 		}                                                           \
 	} while (0)
 
+struct ECS;
 
 struct Vk_Pipeline
 {
@@ -63,14 +64,12 @@ struct Vk_Acceleration_Structure
 	VkDeviceAddress scratch_buffer_address;
 
 	// Only used for TLAS
-	Vk_Allocated_Buffer tlas_instances;
+	GPU_Buffer tlas_instances;
 	VkDeviceAddress tlas_instances_address;
 };
 
 struct Mesh
 {
-	struct Renderer* renderer;
-
 	std::vector<glm::vec3> vertices;
 	std::vector<uint32_t> indices;
 	std::optional<Vk_Acceleration_Structure> blas;
@@ -85,27 +84,20 @@ struct Mesh
 	uint32_t get_vertex_size();
 	uint32_t get_primitive_count();
 
-	void create_vertex_buffer(struct Renderer* renderer);
-	void create_index_buffer(struct Renderer* renderer);
-
-	void build_bottom_level_acceleration_structure();
-};
-
-struct Instance
-{
-	glm::mat4 transform;
-	Mesh* mesh;
+	void get_acceleration_structure_build_info(
+		VkAccelerationStructureBuildGeometryInfoKHR* build_info, 
+		VkAccelerationStructureGeometryKHR* geometry,
+		VkAccelerationStructureBuildRangeInfoKHR* range_info);
 };
 
 struct Scene
 {
-	std::vector<Mesh> meshes;
-	std::vector<Instance> instances;
 	std::optional<Vk_Acceleration_Structure> tlas;
 };
 
 struct Renderer
 {
+
 	Vk_Context* context;
 	Platform* platform;
 	bool initialized = false;
@@ -133,10 +125,16 @@ struct Renderer
 	Vk_Pipeline vk_create_rt_pipeline();
 	void vk_upload_cpu_to_gpu(VkBuffer dst, void* data, uint32_t size);
 	Vk_Acceleration_Structure vk_create_acceleration_structure(Mesh* mesh, VkCommandBuffer cmd);
-	Vk_Acceleration_Structure vk_create_top_level_acceleration_structure(Mesh* mesh, VkCommandBuffer cmd);
 
+	void create_vertex_buffer(Mesh* mesh, VkCommandBuffer cmd);
+	void create_index_buffer(Mesh* mesh, VkCommandBuffer cmd);
+	void create_bottom_level_acceleration_structure(Mesh* mesh);
+	void build_bottom_level_acceleration_structure(Mesh* mesh, VkCommandBuffer cmd);
+	void create_top_level_acceleration_structure(ECS* ecs, VkCommandBuffer cmd);
+
+	void init_scene(ECS* ecs);
 	void begin_frame();
 	void end_frame();
-	void draw(struct ECS* ecs);
+	void draw(ECS* ecs);
 };
 

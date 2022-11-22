@@ -221,9 +221,6 @@ void Renderer::vk_command_buffer_single_submit(VkCommandBuffer cmd)
 
 Vk_Acceleration_Structure Renderer::vk_create_acceleration_structure(Mesh* mesh, VkCommandBuffer cmd)
 {
-	Vk_Acceleration_Structure as{};
-	as.level = Vk_Acceleration_Structure::Level::BOTTOM_LEVEL;
-
 	VkAccelerationStructureGeometryTrianglesDataKHR triangles{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR };
 	triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
 	triangles.vertexData.deviceAddress = mesh->vertex_buffer_address;
@@ -260,20 +257,19 @@ Vk_Acceleration_Structure Renderer::vk_create_acceleration_structure(Mesh* mesh,
 		VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
 		VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0);
 
-	as.acceleration_structure_buffer = buffer_blas;
-
+	VkAccelerationStructureKHR new_as;
 	VkAccelerationStructureCreateInfoKHR create_info{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR };
 	create_info.type = build_info.type;
 	create_info.size = size_info.accelerationStructureSize;
 	create_info.buffer = buffer_blas.buffer;
 	create_info.offset = 0;
-	VK_CHECK(vkCreateAccelerationStructureKHR(context->device, &create_info, nullptr, &as.acceleration_structure));
-	build_info.dstAccelerationStructure = as.acceleration_structure;
+	VK_CHECK(vkCreateAccelerationStructureKHR(context->device, &create_info, nullptr, &new_as));
+	build_info.dstAccelerationStructure = new_as;
 
-	Vk_Allocated_Buffer scratch_buffer = as.scratch_buffer = context->allocate_buffer((uint32_t)size_info.buildScratchSize,
+	Vk_Allocated_Buffer scratch_buffer = context->allocate_buffer((uint32_t)size_info.buildScratchSize,
 		VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
 		VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0);
-	build_info.scratchData.deviceAddress = as.scratch_buffer_address = context->get_buffer_device_address(scratch_buffer);
+	build_info.scratchData.deviceAddress = context->get_buffer_device_address(scratch_buffer);
 
 
 	VkAccelerationStructureBuildRangeInfoKHR* p_range_info = &range_info;
@@ -286,9 +282,50 @@ Vk_Acceleration_Structure Renderer::vk_create_acceleration_structure(Mesh* mesh,
 	// FIXME: Do something about this...
 	vkQueueWaitIdle(context->graphics_queue);
 
+	Vk_Acceleration_Structure as{};
+	as.level = Vk_Acceleration_Structure::Level::BOTTOM_LEVEL;
+	as.acceleration_structure = new_as;
+	as.scratch_buffer = scratch_buffer;
+	as.scratch_buffer_address = build_info.scratchData.deviceAddress;
+	as.acceleration_structure_buffer = buffer_blas;
 	as.acceleration_structure_buffer_address = context->get_acceleration_structure_device_address(as.acceleration_structure);
 
 	return as;
+}
+
+// Loads the meshes from the scene and creates the acceleration structures
+void Renderer::init_scene(ECS* ecs)
+{
+	VkCommandBuffer cmd = get_current_frame_command_buffer();
+	vk_begin_command_buffer(cmd);
+	for (auto [mesh] : ecs->filter<Static_Mesh_Component>())
+	{
+		Mesh* m = mesh->manager->get_resource_with_id(mesh->mesh_id);
+		create_vertex_buffer(m, cmd);
+		create_index_buffer(m, cmd);
+	}
+	vkEndCommandBuffer(cmd);
+	vk_command_buffer_single_submit(cmd);
+	vkQueueWaitIdle(context->graphics_queue);
+
+	vk_begin_command_buffer(cmd);
+	for (auto [mesh] : ecs->filter<Static_Mesh_Component>())
+	{
+		Mesh* m = mesh->manager->get_resource_with_id(mesh->mesh_id);
+		create_bottom_level_acceleration_structure(m);
+		build_bottom_level_acceleration_structure(m, cmd);
+	}
+	memory_barrier(cmd,
+		VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+		VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR | VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR,
+		VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+		VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR);
+	create_top_level_acceleration_structure(ecs, cmd);
+
+	vkEndCommandBuffer(cmd);
+	vk_command_buffer_single_submit(cmd);
+
+	vkQueueWaitIdle(context->graphics_queue);
 }
 
 void Renderer::begin_frame()
@@ -465,91 +502,6 @@ void Renderer::draw(ECS* ecs)
 	);
 }
 
-Vk_Acceleration_Structure Renderer::vk_create_top_level_acceleration_structure(Mesh* mesh, VkCommandBuffer cmd)
-{
-	assert(mesh->blas.has_value());
-	VkAccelerationStructureInstanceKHR instance = vkinit::acceleration_structure_instance(mesh->blas.value().acceleration_structure_buffer_address);
-	
-	Vk_Allocated_Buffer buffer_instances = context->allocate_buffer((uint32_t)sizeof(instance),
-		VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-		VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0);
-	vk_upload_cpu_to_gpu(buffer_instances.buffer, &instance, (uint32_t)sizeof(instance));
-
-	VkAccelerationStructureBuildRangeInfoKHR range_info = {};
-	range_info.primitiveOffset = 0;
-	range_info.primitiveCount = 1;
-	range_info.firstVertex = 0;
-	range_info.transformOffset = 0;
-
-	VkAccelerationStructureGeometryInstancesDataKHR instance_vk{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR };
-	instance_vk.arrayOfPointers = VK_FALSE;
-	instance_vk.data.deviceAddress = context->get_buffer_device_address(buffer_instances);
-
-	VkAccelerationStructureGeometryKHR geometry{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR };
-	geometry.geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR;
-	geometry.geometry.instances = instance_vk;
-
-	VkAccelerationStructureBuildGeometryInfoKHR build_geom_info = { VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR };
-	build_geom_info.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
-	build_geom_info.geometryCount = 1;
-	build_geom_info.pGeometries = &geometry;
-	build_geom_info.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
-	build_geom_info.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
-	build_geom_info.srcAccelerationStructure = VK_NULL_HANDLE;
-
-	VkAccelerationStructureBuildSizesInfoKHR size_info{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR };
-	vkGetAccelerationStructureBuildSizesKHR(
-		context->device,
-		VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
-		&build_geom_info,
-		&range_info.primitiveCount,
-		&size_info
-	);
-
-	Vk_Allocated_Buffer buffer_tlas = context->allocate_buffer((uint32_t)size_info.accelerationStructureSize,
-		VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-		VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0);
-
-	VkAccelerationStructureKHR tlas;
-	VkAccelerationStructureCreateInfoKHR create_info{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR };
-	create_info.type = build_geom_info.type;
-	create_info.size = size_info.accelerationStructureSize;
-	create_info.buffer = buffer_tlas.buffer;
-	create_info.offset = 0;
-	VK_CHECK(vkCreateAccelerationStructureKHR(context->device, &create_info, nullptr, &tlas));
-
-	build_geom_info.dstAccelerationStructure = tlas;
-
-	Vk_Allocated_Buffer scratch_buffer = context->allocate_buffer((uint32_t)size_info.buildScratchSize,
-		VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-		VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0);
-	build_geom_info.scratchData.deviceAddress = context->get_buffer_device_address(scratch_buffer);
-
-	vk_begin_command_buffer(cmd);
-
-	VkAccelerationStructureBuildRangeInfoKHR* p_range_info = &range_info;
-
-	vkCmdBuildAccelerationStructuresKHR(cmd, 1, &build_geom_info, &p_range_info);
-
-	vkEndCommandBuffer(cmd);
-
-	vk_command_buffer_single_submit(cmd);
-
-	vkQueueWaitIdle(context->graphics_queue);
-
-	Vk_Acceleration_Structure as{};
-
-	as.level = Vk_Acceleration_Structure::Level::TOP_LEVEL;
-	as.acceleration_structure = tlas;
-	as.acceleration_structure_buffer = buffer_tlas;
-	as.acceleration_structure_buffer_address = context->get_buffer_device_address(buffer_tlas);
-	as.scratch_buffer = scratch_buffer;
-	as.scratch_buffer_address = context->get_buffer_device_address(scratch_buffer);
-	as.tlas_instances = buffer_instances;
-	as.tlas_instances_address = context->get_buffer_device_address(buffer_instances);
-
-	return as;
-}
 
 void Renderer::vk_upload_cpu_to_gpu(VkBuffer dst, void* data, uint32_t size)
 {
@@ -681,23 +633,42 @@ uint32_t Mesh::get_index_buffer_size()
 	return (uint32_t)(sizeof(uint32_t) * indices.size());
 }
 
-void Mesh::create_vertex_buffer(Renderer* renderer)
+
+void Renderer::create_vertex_buffer(Mesh* mesh, VkCommandBuffer cmd)
 {
-	vertex_buffer = renderer->context->allocate_buffer(get_vertex_buffer_size(),
-		VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-		VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | 
-		VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
-		VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-		VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+	u32 buffer_size = mesh->get_vertex_buffer_size();
+	mesh->vertex_buffer = context->allocate_buffer(buffer_size,
+		VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT
+		| VK_BUFFER_USAGE_VERTEX_BUFFER_BIT
+		| VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR
+		| VK_BUFFER_USAGE_TRANSFER_DST_BIT
+		| VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
 		VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0);
 
-	renderer->vk_upload_cpu_to_gpu(vertex_buffer.buffer, vertices.data(), get_vertex_buffer_size());
-	vertex_buffer_address = renderer->context->get_buffer_device_address(vertex_buffer);
+	mesh->vertex_buffer_address = context->get_buffer_device_address(mesh->vertex_buffer);
+
+	Vk_Allocated_Buffer tmp_staging_buffer = context->allocate_buffer(
+		buffer_size,
+		VK_BUFFER_USAGE_TRANSFER_SRC_BIT, 
+		VMA_MEMORY_USAGE_AUTO, VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT, 0);
+
+	void* mapped;
+	vmaMapMemory(context->allocator, tmp_staging_buffer.allocation, &mapped);
+	memcpy(mapped, mesh->vertices.data(), buffer_size);
+	vmaUnmapMemory(context->allocator, tmp_staging_buffer.allocation);
+
+	VkBufferCopy copy_region{};
+	copy_region.srcOffset = 0; // Optional
+	copy_region.dstOffset = 0; // Optional
+	copy_region.size = buffer_size;
+
+	vkCmdCopyBuffer(cmd, tmp_staging_buffer.buffer, mesh->vertex_buffer.buffer, 1, &copy_region);
 }
 
-void Mesh::create_index_buffer(Renderer* renderer)
+void Renderer::create_index_buffer(Mesh* mesh, VkCommandBuffer cmd)
 {
-	index_buffer = renderer->context->allocate_buffer(get_index_buffer_size(),
+	u32 buffer_size = mesh->get_index_buffer_size();
+	mesh->index_buffer = context->allocate_buffer(buffer_size,
 		VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT
 		| VK_BUFFER_USAGE_INDEX_BUFFER_BIT
 		| VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR
@@ -705,13 +676,249 @@ void Mesh::create_index_buffer(Renderer* renderer)
 		| VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
 		VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0);
 
-	renderer->vk_upload_cpu_to_gpu(index_buffer.buffer, indices.data(), get_index_buffer_size());
-	index_buffer_address = renderer->context->get_buffer_device_address(index_buffer);
+	mesh->index_buffer_address = context->get_buffer_device_address(mesh->index_buffer);
+
+	Vk_Allocated_Buffer tmp_staging_buffer = context->allocate_buffer(
+		buffer_size,
+		VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+		VMA_MEMORY_USAGE_AUTO, VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT, 0);
+
+	void* mapped;
+	vmaMapMemory(context->allocator, tmp_staging_buffer.allocation, &mapped);
+	memcpy(mapped, mesh->indices.data(), buffer_size);
+	vmaUnmapMemory(context->allocator, tmp_staging_buffer.allocation);
+
+	VkBufferCopy copy_region{};
+	copy_region.srcOffset = 0; // Optional
+	copy_region.dstOffset = 0; // Optional
+	copy_region.size = buffer_size;
+
+	vkCmdCopyBuffer(cmd, tmp_staging_buffer.buffer, mesh->index_buffer.buffer, 1, &copy_region);
 }
 
-void Mesh::build_bottom_level_acceleration_structure()
+void Renderer::create_bottom_level_acceleration_structure(Mesh* mesh)
 {
-	blas = renderer->vk_create_acceleration_structure(this, renderer->get_current_frame_command_buffer());
+
+	VkAccelerationStructureBuildGeometryInfoKHR build_info{};
+	VkAccelerationStructureGeometryKHR geometry{};
+	VkAccelerationStructureBuildRangeInfoKHR range_info{};
+	mesh->get_acceleration_structure_build_info(&build_info, &geometry, &range_info);
+
+	VkAccelerationStructureBuildSizesInfoKHR size_info{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR };
+	vkGetAccelerationStructureBuildSizesKHR(context->device,
+		VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &build_info, &range_info.primitiveCount, &size_info);
+
+	Vk_Allocated_Buffer buffer_blas = context->allocate_buffer((uint32_t)size_info.accelerationStructureSize,
+		VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+		VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0);
+
+	VkAccelerationStructureKHR acceleration_structure;
+	VkAccelerationStructureCreateInfoKHR create_info{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR };
+	create_info.type = build_info.type;
+	create_info.size = size_info.accelerationStructureSize;
+	create_info.buffer = buffer_blas.buffer;
+	create_info.offset = 0;
+	VK_CHECK(vkCreateAccelerationStructureKHR(context->device, &create_info, nullptr, &acceleration_structure));
+
+	Vk_Allocated_Buffer scratch_buffer = context->allocate_buffer((uint32_t)size_info.buildScratchSize,
+		VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+		VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0);
+
+	Vk_Acceleration_Structure as{};
+	as.level = Vk_Acceleration_Structure::Level::BOTTOM_LEVEL;
+	as.acceleration_structure = acceleration_structure;
+	as.scratch_buffer = scratch_buffer;
+	as.scratch_buffer_address = context->get_buffer_device_address(scratch_buffer);
+	as.acceleration_structure_buffer = buffer_blas;
+	as.acceleration_structure_buffer_address = context->get_buffer_device_address(buffer_blas);
+
+	mesh->blas = as;
+}
+
+void Renderer::build_bottom_level_acceleration_structure(Mesh* mesh, VkCommandBuffer cmd)
+{
+	VkAccelerationStructureBuildGeometryInfoKHR build_info{};
+	VkAccelerationStructureGeometryKHR geometry{};
+	VkAccelerationStructureBuildRangeInfoKHR range_info{};
+	mesh->get_acceleration_structure_build_info(&build_info, &geometry, &range_info);
+
+	build_info.dstAccelerationStructure = mesh->blas.value().acceleration_structure;
+	build_info.scratchData.deviceAddress = mesh->blas.value().scratch_buffer_address;
+
+	VkAccelerationStructureBuildRangeInfoKHR* p_range_info = &range_info;
+	vkCmdBuildAccelerationStructuresKHR(
+		cmd,
+		1,
+		&build_info,
+		&p_range_info
+	);
+}
+
+void Renderer::create_top_level_acceleration_structure(ECS* ecs, VkCommandBuffer cmd)
+{
+	std::vector<VkAccelerationStructureInstanceKHR> instances;
+
+	u32 index = 0;
+	for (auto [mesh, xform] : ecs->filter<Static_Mesh_Component, Transform_Component>())
+	{
+		Mesh* m = mesh->manager->get_resource_with_id(mesh->mesh_id);
+		VkAccelerationStructureInstanceKHR instance{};
+		instance.transform.matrix[0][0] = 
+			instance.transform.matrix[1][1] = 
+			instance.transform.matrix[2][2] = 1.f;
+
+		instance.instanceCustomIndex = index++;
+		instance.mask = 0xFF;
+		instance.instanceShaderBindingTableRecordOffset = 0;
+		instance.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+		instance.accelerationStructureReference = m->blas.value().acceleration_structure_buffer_address;
+
+		instances.push_back(instance);
+	}
+
+	GPU_Buffer instance_buf = context->create_gpu_buffer(sizeof(instances),
+		VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+		VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, 0);
+
+	void* mapped;
+	vmaMapMemory(context->allocator, instance_buf.staging_buffer.allocation, &mapped);
+	memcpy(mapped, instances.data(), sizeof(instances));
+	vmaUnmapMemory(context->allocator, instance_buf.staging_buffer.allocation);
+
+	instance_buf.upload(cmd);
+	vkEndCommandBuffer(cmd);
+	vk_command_buffer_single_submit(cmd);
+	vkQueueWaitIdle(context->graphics_queue);
+	vk_begin_command_buffer(cmd);
+	vkinit::memory_barrier(cmd,
+		VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+		VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR);
+
+	VkAccelerationStructureBuildRangeInfoKHR range_info{};
+	range_info.primitiveOffset = 0;
+	range_info.primitiveCount = (u32)instances.size();
+	range_info.firstVertex = 0;
+	range_info.transformOffset = 0;
+
+	VkAccelerationStructureGeometryInstancesDataKHR instances_vk{
+		VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR
+	};
+	instances_vk.arrayOfPointers = VK_FALSE;
+	instances_vk.data.deviceAddress = context->get_buffer_device_address(instance_buf.gpu_buffer);
+
+	VkAccelerationStructureGeometryKHR geometry{ 
+		VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR 
+	};
+
+	geometry.geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR;
+	geometry.geometry.instances = instances_vk;
+
+	VkAccelerationStructureBuildGeometryInfoKHR build_info{
+		VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR
+	};
+	build_info.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+	build_info.geometryCount = 1;
+	build_info.pGeometries = &geometry;
+	build_info.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+	build_info.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+	build_info.srcAccelerationStructure = VK_NULL_HANDLE;
+
+	VkAccelerationStructureBuildSizesInfoKHR size_info{
+		VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR
+	};
+	vkGetAccelerationStructureBuildSizesKHR(
+		context->device,
+		VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+		&build_info,
+		&range_info.primitiveCount,
+		&size_info
+	);
+
+	Vk_Allocated_Buffer buffer_tlas = context->allocate_buffer(
+		(u32)size_info.accelerationStructureSize,
+		VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR
+		| VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT
+		| VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+		VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0
+	);
+
+	VkAccelerationStructureCreateInfoKHR create_info{
+		VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR
+	};
+	create_info.type = build_info.type;
+	create_info.size = size_info.accelerationStructureSize;
+	create_info.buffer = buffer_tlas.buffer;
+	create_info.offset = 0;
+	VkAccelerationStructureKHR tlas;
+	VK_CHECK(vkCreateAccelerationStructureKHR(
+		context->device, &create_info, nullptr, &tlas
+	));
+
+	build_info.dstAccelerationStructure = tlas;
+
+	Vk_Allocated_Buffer scratch = context->allocate_buffer(
+		(uint32_t)size_info.buildScratchSize,
+		VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT 
+		| VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+		VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0
+	);
+
+	build_info.scratchData.deviceAddress = context->get_buffer_device_address(scratch);
+
+	VkAccelerationStructureBuildRangeInfoKHR* p_range_info = &range_info;
+	
+	vkCmdBuildAccelerationStructuresKHR(
+		cmd,
+		1, &build_info,
+		&p_range_info
+	);
+
+	Vk_Acceleration_Structure scene_tlas{};
+	scene_tlas.acceleration_structure = tlas;
+	scene_tlas.acceleration_structure_buffer = buffer_tlas;
+	scene_tlas.acceleration_structure_buffer_address = context->get_buffer_device_address(buffer_tlas);
+	scene_tlas.scratch_buffer = scratch;
+	scene_tlas.scratch_buffer_address = build_info.scratchData.deviceAddress;
+	scene_tlas.level = Vk_Acceleration_Structure::TOP_LEVEL;
+	scene_tlas.tlas_instances = instance_buf;
+	scene_tlas.tlas_instances_address = instances_vk.data.deviceAddress;
+
+	assert(!scene.tlas.has_value());
+	scene.tlas = scene_tlas;
+}
+
+void Mesh::get_acceleration_structure_build_info(
+	VkAccelerationStructureBuildGeometryInfoKHR* build_info,
+	VkAccelerationStructureGeometryKHR* geometry,
+	VkAccelerationStructureBuildRangeInfoKHR* range_info)
+{
+	VkAccelerationStructureGeometryTrianglesDataKHR triangles{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR };
+	triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+	triangles.vertexData.deviceAddress = vertex_buffer_address;
+	triangles.vertexStride = get_vertex_size();
+	triangles.indexType = VK_INDEX_TYPE_UINT32;
+	triangles.indexData.deviceAddress = index_buffer_address;
+	triangles.maxVertex = get_vertex_count() - 1;
+	triangles.transformData = { 0 };
+
+	*geometry = { VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR };
+	geometry->geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+	geometry->geometry.triangles = triangles;
+	geometry->flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
+
+	*range_info = {};
+	range_info->firstVertex = 0;
+	range_info->primitiveCount = get_primitive_count();
+	range_info->primitiveOffset = 0;
+	range_info->transformOffset = 0;
+
+	*build_info = { VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR };
+	build_info->flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+	build_info->geometryCount = 1;
+	build_info->pGeometries = geometry;
+	build_info->mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+	build_info->type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+	build_info->srcAccelerationStructure = VK_NULL_HANDLE;
 }
 
 uint32_t Mesh::get_vertex_count()

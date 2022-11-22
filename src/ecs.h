@@ -9,7 +9,7 @@
 #include <tuple>
 #include <iostream>
 
-constexpr int ECS_MAX_COMPONENTS = 1024;
+
 
 #define ECS_COMPONENTS \
 	X(Transform_Component, transform_component) \
@@ -221,7 +221,7 @@ struct ECS
 				for (auto& c : *(std::get<0>(this->comps)))
 				{
 					bool found = true;
-					std::apply([&found, c](auto&&... args) {((found = found && args->get_component(c) != nullptr), ...); }, this->comps);
+					std::apply([&found, c](auto&&... args) {((found = (found && args->get_component(c) != nullptr)), ...); }, this->comps);
 					if (found)
 					{
 						i = c;
@@ -235,24 +235,13 @@ struct ECS
 		Filter_Iterator()
 		{
 		}
-		
-		template <class Tuple, size_t... Is>
-		constexpr auto get_comp_pointers_impl(Tuple t, u32 entity_id,
-			std::index_sequence<Is...>)
-		{
-			return std::make_tuple((std::get<Is>(t)->get_component(entity_id))...);
-		}
-
-		template <size_t N, class Tuple>
-		constexpr auto get_comp_ptr(Tuple t, u32 entity_id)
-		{
-			return get_comp_pointers_impl(t, entity_id, std::make_index_sequence<N>{});
-		}
 
 		value_type operator*()
 		{
-			constexpr std::size_t siz = std::tuple_size<std::tuple<ECS_Component_Entry<T>*...>>::value;
-			return get_comp_ptr<siz>(comps, current_idx);
+			return std::apply([&](auto&&... args)
+				{
+					return std::make_tuple(args->get_component(current_idx)...);
+				}, this->comps);
 		}
 
 		Filter_Iterator operator++()
@@ -262,7 +251,7 @@ struct ECS
 			do
 			{
 				idx++;
-				std::apply([&found, &idx](auto&&... args) {((found = found && args->get_component(idx) != nullptr), ...); }, this->comps);
+				std::apply([&found, &idx](auto&&... args) {((found = (found && args->get_component(idx) != nullptr)), ...); }, this->comps);
 			} while (!found && idx < max_idx);
 			current_idx = idx;
 			return *this;
@@ -311,8 +300,7 @@ struct ECS
 	template <typename ...T>
 	Filter_Helper<T...> filter()
 	{	
-		Filter_Helper<T...> helper = Filter_Helper<T...>(get_ptr<T>()...);
-		return helper;
+		return Filter_Helper<T...>(get_ptr<T>()...);
 	}
 
 	template<typename T>

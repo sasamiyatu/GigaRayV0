@@ -51,4 +51,26 @@ namespace vkinit
 			0, nullptr,
 			1, &img_barrier);
 	}
+
+	inline void memory_barrier(
+		VkCommandBuffer cmd,
+		VkAccessFlags src_access, 
+		VkAccessFlags dst_access, 
+		VkPipelineStageFlags src_stage, 
+		VkPipelineStageFlags dst_stage)
+	{
+		VkMemoryBarrier memory_barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+		memory_barrier.srcAccessMask = src_access;
+		memory_barrier.dstAccessMask = dst_access;
+
+		
+		vkCmdPipelineBarrier(
+			cmd,
+			src_stage, dst_stage,
+			0,
+			1, &memory_barrier,
+			0, nullptr,
+			0, nullptr
+		);
+	}
 }
