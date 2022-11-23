@@ -26,6 +26,8 @@ int main(int argc, char** argv)
 	Vk_Context ctx(&platform);
 	Renderer renderer(&ctx, &platform);
 
+
+
 	Resource_Manager<Mesh> mesh_manager;
 	int32_t mesh_id = mesh_manager.load_from_disk("data/stanford-bunny.obj");
 	ECS ecs{};
@@ -33,34 +35,19 @@ int main(int argc, char** argv)
 	Static_Mesh_Component m{&mesh_manager, mesh_id};
 	Renderable_Component r{ &renderer, false};
 
-#if 0
-	ecs.add_entity(Transform_Component{glm::quat(), glm::vec3(), 0.f});
-	ecs.add_entity(Transform_Component{ glm::quat(), glm::vec3(), 69.f }, Static_Mesh_Component{ nullptr, 420 });
-	ecs.add_entity(Static_Mesh_Component{ nullptr, 69 });
-	for (auto [a, b] : ecs.filter<Transform_Component, Static_Mesh_Component>())
-	{
-		printf("scale: %f, mesh_id: %d\n", a->scale, b->mesh_id);
-	}
-	printf("\n");
-	for (auto [a] : ecs.filter<Transform_Component>())
-	{
-		printf("scale: %f\n", a->scale);
-	}
-	printf("\n");
-	for (auto [a] : ecs.filter<Static_Mesh_Component>())
-	{
-		printf("mesh_id: %d\n", a->mesh_id);
-	}
-#else
+
 	ecs.add_entity(c, m, r);
-#endif
+
 
 	Scene test_scene{};
 
 	Static_Mesh_Component* mesh_comp = ecs.get_component<Static_Mesh_Component>(mesh_id);
 	Mesh* mesh = mesh_comp->manager->get_resource_with_id(mesh_comp->mesh_id);
-
 	renderer.init_scene(&ecs);
+
+	//Vk_Acceleration_Structure tlas = renderer.vk_create_top_level_acceleration_structure(mesh, renderer.get_current_frame_command_buffer());
+	//renderer.scene.tlas = tlas;
+
 	bool quit = false;
 	while (!quit)
 	{
@@ -77,6 +64,7 @@ int main(int argc, char** argv)
 		renderer.end_frame();
 	}
 here:
-	
+	vkDeviceWaitIdle(ctx.device);
+	g_garbage_collector->shutdown();
 	return 0;
 }

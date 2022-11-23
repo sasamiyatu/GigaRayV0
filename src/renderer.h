@@ -43,11 +43,6 @@ struct Vk_Framebuffer
 	std::vector<Vk_RenderTarget> render_targets;
 };
 
-struct StagingBuffer
-{
-	Vk_Allocated_Buffer buffer;
-	VkCommandBuffer cmd;
-};
 
 struct Vk_Acceleration_Structure
 {
@@ -64,7 +59,7 @@ struct Vk_Acceleration_Structure
 	VkDeviceAddress scratch_buffer_address;
 
 	// Only used for TLAS
-	GPU_Buffer tlas_instances;
+	Vk_Allocated_Buffer tlas_instances;
 	VkDeviceAddress tlas_instances_address;
 };
 
@@ -109,7 +104,7 @@ struct Renderer
 	VkDescriptorSetLayout desc_set_layout;
 	Vk_Allocated_Buffer shader_binding_table;
 	Scene scene;
-	std::array<StagingBuffer, FRAMES_IN_FLIGHT> staging_buffers; //FIXME: Make gpu buffer 
+
 	Renderer(Vk_Context* context, Platform* platform);
 
 	void initialize();
@@ -118,12 +113,10 @@ struct Renderer
 	VkCommandBuffer get_current_frame_command_buffer();
 	void vk_create_descriptor_set_layout();
 	void vk_create_render_targets(VkCommandBuffer cmd);
-	void vk_create_staging_buffers();
 	void transition_swapchain_images(VkCommandBuffer cmd);
 
 	void vk_command_buffer_single_submit(VkCommandBuffer cmd);
 	Vk_Pipeline vk_create_rt_pipeline();
-	void vk_upload_cpu_to_gpu(VkBuffer dst, void* data, uint32_t size);
 	Vk_Acceleration_Structure vk_create_acceleration_structure(Mesh* mesh, VkCommandBuffer cmd);
 
 	void create_vertex_buffer(Mesh* mesh, VkCommandBuffer cmd);
@@ -131,6 +124,7 @@ struct Renderer
 	void create_bottom_level_acceleration_structure(Mesh* mesh);
 	void build_bottom_level_acceleration_structure(Mesh* mesh, VkCommandBuffer cmd);
 	void create_top_level_acceleration_structure(ECS* ecs, VkCommandBuffer cmd);
+
 
 	void init_scene(ECS* ecs);
 	void begin_frame();

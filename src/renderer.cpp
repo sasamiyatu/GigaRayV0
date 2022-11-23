@@ -43,6 +43,11 @@ void Renderer::vk_create_descriptor_set_layout()
 	layout_info.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
 	VK_CHECK(vkCreateDescriptorSetLayout(context->device, &layout_info, nullptr, &desc_set_layout));
 
+	g_garbage_collector->push([=]()
+		{
+			vkDestroyDescriptorSetLayout(context->device, desc_set_layout, nullptr);
+		}, Garbage_Collector::SHUTDOWN);
+
 	// NOTE: No descriptor pools because we are using push descriptors for now!!
 }
 
@@ -111,6 +116,10 @@ Vk_Pipeline Renderer::vk_create_rt_pipeline()
 	cinfo.setLayoutCount = 1;
 	VkPipelineLayout layout;
 	vkCreatePipelineLayout(context->device, &cinfo, nullptr, &layout);
+	g_garbage_collector->push([=]()
+		{
+			vkDestroyPipelineLayout(context->device, layout, nullptr);
+		}, Garbage_Collector::SHUTDOWN);
 
 	VkRayTracingPipelineCreateInfoKHR rtpci{ VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR };
 	rtpci.stageCount = (uint32_t)pssci.size();
@@ -128,6 +137,11 @@ Vk_Pipeline Renderer::vk_create_rt_pipeline()
 		1, &rtpci,
 		nullptr,
 		&rt_pipeline));
+
+	g_garbage_collector->push([=]()
+		{
+			vkDestroyPipeline(context->device, rt_pipeline, nullptr);
+		}, Garbage_Collector::SHUTDOWN);
 
 	Vk_Pipeline pl;
 	pl.layout = layout;
@@ -164,6 +178,11 @@ Vk_Pipeline Renderer::vk_create_rt_pipeline()
 		VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
 	);
 
+	g_garbage_collector->push([=]()
+		{
+			vmaDestroyBuffer(context->allocator, rt_sbt_buffer.buffer, rt_sbt_buffer.allocation);
+		}, Garbage_Collector::SHUTDOWN);
+
 	void* mapped;
 	vmaMapMemory(context->allocator, rt_sbt_buffer.allocation, &mapped);
 	uint8_t* pdata = (uint8_t*)mapped;
@@ -177,6 +196,11 @@ Vk_Pipeline Renderer::vk_create_rt_pipeline()
 
 	shader_binding_table = rt_sbt_buffer;
 	context->device_sbt_alignment = group_size_aligned;
+
+	vkDestroyShaderModule(context->device, rgen_shader, nullptr);
+	vkDestroyShaderModule(context->device, rmiss_shader, nullptr);
+	vkDestroyShaderModule(context->device, rchit_shader, nullptr);
+
 	return pl;
 }
 
@@ -198,7 +222,6 @@ void Renderer::initialize()
 	rt_pipeline = vk_create_rt_pipeline();
 	transition_swapchain_images(get_current_frame_command_buffer());
 	vk_create_render_targets(get_current_frame_command_buffer());
-	vk_create_staging_buffers();
 
 	initialized = true;
 }
@@ -304,11 +327,11 @@ void Renderer::init_scene(ECS* ecs)
 		create_vertex_buffer(m, cmd);
 		create_index_buffer(m, cmd);
 	}
-	vkEndCommandBuffer(cmd);
-	vk_command_buffer_single_submit(cmd);
-	vkQueueWaitIdle(context->graphics_queue);
 
-	vk_begin_command_buffer(cmd);
+	memory_barrier(cmd,
+		VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+		VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR);
+
 	for (auto [mesh] : ecs->filter<Static_Mesh_Component>())
 	{
 		Mesh* m = mesh->manager->get_resource_with_id(mesh->mesh_id);
@@ -503,61 +526,7 @@ void Renderer::draw(ECS* ecs)
 }
 
 
-void Renderer::vk_upload_cpu_to_gpu(VkBuffer dst, void* data, uint32_t size)
-{
-	u32 frame_idx = frame_counter % FRAMES_IN_FLIGHT;
-	const StagingBuffer& buf = staging_buffers[frame_idx];
 
-	void* mapped;
-	vmaMapMemory(context->allocator, buf.buffer.allocation, &mapped);
-	memcpy(mapped, data, size);
-	vmaUnmapMemory(context->allocator, buf.buffer.allocation);
-
-	vk_begin_command_buffer(buf.cmd);
-
-	VkBufferCopy copy_region{};
-	copy_region.srcOffset = 0; // Optional
-	copy_region.dstOffset = 0; // Optional
-	copy_region.size = size;
-
-	vkCmdCopyBuffer(buf.cmd, buf.buffer.buffer, dst, 1, &copy_region);
-
-	vkEndCommandBuffer(buf.cmd);
-
-	VkSubmitInfo submit_info{};
-	submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-	submit_info.commandBufferCount = 1;
-	submit_info.pCommandBuffers = &buf.cmd;
-
-	vkQueueSubmit(context->graphics_queue, 1, &submit_info, VK_NULL_HANDLE);
-
-	// FIXME: Improve synchronization
-	vkQueueWaitIdle(context->graphics_queue);
-}
-
-void Renderer::vk_create_staging_buffers()
-{
-	for (int i = 0; i < FRAMES_IN_FLIGHT; ++i)
-	{
-		constexpr uint32_t staging_buffer_size = 256 * 1024 * 1024; // 256 MB
-		Vk_Allocated_Buffer staging_buffer = context->allocate_buffer(
-			staging_buffer_size, 
-			VK_BUFFER_USAGE_TRANSFER_SRC_BIT, 
-			VMA_MEMORY_USAGE_AUTO, 
-			VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
-		);
-		StagingBuffer sb{};
-		sb.buffer = staging_buffer;
-
-		VkCommandBufferAllocateInfo alloc_info{};
-		alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-		alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-		alloc_info.commandPool = context->command_pool;
-		alloc_info.commandBufferCount = 1;
-		vkAllocateCommandBuffers(context->device, &alloc_info, &sb.cmd);
-		staging_buffers[i] = sb;
-	}
-}
 
 void Renderer::transition_swapchain_images(VkCommandBuffer cmd)
 {
@@ -590,6 +559,10 @@ void Renderer::vk_create_render_targets(VkCommandBuffer cmd)
 	Vk_RenderTarget color_attachment;
 	color_attachment.format = VK_FORMAT_R8G8B8A8_UNORM;
 	color_attachment.image = context->allocate_image({ (uint32_t)w, (uint32_t)h, 1 }, color_attachment.format);
+	g_garbage_collector->push([=]()
+		{
+			vmaDestroyImage(context->allocator, color_attachment.image.image, color_attachment.image.allocation);
+		}, Garbage_Collector::SHUTDOWN);
 
 	vk_begin_command_buffer(cmd);
 	vk_transition_layout(cmd, color_attachment.image.image,
@@ -645,12 +618,22 @@ void Renderer::create_vertex_buffer(Mesh* mesh, VkCommandBuffer cmd)
 		| VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
 		VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0);
 
+	g_garbage_collector->push([=]()
+		{
+			vmaDestroyBuffer(context->allocator, mesh->vertex_buffer.buffer, mesh->vertex_buffer.allocation);
+		}, Garbage_Collector::SHUTDOWN);
+
 	mesh->vertex_buffer_address = context->get_buffer_device_address(mesh->vertex_buffer);
 
 	Vk_Allocated_Buffer tmp_staging_buffer = context->allocate_buffer(
 		buffer_size,
 		VK_BUFFER_USAGE_TRANSFER_SRC_BIT, 
 		VMA_MEMORY_USAGE_AUTO, VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT, 0);
+
+	g_garbage_collector->push([=]()
+		{
+			vmaDestroyBuffer(context->allocator, tmp_staging_buffer.buffer, tmp_staging_buffer.allocation);
+		}, Garbage_Collector::SHUTDOWN);
 
 	void* mapped;
 	vmaMapMemory(context->allocator, tmp_staging_buffer.allocation, &mapped);
@@ -676,12 +659,22 @@ void Renderer::create_index_buffer(Mesh* mesh, VkCommandBuffer cmd)
 		| VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
 		VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0);
 
+	g_garbage_collector->push([=]()
+		{
+			vmaDestroyBuffer(context->allocator, mesh->index_buffer.buffer, mesh->index_buffer.allocation);
+		}, Garbage_Collector::SHUTDOWN);
+
 	mesh->index_buffer_address = context->get_buffer_device_address(mesh->index_buffer);
 
 	Vk_Allocated_Buffer tmp_staging_buffer = context->allocate_buffer(
 		buffer_size,
 		VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
 		VMA_MEMORY_USAGE_AUTO, VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT, 0);
+
+	g_garbage_collector->push([=]()
+		{
+			vmaDestroyBuffer(context->allocator, tmp_staging_buffer.buffer, tmp_staging_buffer.allocation);
+		}, Garbage_Collector::SHUTDOWN);
 
 	void* mapped;
 	vmaMapMemory(context->allocator, tmp_staging_buffer.allocation, &mapped);
@@ -712,6 +705,11 @@ void Renderer::create_bottom_level_acceleration_structure(Mesh* mesh)
 		VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
 		VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0);
 
+	g_garbage_collector->push([=]()
+		{
+			vmaDestroyBuffer(context->allocator, buffer_blas.buffer, buffer_blas.allocation);
+		}, Garbage_Collector::SHUTDOWN);
+
 	VkAccelerationStructureKHR acceleration_structure;
 	VkAccelerationStructureCreateInfoKHR create_info{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR };
 	create_info.type = build_info.type;
@@ -720,9 +718,19 @@ void Renderer::create_bottom_level_acceleration_structure(Mesh* mesh)
 	create_info.offset = 0;
 	VK_CHECK(vkCreateAccelerationStructureKHR(context->device, &create_info, nullptr, &acceleration_structure));
 
+	g_garbage_collector->push([=]()
+		{
+			vkDestroyAccelerationStructureKHR(context->device, acceleration_structure, nullptr);
+		}, Garbage_Collector::SHUTDOWN);
+
 	Vk_Allocated_Buffer scratch_buffer = context->allocate_buffer((uint32_t)size_info.buildScratchSize,
 		VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
 		VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0);
+
+	g_garbage_collector->push([=]()
+		{
+			vmaDestroyBuffer(context->allocator, scratch_buffer.buffer, scratch_buffer.allocation);
+		}, Garbage_Collector::SHUTDOWN);
 
 	Vk_Acceleration_Structure as{};
 	as.level = Vk_Acceleration_Structure::Level::BOTTOM_LEVEL;
@@ -730,10 +738,11 @@ void Renderer::create_bottom_level_acceleration_structure(Mesh* mesh)
 	as.scratch_buffer = scratch_buffer;
 	as.scratch_buffer_address = context->get_buffer_device_address(scratch_buffer);
 	as.acceleration_structure_buffer = buffer_blas;
-	as.acceleration_structure_buffer_address = context->get_buffer_device_address(buffer_blas);
+	as.acceleration_structure_buffer_address = context->get_acceleration_structure_device_address(acceleration_structure);
 
 	mesh->blas = as;
 }
+
 
 void Renderer::build_bottom_level_acceleration_structure(Mesh* mesh, VkCommandBuffer cmd)
 {
@@ -759,9 +768,11 @@ void Renderer::create_top_level_acceleration_structure(ECS* ecs, VkCommandBuffer
 	std::vector<VkAccelerationStructureInstanceKHR> instances;
 
 	u32 index = 0;
+	VkAccelerationStructureInstanceKHR instance{};
 	for (auto [mesh, xform] : ecs->filter<Static_Mesh_Component, Transform_Component>())
 	{
 		Mesh* m = mesh->manager->get_resource_with_id(mesh->mesh_id);
+
 		VkAccelerationStructureInstanceKHR instance{};
 		instance.transform.matrix[0][0] = 
 			instance.transform.matrix[1][1] = 
@@ -776,27 +787,34 @@ void Renderer::create_top_level_acceleration_structure(ECS* ecs, VkCommandBuffer
 		instances.push_back(instance);
 	}
 
-	GPU_Buffer instance_buf = context->create_gpu_buffer(sizeof(instances),
-		VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-		VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, 0);
+	size_t size = sizeof(instances[0]) * instances.size();
+	GPU_Buffer instance_buf = context->create_gpu_buffer(
+		(u32)size,
+		VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR
+		| VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+		0
+	);
+
+	g_garbage_collector->push([=]()
+		{
+			vmaDestroyBuffer(context->allocator, instance_buf.gpu_buffer.buffer, instance_buf.gpu_buffer.allocation);
+			vmaDestroyBuffer(context->allocator, instance_buf.staging_buffer.buffer, instance_buf.staging_buffer.allocation);
+		}, Garbage_Collector::SHUTDOWN);
 
 	void* mapped;
 	vmaMapMemory(context->allocator, instance_buf.staging_buffer.allocation, &mapped);
-	memcpy(mapped, instances.data(), sizeof(instances));
+	memcpy(mapped, instances.data(), size);
 	vmaUnmapMemory(context->allocator, instance_buf.staging_buffer.allocation);
 
 	instance_buf.upload(cmd);
-	vkEndCommandBuffer(cmd);
-	vk_command_buffer_single_submit(cmd);
-	vkQueueWaitIdle(context->graphics_queue);
-	vk_begin_command_buffer(cmd);
+
 	vkinit::memory_barrier(cmd,
 		VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
 		VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR);
 
 	VkAccelerationStructureBuildRangeInfoKHR range_info{};
 	range_info.primitiveOffset = 0;
-	range_info.primitiveCount = (u32)instances.size();
+	range_info.primitiveCount = 1;
 	range_info.firstVertex = 0;
 	range_info.transformOffset = 0;
 
@@ -842,6 +860,11 @@ void Renderer::create_top_level_acceleration_structure(ECS* ecs, VkCommandBuffer
 		VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0
 	);
 
+	g_garbage_collector->push([=]()
+		{
+			vmaDestroyBuffer(context->allocator, buffer_tlas.buffer, buffer_tlas.allocation);
+		}, Garbage_Collector::SHUTDOWN);
+
 	VkAccelerationStructureCreateInfoKHR create_info{
 		VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR
 	};
@@ -854,6 +877,11 @@ void Renderer::create_top_level_acceleration_structure(ECS* ecs, VkCommandBuffer
 		context->device, &create_info, nullptr, &tlas
 	));
 
+	g_garbage_collector->push([=]()
+		{
+			vkDestroyAccelerationStructureKHR(context->device, tlas, nullptr);
+		}, Garbage_Collector::SHUTDOWN);
+
 	build_info.dstAccelerationStructure = tlas;
 
 	Vk_Allocated_Buffer scratch = context->allocate_buffer(
@@ -862,6 +890,11 @@ void Renderer::create_top_level_acceleration_structure(ECS* ecs, VkCommandBuffer
 		| VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
 		VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0
 	);
+
+	g_garbage_collector->push([=]()
+		{
+			vmaDestroyBuffer(context->allocator, scratch.buffer, scratch.allocation);
+		}, Garbage_Collector::SHUTDOWN);
 
 	build_info.scratchData.deviceAddress = context->get_buffer_device_address(scratch);
 
@@ -873,15 +906,17 @@ void Renderer::create_top_level_acceleration_structure(ECS* ecs, VkCommandBuffer
 		&p_range_info
 	);
 
+
+
 	Vk_Acceleration_Structure scene_tlas{};
 	scene_tlas.acceleration_structure = tlas;
 	scene_tlas.acceleration_structure_buffer = buffer_tlas;
 	scene_tlas.acceleration_structure_buffer_address = context->get_buffer_device_address(buffer_tlas);
 	scene_tlas.scratch_buffer = scratch;
-	scene_tlas.scratch_buffer_address = build_info.scratchData.deviceAddress;
+	scene_tlas.scratch_buffer_address = context->get_buffer_device_address(scratch);
 	scene_tlas.level = Vk_Acceleration_Structure::TOP_LEVEL;
-	scene_tlas.tlas_instances = instance_buf;
-	scene_tlas.tlas_instances_address = instances_vk.data.deviceAddress;
+	//scene_tlas.tlas_instances = instance_buf;
+	scene_tlas.tlas_instances_address = context->get_buffer_device_address(instance_buf.gpu_buffer);
 
 	assert(!scene.tlas.has_value());
 	scene.tlas = scene_tlas;

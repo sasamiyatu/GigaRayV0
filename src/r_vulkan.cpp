@@ -67,16 +67,23 @@ void Vk_Context::create_instance(Platform_Window* window)
 
 	VkInstance instance;
 	VK_CHECK(vkCreateInstance(&create_info, nullptr, &instance));
+	g_garbage_collector->push([instance]() {
+		vkDestroyInstance(instance, nullptr);
+		}, Garbage_Collector::SHUTDOWN);
 
 	volkLoadInstance(instance);
 
 	if constexpr (USE_VALIDATION_LAYERS)
 	{
 		VkDebugUtilsMessengerCreateInfoEXT ci{ VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT };
-		ci.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;// | VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT;
+		ci.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT;
 		ci.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT;// | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
 		ci.pfnUserCallback = debug_callback;
 		VK_CHECK(vkCreateDebugUtilsMessengerEXT(instance, &ci, nullptr, &debug_messenger));
+		g_garbage_collector->push([=]()
+			{
+				vkDestroyDebugUtilsMessengerEXT(instance, debug_messenger, nullptr);
+			}, Garbage_Collector::SHUTDOWN);
 	}
 
 	this->instance = instance;
@@ -201,6 +208,11 @@ void Vk_Context::find_physical_device()
 	device_create_info.queueCreateInfoCount = 1;
 	device_create_info.pQueueCreateInfos = &queue_info;
 	VK_CHECK(vkCreateDevice(physical_device, &device_create_info, nullptr, &dev));
+	g_garbage_collector->push([dev]()
+		{
+			vkDestroyDevice(dev, nullptr);
+		}
+	, Garbage_Collector::SHUTDOWN);
 
 	volkLoadDevice(dev);
 
@@ -223,6 +235,11 @@ void Vk_Context::init_mem_allocator()
 	cinfo.pVulkanFunctions = &vulkan_funcs;
 	VK_CHECK(vmaCreateAllocator(&cinfo, &allocator));
 	this->allocator = allocator;
+	g_garbage_collector->push([=]()
+		{
+			vmaDestroyAllocator(allocator);
+		}, Garbage_Collector::SHUTDOWN);
+
 }
 
 void Vk_Context::create_command_pool()
@@ -231,6 +248,11 @@ void Vk_Context::create_command_pool()
 	pool_create_info.queueFamilyIndex = graphics_idx;
 	pool_create_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
 	VK_CHECK(vkCreateCommandPool(device, &pool_create_info, nullptr, &command_pool));
+	g_garbage_collector->push([=]()
+		{
+			vkDestroyCommandPool(device, command_pool, nullptr);
+		},
+		Garbage_Collector::SHUTDOWN);
 
 	VkCommandBufferAllocateInfo cmd_alloc_info = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO };
 	cmd_alloc_info.commandPool = command_pool;
@@ -276,6 +298,9 @@ void Vk_Context::create_swapchain(Platform* platform)
 	VkSwapchainCreateInfoKHR cinfo{ VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR };
 
 	platform->create_vulkan_surface(instance, &surface);
+	g_garbage_collector->push([=]() {
+		vkDestroySurfaceKHR(instance, surface, nullptr);
+		}, Garbage_Collector::SHUTDOWN);
 	int w, h;
 	platform->get_window_size(&w, &h);
 	VkExtent2D extent;
@@ -316,6 +341,10 @@ void Vk_Context::create_swapchain(Platform* platform)
 	cinfo.oldSwapchain = VK_NULL_HANDLE;
 
 	VK_CHECK(vkCreateSwapchainKHR(device, &cinfo, nullptr, &swapchain));
+	g_garbage_collector->push([=]()
+		{
+			vkDestroySwapchainKHR(device, swapchain, nullptr);
+		}, Garbage_Collector::SHUTDOWN);
 
 	uint32_t image_count = 0;
 	vkGetSwapchainImagesKHR(device, swapchain, &image_count, nullptr);
@@ -342,6 +371,11 @@ void Vk_Context::create_swapchain(Platform* platform)
 		cinfo.subresourceRange.levelCount = 1;
 
 		VK_CHECK(vkCreateImageView(device, &cinfo, nullptr, &swapchain_image_views[i]));
+		
+		g_garbage_collector->push([=]()
+			{
+				vkDestroyImageView(device, swapchain_image_views[i], nullptr);
+			}, Garbage_Collector::SHUTDOWN);
 	}
 
 	// Note: Swapchain images are in VK_IMAGE_LAYOUT_UNDEFINED initially
@@ -354,6 +388,13 @@ void Vk_Context::create_sync_objects()
 		frame_objects[i].fence = create_fence();
 		frame_objects[i].image_available_sem = create_semaphore();
 		frame_objects[i].render_finished_sem = create_semaphore();
+
+		g_garbage_collector->push([=]()
+			{
+				vkDestroyFence(device, frame_objects[i].fence, nullptr);
+				vkDestroySemaphore(device, frame_objects[i].image_available_sem, nullptr);
+				vkDestroySemaphore(device, frame_objects[i].render_finished_sem, nullptr);
+			}, Garbage_Collector::SHUTDOWN);
 	}
 }
 
@@ -401,6 +442,11 @@ Vk_Allocated_Image Vk_Context::allocate_image(VkExtent3D extent, VkFormat format
 	view_info.subresourceRange.layerCount = 1;
 	view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
 	vkCreateImageView(device, &view_info, nullptr, &img.image_view);
+
+	g_garbage_collector->push([=]()
+		{
+			vkDestroyImageView(device, img.image_view, nullptr);
+		}, Garbage_Collector::SHUTDOWN);
 
 	return img;
 }
@@ -495,6 +541,16 @@ GPU_Buffer Vk_Context::create_gpu_buffer(u32 size, VkBufferUsageFlags usage_flag
 	return buffer;
 }
 
+void Vk_Context::free_image(Vk_Allocated_Image img)
+{
+	vmaFreeMemory(allocator, img.allocation);
+}
+
+void Vk_Context::free_buffer(Vk_Allocated_Buffer buffer)
+{
+	vmaFreeMemory(allocator, buffer.allocation);
+}
+
 static bool check_extensions(const std::vector<const char*>& device_exts, const std::vector<VkExtensionProperties>& props)
 {
 	for (const auto& ext : device_exts)
@@ -522,3 +578,57 @@ void GPU_Buffer::upload(VkCommandBuffer cmd)
 
 	vkCmdCopyBuffer(cmd, staging_buffer.buffer, gpu_buffer.buffer, 1, &copy_region);
 }
+
+void Garbage_Collector::push(std::function<void()> func, DESTROY_TIME timing)
+{
+	if (timing == END_OF_FRAME)
+		end_of_frame_queue.push_back({ func, 0 });
+	else if (timing == FRAMES_IN_FLIGHT)
+		frames_in_flight_queue.push_back({ func, 0 });
+	else if (timing == SHUTDOWN)
+		on_shutdown_queue.push_back({ func, 0 });
+}
+
+void Garbage_Collector::collect()
+{
+	// Clear end of frame garbage
+	{
+		int s = (int)end_of_frame_queue.size();
+		for (int i = 0; i < s; ++i)
+		{
+			end_of_frame_queue[i].destroy_func();
+		}
+		end_of_frame_queue.clear();
+	}
+
+	// Clear frames in flight garbage
+	{
+		int s = (int)frames_in_flight_queue.size();
+		int remove_up_to = 0;
+		for (int i = 0; i < s; ++i)
+		{
+			if (frames_in_flight_queue[i].age < 2)
+				break;
+			remove_up_to++;
+			frames_in_flight_queue[i].destroy_func();
+		}
+		if (remove_up_to != 0)
+			frames_in_flight_queue.erase(
+				frames_in_flight_queue.begin(), 
+				frames_in_flight_queue.begin() + remove_up_to
+			);
+	}
+}
+
+void Garbage_Collector::shutdown()
+{
+	// Delete these in reverse order
+	int s = (int)on_shutdown_queue.size();
+	for (int i = s - 1; i >= 0; --i)
+		on_shutdown_queue[i].destroy_func();
+
+	on_shutdown_queue.clear();
+}
+
+static Garbage_Collector collector;
+Garbage_Collector* g_garbage_collector = &collector;

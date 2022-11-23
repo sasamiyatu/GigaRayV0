@@ -40,6 +40,32 @@ struct GPU_Buffer
 	void upload(VkCommandBuffer cmd);
 };
 
+struct Garbage_Collector
+{
+	struct Garbage
+	{
+		std::function<void()> destroy_func;
+		u32 age;
+	};
+
+	enum DESTROY_TIME
+	{
+		END_OF_FRAME = 0,
+		FRAMES_IN_FLIGHT,
+		SHUTDOWN
+	};
+
+	std::vector<Garbage> end_of_frame_queue;
+	std::vector<Garbage> frames_in_flight_queue;
+	std::vector<Garbage> on_shutdown_queue;
+
+	void push(std::function<void()> func, DESTROY_TIME timing);
+	void collect();
+	void shutdown();
+};
+
+extern Garbage_Collector* g_garbage_collector;
+
 struct Vk_Context
 {
 	struct Per_Frame_Objects
@@ -80,6 +106,8 @@ struct Vk_Context
 	Vk_Allocated_Buffer allocate_buffer(uint32_t size,
 		VkBufferUsageFlags usage, VmaMemoryUsage memory_usage, VmaAllocationCreateFlags flags, u64 alignment = 0);
 	Vk_Allocated_Image allocate_image(VkExtent3D extent, VkFormat format);
+	void free_image(Vk_Allocated_Image img);
+	void free_buffer(Vk_Allocated_Buffer buffer);
 	Vk_Allocated_Buffer create_buffer(VkCommandBuffer cmd, size_t size, void* data, VkBufferUsageFlags usage);
 	VkDeviceAddress get_buffer_device_address(const Vk_Allocated_Buffer& buf);
 	VkShaderModule create_shader_module_from_file(const char* filepath);
