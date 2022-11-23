@@ -3,6 +3,7 @@
 #include "volk/volk.h"
 #include "vma/include/vk_mem_alloc.h"
 #include "platform.h"
+#include "spirv-reflect/spirv_reflect.h"
 
 constexpr int FRAMES_IN_FLIGHT = 2;
 constexpr bool USE_VALIDATION_LAYERS = true;
@@ -38,6 +39,13 @@ struct GPU_Buffer
 	size_t size;
 
 	void upload(VkCommandBuffer cmd);
+};
+
+struct Vk_Pipeline
+{
+	VkPipeline pipeline;
+	VkPipelineLayout layout;
+	std::array<VkDescriptorSetLayout, 4> desc_sets;
 };
 
 struct Garbage_Collector
@@ -115,6 +123,8 @@ struct Vk_Context
 	VkDeviceAddress get_acceleration_structure_device_address(VkAccelerationStructureKHR as);
 	VkSemaphore create_semaphore();
 	GPU_Buffer create_gpu_buffer(u32 size, VkBufferUsageFlags usage_flags, u32 alignment = 0);
+	Vk_Pipeline create_compute_pipeline(const char* shaderpath);
+	VkDescriptorSetLayout create_layout_from_spirv(u8* bytecode, u32 size);
 };
 
 

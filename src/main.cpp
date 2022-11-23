@@ -26,8 +26,6 @@ int main(int argc, char** argv)
 	Vk_Context ctx(&platform);
 	Renderer renderer(&ctx, &platform);
 
-
-
 	Resource_Manager<Mesh> mesh_manager;
 	int32_t mesh_id = mesh_manager.load_from_disk("data/stanford-bunny.obj");
 	ECS ecs{};

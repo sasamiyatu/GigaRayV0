@@ -153,8 +153,12 @@ void Vk_Context::find_physical_device()
 	{
 		VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR
 	};
+	VkPhysicalDeviceMaintenance4Features maintenance_feats{
+		VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_FEATURES
+	};
 
-	features2.pNext = &features12;
+	features2.pNext = &maintenance_feats;
+	maintenance_feats.pNext = &features12;
 	features12.pNext = &features11;
 	features11.pNext = &as_feats;
 	as_feats.pNext = &rt_pipeline_feats;
@@ -549,6 +553,91 @@ void Vk_Context::free_image(Vk_Allocated_Image img)
 void Vk_Context::free_buffer(Vk_Allocated_Buffer buffer)
 {
 	vmaFreeMemory(allocator, buffer.allocation);
+}
+
+Vk_Pipeline Vk_Context::create_compute_pipeline(const char* shaderpath)
+{
+	u8* data;
+	u32 size = read_entire_file(shaderpath, &data);
+	VkShaderModule shader = create_shader_module_from_file(shaderpath);
+
+	SpvReflectShaderModule module;
+	SpvReflectResult result = spvReflectCreateShaderModule((size_t)size, data, &module);
+	assert(result == SPV_REFLECT_RESULT_SUCCESS);
+
+	u32 var_count = 0;
+	result = spvReflectEnumerateInputVariables(&module, &var_count, nullptr);
+	assert(result == SPV_REFLECT_RESULT_SUCCESS);
+	std::vector<SpvReflectInterfaceVariable*> input_vars(var_count);
+	result = spvReflectEnumerateInputVariables(&module, &var_count, input_vars.data());
+	assert(result == 0);
+	spvReflectEnumerateDescriptorBindings(&module, &var_count, nullptr);
+	std::vector<SpvReflectDescriptorBinding*> bindings(var_count);
+	spvReflectEnumerateDescriptorBindings(&module, &var_count, bindings.data());
+
+
+
+	VkComputePipelineCreateInfo cinfo{ VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO };
+	
+	VkPipelineShaderStageCreateInfo shader_stage_cinfo{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
+	shader_stage_cinfo.module = shader;
+	shader_stage_cinfo.pName = "main";
+	shader_stage_cinfo.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+
+	VkDescriptorSetLayout set_layout = create_layout_from_spirv(data, size);
+
+	VkPipelineLayoutCreateInfo layout_cinfo{ VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
+	layout_cinfo.pSetLayouts = &set_layout;
+	layout_cinfo.setLayoutCount = 1;
+	VkPipelineLayout pipeline_layout;
+	vkCreatePipelineLayout(device, &layout_cinfo, nullptr, &pipeline_layout);
+
+	cinfo.layout = pipeline_layout;
+	cinfo.stage = shader_stage_cinfo;
+
+	VkPipeline pipeline;
+	vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &cinfo, nullptr, &pipeline);
+
+	Vk_Pipeline pp{};
+	pp.desc_sets = { set_layout };
+	pp.layout = pipeline_layout;
+	pp.pipeline = pipeline;
+	//cinfo.stage = shader_stage_cinfo;
+	//cinfo.layout
+	return pp;
+}
+
+VkDescriptorSetLayout Vk_Context::create_layout_from_spirv(u8* bytecode, u32 size)
+{
+
+	SpvReflectShaderModule module;
+	SpvReflectResult result = spvReflectCreateShaderModule((size_t)size, bytecode, &module);
+	assert(result == SPV_REFLECT_RESULT_SUCCESS);
+
+	u32 var_count = 0;
+	spvReflectEnumerateDescriptorBindings(&module, &var_count, nullptr);
+	std::vector<SpvReflectDescriptorBinding*> bindings(var_count);
+	spvReflectEnumerateDescriptorBindings(&module, &var_count, bindings.data());
+
+	std::vector<VkDescriptorSetLayoutBinding> vk_bindings(var_count);
+	for (u32 i = 0; i < var_count; ++i)
+	{
+		VkDescriptorSetLayoutBinding b{};
+		b.binding = bindings[i]->binding;
+		b.descriptorCount = bindings[i]->count;
+		b.descriptorType = (VkDescriptorType)(bindings[i]->descriptor_type);
+		b.pImmutableSamplers = nullptr;
+		b.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+		vk_bindings[i] = b;
+	}
+	VkDescriptorSetLayoutCreateInfo cinfo{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
+	cinfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
+	cinfo.bindingCount = (u32)vk_bindings.size();
+	cinfo.pBindings = vk_bindings.data();
+	VkDescriptorSetLayout layout;
+	vkCreateDescriptorSetLayout(device, &cinfo, nullptr, &layout);
+
+	return layout;
 }
 
 static bool check_extensions(const std::vector<const char*>& device_exts, const std::vector<VkExtensionProperties>& props)

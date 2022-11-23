@@ -24,11 +24,6 @@
 
 struct ECS;
 
-struct Vk_Pipeline
-{
-	VkPipeline pipeline;
-	VkPipelineLayout layout;
-};
 
 struct Vk_RenderTarget
 {
@@ -104,6 +99,7 @@ struct Renderer
 	VkDescriptorSetLayout desc_set_layout;
 	Vk_Allocated_Buffer shader_binding_table;
 	Scene scene;
+	Vk_Pipeline compute_pp;
 
 	Renderer(Vk_Context* context, Platform* platform);
 

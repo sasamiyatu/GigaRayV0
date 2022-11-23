@@ -12,5 +12,6 @@ uint32_t read_entire_file(const char* filepath, uint8_t** data)
 	assert(bytes_read == (uint32_t)file_size);
 
 	*data = buffer;
+	CloseHandle(h);
 	return (uint32_t)bytes_read;
 }

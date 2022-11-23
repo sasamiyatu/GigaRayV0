@@ -222,6 +222,7 @@ void Renderer::initialize()
 	rt_pipeline = vk_create_rt_pipeline();
 	transition_swapchain_images(get_current_frame_command_buffer());
 	vk_create_render_targets(get_current_frame_command_buffer());
+	compute_pp = context->create_compute_pipeline("shaders/spirv/test.comp.spv");
 
 	initialized = true;
 }
@@ -523,6 +524,17 @@ void Renderer::draw(ECS* ecs)
 		0, nullptr,
 		0, nullptr
 	);
+
+	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, compute_pp.pipeline);
+	vkCmdDispatch(cmd, 1, 1, 1);
+	vkCmdPipelineBarrier(cmd,
+		VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+		VK_PIPELINE_STAGE_TRANSFER_BIT,
+		0,
+		0, nullptr,
+		0, nullptr,
+		0, nullptr);
+
 }
 
 
