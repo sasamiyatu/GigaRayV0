@@ -1,5 +1,8 @@
 #include "r_vulkan.h"
 #include "common.h"
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb/stb_image.h"
+#include "vk_helpers.h"
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL debug_callback(
 	VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
@@ -135,6 +138,7 @@ void Vk_Context::find_physical_device()
 	};
 	phys_dev_props.pNext = &rt_pipeline_props;
 	vkGetPhysicalDeviceProperties2(physical_device, &phys_dev_props);
+	physical_device_properties = phys_dev_props;
 
 	VkPhysicalDeviceFeatures2 features2{
 		VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2
@@ -277,7 +281,7 @@ static VkSurfaceFormatKHR get_surface_format(const std::vector<VkSurfaceFormatKH
 	for (const auto& f : formats)
 	{
 		if (f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR &&
-			f.format == VK_FORMAT_B8G8R8A8_SRGB)
+			f.format == VK_FORMAT_B8G8R8A8_UNORM)
 		{
 			return f;
 		}
@@ -418,7 +422,7 @@ Vk_Allocated_Buffer Vk_Context::allocate_buffer(uint32_t size, VkBufferUsageFlag
 	return buffer;
 }
 
-Vk_Allocated_Image Vk_Context::allocate_image(VkExtent3D extent, VkFormat format)
+Vk_Allocated_Image Vk_Context::allocate_image(VkExtent3D extent, VkFormat format, VkImageUsageFlags usage, VkImageTiling tiling)
 {
 	VkImageCreateInfo cinfo{ VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
 	cinfo.arrayLayers = 1;
@@ -428,7 +432,8 @@ Vk_Allocated_Image Vk_Context::allocate_image(VkExtent3D extent, VkFormat format
 	cinfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 	cinfo.mipLevels = 1;
 	cinfo.samples = VK_SAMPLE_COUNT_1_BIT;
-	cinfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+	cinfo.usage = usage; //VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+	cinfo.tiling = tiling;
 
 	VmaAllocationCreateInfo allocinfo{};
 	allocinfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
@@ -561,21 +566,6 @@ Vk_Pipeline Vk_Context::create_compute_pipeline(const char* shaderpath)
 	u32 size = read_entire_file(shaderpath, &data);
 	VkShaderModule shader = create_shader_module_from_file(shaderpath);
 
-	SpvReflectShaderModule module;
-	SpvReflectResult result = spvReflectCreateShaderModule((size_t)size, data, &module);
-	assert(result == SPV_REFLECT_RESULT_SUCCESS);
-
-	u32 var_count = 0;
-	result = spvReflectEnumerateInputVariables(&module, &var_count, nullptr);
-	assert(result == SPV_REFLECT_RESULT_SUCCESS);
-	std::vector<SpvReflectInterfaceVariable*> input_vars(var_count);
-	result = spvReflectEnumerateInputVariables(&module, &var_count, input_vars.data());
-	assert(result == 0);
-	spvReflectEnumerateDescriptorBindings(&module, &var_count, nullptr);
-	std::vector<SpvReflectDescriptorBinding*> bindings(var_count);
-	spvReflectEnumerateDescriptorBindings(&module, &var_count, bindings.data());
-
-
 
 	VkComputePipelineCreateInfo cinfo{ VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO };
 	
@@ -589,6 +579,12 @@ Vk_Pipeline Vk_Context::create_compute_pipeline(const char* shaderpath)
 	VkPipelineLayoutCreateInfo layout_cinfo{ VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
 	layout_cinfo.pSetLayouts = &set_layout;
 	layout_cinfo.setLayoutCount = 1;
+	VkPushConstantRange push_constants{};
+	push_constants.offset = 0;
+	push_constants.size = 16;
+	push_constants.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+	layout_cinfo.pushConstantRangeCount = 1;
+	layout_cinfo.pPushConstantRanges = &push_constants;
 	VkPipelineLayout pipeline_layout;
 	vkCreatePipelineLayout(device, &layout_cinfo, nullptr, &pipeline_layout);
 
@@ -597,6 +593,14 @@ Vk_Pipeline Vk_Context::create_compute_pipeline(const char* shaderpath)
 
 	VkPipeline pipeline;
 	vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &cinfo, nullptr, &pipeline);
+
+	vkDestroyShaderModule(device, shader, nullptr);
+	g_garbage_collector->push([=]()
+		{
+			vkDestroyPipeline(device, pipeline, nullptr);
+			vkDestroyPipelineLayout(device, pipeline_layout, nullptr);
+			vkDestroyDescriptorSetLayout(device, set_layout, nullptr);
+		}, Garbage_Collector::SHUTDOWN);
 
 	Vk_Pipeline pp{};
 	pp.desc_sets = { set_layout };
@@ -614,13 +618,18 @@ VkDescriptorSetLayout Vk_Context::create_layout_from_spirv(u8* bytecode, u32 siz
 	SpvReflectResult result = spvReflectCreateShaderModule((size_t)size, bytecode, &module);
 	assert(result == SPV_REFLECT_RESULT_SUCCESS);
 
-	u32 var_count = 0;
-	spvReflectEnumerateDescriptorBindings(&module, &var_count, nullptr);
-	std::vector<SpvReflectDescriptorBinding*> bindings(var_count);
-	spvReflectEnumerateDescriptorBindings(&module, &var_count, bindings.data());
+	u32 binding_count = 0;
+	spvReflectEnumerateDescriptorBindings(&module, &binding_count, nullptr);
+	std::vector<SpvReflectDescriptorBinding*> bindings(binding_count);
+	spvReflectEnumerateDescriptorBindings(&module, &binding_count, bindings.data());
 
-	std::vector<VkDescriptorSetLayoutBinding> vk_bindings(var_count);
-	for (u32 i = 0; i < var_count; ++i)
+	u32 pc_count = 0;
+	spvReflectEnumeratePushConstantBlocks(&module, &pc_count, nullptr);
+	std::vector<SpvReflectBlockVariable*> push_constants(pc_count);
+	spvReflectEnumeratePushConstantBlocks(&module, &pc_count, push_constants.data());
+
+	std::vector<VkDescriptorSetLayoutBinding> vk_bindings(binding_count);
+	for (u32 i = 0; i < binding_count; ++i)
 	{
 		VkDescriptorSetLayoutBinding b{};
 		b.binding = bindings[i]->binding;
@@ -638,6 +647,83 @@ VkDescriptorSetLayout Vk_Context::create_layout_from_spirv(u8* bytecode, u32 siz
 	vkCreateDescriptorSetLayout(device, &cinfo, nullptr, &layout);
 
 	return layout;
+}
+
+Vk_Allocated_Image Vk_Context::load_texture(const char* filepath)
+{
+	stbi_set_flip_vertically_on_load(1);
+	int x, y, comp;
+	float* data = stbi_loadf(filepath, &x, &y, &comp, 0);
+
+	u32 required_size = (x * y * comp) * sizeof(float);
+	Vk_Allocated_Image img = allocate_image(
+		{ (u32)x, (u32)y, 1 }, 
+		VK_FORMAT_R32G32B32_SFLOAT, 
+		VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+		VK_IMAGE_TILING_LINEAR
+	);
+	Vk_Allocated_Buffer staging_buffer = allocate_buffer(
+		required_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_AUTO, VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+
+	void* mapped;
+	vmaMapMemory(allocator, staging_buffer.allocation, &mapped);
+	memcpy(mapped, data, required_size);
+	vmaUnmapMemory(allocator, staging_buffer.allocation);
+
+	VkCommandBufferAllocateInfo alloc_info{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO };
+
+	alloc_info.commandBufferCount = 1;
+	alloc_info.commandPool = command_pool;
+	alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+	VkCommandBuffer cmd;
+	vkAllocateCommandBuffers(device, &alloc_info, &cmd);
+
+	VkCommandBufferBeginInfo begin_info{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
+	begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+	vkBeginCommandBuffer(cmd, &begin_info);
+
+	VkImageSubresourceLayers subres{};
+	subres.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+	subres.baseArrayLayer = 0;
+	subres.layerCount = 1;
+	subres.mipLevel = 0;
+	VkBufferImageCopy regions{};
+	regions.bufferOffset = 0;
+	regions.bufferImageHeight = 0;
+	regions.bufferRowLength = 0;
+	regions.imageSubresource = subres;
+	regions.imageOffset = { 0, 0, 0 };
+	regions.imageExtent = { (u32)x, (u32)y, 1 };
+
+	vkinit::vk_transition_layout(cmd, img.image,
+		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+		0, VK_ACCESS_TRANSFER_WRITE_BIT,
+		VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT
+	);
+
+	vkCmdCopyBufferToImage(cmd, staging_buffer.buffer, img.image, VK_IMAGE_LAYOUT_GENERAL, 1, &regions);
+
+	vkinit::vk_transition_layout(cmd, img.image,
+		VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+		0, VK_ACCESS_SHADER_READ_BIT,
+		VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+		VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+		| VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
+		| VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_NV
+	);
+
+	vkEndCommandBuffer(cmd);
+
+	VkSubmitInfo submit{ VK_STRUCTURE_TYPE_SUBMIT_INFO };
+	submit.commandBufferCount = 1;
+	submit.pCommandBuffers = &cmd;
+	vkQueueSubmit(graphics_queue, 1, &submit, 0);
+
+	vkQueueWaitIdle(graphics_queue);
+
+	vmaDestroyBuffer(allocator, staging_buffer.buffer, staging_buffer.allocation);
+
+	return img;
 }
 
 static bool check_extensions(const std::vector<const char*>& device_exts, const std::vector<VkExtensionProperties>& props)

@@ -17,7 +17,7 @@ namespace vkinit
 	}
 
 	// Inserts a barrier into the command buffer to perform a specific layout transition
-	inline static void vk_transition_layout(
+	inline void vk_transition_layout(
 			VkCommandBuffer cmd,
 			VkImage img,
 			VkImageLayout src_layout,
@@ -72,5 +72,10 @@ namespace vkinit
 			0, nullptr,
 			0, nullptr
 		);
+	}
+
+	inline u32 aligned_size(u32 size, u32 alignment)
+	{
+		return (size + alignment - 1) & ~(alignment - 1);
 	}
 }

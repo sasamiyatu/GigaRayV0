@@ -15,6 +15,9 @@
 #include "resource_manager.h"
 #include "r_mesh.h"
 #include <any>
+#include "input.h"
+#include "game.h"
+#include "timer.h"
 
 constexpr int WINDOW_WIDTH = 1280;
 constexpr int WINDOW_HEIGHT = 720;
@@ -27,24 +30,28 @@ int main(int argc, char** argv)
 	Renderer renderer(&ctx, &platform);
 
 	Resource_Manager<Mesh> mesh_manager;
-	int32_t mesh_id = mesh_manager.load_from_disk("data/stanford-bunny.obj");
+	//int32_t mesh_id = mesh_manager.load_from_disk("data/stanford-bunny.obj");
+	int32_t mesh_id = mesh_manager.load_from_disk("data/sponza.obj"); 
 	ECS ecs{};
 	Transform_Component c{};
+	Camera_Component cam{};
+	cam.proj = glm::perspective(glm::radians(75.f), (float)WINDOW_WIDTH/(float)WINDOW_HEIGHT, 0.1f, 1000.f);
+	cam.view = glm::lookAt(glm::vec3(0.f, 0.1f, 0.15), glm::vec3(0.f, 0.1f, 0.f), glm::vec3(0.f, 1.f, 0.f));
 	Static_Mesh_Component m{&mesh_manager, mesh_id};
 	Renderable_Component r{ &renderer, false};
 
+	Game_State game_state;
+	game_state.ecs = &ecs;
 
 	ecs.add_entity(c, m, r);
+	game_state.player_entity = ecs.add_entity(cam, Transform_Component(), Velocity_Component());
+	ecs.get_component<Transform_Component>(game_state.player_entity)->pos = glm::vec3(0.f, 0.1f, 0.15f);
 
-
-	Scene test_scene{};
+	Timer timer;
 
 	Static_Mesh_Component* mesh_comp = ecs.get_component<Static_Mesh_Component>(mesh_id);
 	Mesh* mesh = mesh_comp->manager->get_resource_with_id(mesh_comp->mesh_id);
 	renderer.init_scene(&ecs);
-
-	//Vk_Acceleration_Structure tlas = renderer.vk_create_top_level_acceleration_structure(mesh, renderer.get_current_frame_command_buffer());
-	//renderer.scene.tlas = tlas;
 
 	bool quit = false;
 	while (!quit)
@@ -54,9 +61,23 @@ int main(int argc, char** argv)
 		{
 			if (event.type == SDL_QUIT)
 				goto here;
-
+			if (event.type == SDL_KEYDOWN || event.type == SDL_KEYUP)
+			{
+				if (event.key.keysym.scancode == SDL_SCANCODE_ESCAPE)
+					goto here;
+				if (!event.key.repeat)
+					handle_key_event(event);
+			}
+			else if (event.type == SDL_MOUSEMOTION)
+			{
+				handle_mouse_event(event);
+			}
 		}
+
+		float dt = timer.update();
 		
+		game_state.simulate(dt);
+		renderer.pre_frame();
 		renderer.begin_frame();
 		renderer.draw(&ecs);
 		renderer.end_frame();

@@ -10,11 +10,14 @@
 #include <iostream>
 
 
-
 #define ECS_COMPONENTS \
 	X(Transform_Component, transform_component) \
 	X(Static_Mesh_Component, static_mesh_component) \
-	X(Renderable_Component, renderable_component)
+	X(Renderable_Component, renderable_component) \
+	X(Camera_Component, camera_component) \
+	X(Velocity_Component, velocity_component)
+
+
 
 struct Renderable_Component
 {
@@ -22,11 +25,24 @@ struct Renderable_Component
 	bool render_ready;
 };
 
+struct Velocity_Component
+{
+	glm::vec3 velocity;
+};
+
 struct Transform_Component
 {
 	glm::quat rotation = glm::quat_identity<float, glm::packed_highp>();
 	glm::vec3 pos = glm::vec3(0.f);
 	float scale = 1.0;
+};
+
+struct Camera_Component
+{
+	glm::mat4 view;
+	glm::mat4 proj;
+	bool dirty = false;
+	void set_transform(Transform_Component* xform);
 };
 
 struct Static_Mesh_Component

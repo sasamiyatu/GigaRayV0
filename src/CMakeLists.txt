@@ -5,8 +5,10 @@ add_executable(GigaRayV0
     defines.h
     ecs.h
     ecs.cpp
-    resource_manager.h
-    resource_manager.cpp
+    game.h 
+    game.cpp
+    input.h
+    input.cpp 
     misc.h 
     misc.cpp
     obj.h 
@@ -15,10 +17,14 @@ add_executable(GigaRayV0
     platform.cpp
     renderer.h 
     renderer.cpp
+    resource_manager.h
+    resource_manager.cpp
     r_mesh.h 
     r_mesh.cpp
     r_vulkan.h 
     r_vulkan.cpp
+    timer.h 
+    timer.cpp
     vk_helpers.h
 )
 

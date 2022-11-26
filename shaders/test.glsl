@@ -1,7 +1,27 @@
 
 struct Ray_Payload
 {
-    vec3 color;
-    vec3 barycentrics;
+    vec2 barycentrics;
+    float t;
+    int instance_id;
     int prim_id;
+};
+
+struct Vertex_Data
+{
+    vec3 pos;
+    vec3 normal;
+    vec2 texcoord;
+};
+
+struct Vertex
+{
+    vec3 pos;
+    vec3 normal; 
+    vec2 texcoord;
+};
+
+struct Index_Data
+{
+    uvec3 index;
 };

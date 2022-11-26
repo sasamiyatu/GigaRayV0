@@ -58,9 +58,16 @@ struct Vk_Acceleration_Structure
 	VkDeviceAddress tlas_instances_address;
 };
 
+struct Vertex
+{
+	glm::vec3 pos;
+	glm::vec3 normal;
+	glm::vec2 texcoord;
+};
+
 struct Mesh
 {
-	std::vector<glm::vec3> vertices;
+	std::vector<Vertex> vertices;
 	std::vector<uint32_t> indices;
 	std::optional<Vk_Acceleration_Structure> blas;
 	Vk_Allocated_Buffer vertex_buffer;
@@ -83,23 +90,29 @@ struct Mesh
 struct Scene
 {
 	std::optional<Vk_Acceleration_Structure> tlas;
+	struct Camera_Component* active_camera;
 };
 
 struct Renderer
 {
-
+	i32 window_width, window_height;
 	Vk_Context* context;
 	Platform* platform;
 	bool initialized = false;
 
 	Vk_Pipeline rt_pipeline;
 	Vk_Framebuffer framebuffer;
+	Vk_Allocated_Image final_output; // This is what gets blitted into the swapchain at the end
 	uint64_t frame_counter = 0;
+	u32 frames_accumulated = 0;
 	uint32_t swapchain_image_index = 0;
 	VkDescriptorSetLayout desc_set_layout;
 	Vk_Allocated_Buffer shader_binding_table;
 	Scene scene;
 	Vk_Pipeline compute_pp;
+	Vk_Allocated_Buffer gpu_camera_data;
+	Vk_Allocated_Image environment_map;
+	VkSampler bilinear_sampler;
 
 	Renderer(Vk_Context* context, Platform* platform);
 
@@ -110,10 +123,10 @@ struct Renderer
 	void vk_create_descriptor_set_layout();
 	void vk_create_render_targets(VkCommandBuffer cmd);
 	void transition_swapchain_images(VkCommandBuffer cmd);
+	void create_samplers();
 
 	void vk_command_buffer_single_submit(VkCommandBuffer cmd);
 	Vk_Pipeline vk_create_rt_pipeline();
-	Vk_Acceleration_Structure vk_create_acceleration_structure(Mesh* mesh, VkCommandBuffer cmd);
 
 	void create_vertex_buffer(Mesh* mesh, VkCommandBuffer cmd);
 	void create_index_buffer(Mesh* mesh, VkCommandBuffer cmd);
@@ -123,6 +136,7 @@ struct Renderer
 
 
 	void init_scene(ECS* ecs);
+	void pre_frame();
 	void begin_frame();
 	void end_frame();
 	void draw(ECS* ecs);

@@ -25,6 +25,8 @@ void Platform::init_window(u32 w, u32 h, const char* window_title)
 		w, h,
 		SDL_WINDOW_SHOWN | SDL_WINDOW_VULKAN
 	);
+
+	SDL_SetRelativeMouseMode(SDL_TRUE);
 	assert(window.window != nullptr);
 }
 

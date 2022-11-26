@@ -5,16 +5,14 @@
 #extension GL_GOOGLE_include_directive : enable
 
 #include "test.glsl"
+#include "scene.glsl"
+#include "random.glsl"
+#include "math.glsl"
 
-struct Vertex_Data
+layout( push_constant ) uniform constants
 {
-    vec3 pos;
-};
-
-struct Index_Data
-{
-    uvec3 index;
-};
+    uint frames_accumulated;
+} control;
 
 layout(location = 0) rayPayloadEXT Ray_Payload pay;
 layout(binding = 0, set = 0, rgba32f) uniform image2D output_image;
@@ -29,59 +27,109 @@ layout(binding = 3, set = 0, scalar) readonly buffer index_buffer_t
     Index_Data indices[];
 } index_buffer;
 
+vec3 sample_environment_map(vec3 dir, sampler2D s)
+{
+    // y = -cos(theta) -> theta = -arccos(y)
+    float theta = acos(-dir.y);
+    float phi = atan(dir.z, -dir.x) + M_PI;
+    vec2 uv = vec2(phi / (2.0 * M_PI), theta / M_PI);
+
+    return texture(s, uv).rgb;
+}
+
+Vertex get_interpolated_vertex(int instance_id, int primitive_id, vec2 barycentrics)
+{
+    uvec3 inds = index_buffer.indices[primitive_id].index;
+    vec3 v0 = vertex_buffer.verts[inds.x].pos;
+    vec3 v1 = vertex_buffer.verts[inds.y].pos;
+    vec3 v2 = vertex_buffer.verts[inds.z].pos;
+
+    vec3 n0 = vertex_buffer.verts[inds.x].normal;
+    vec3 n1 = vertex_buffer.verts[inds.y].normal;
+    vec3 n2 = vertex_buffer.verts[inds.z].normal;
+
+    vec2 t0 = vertex_buffer.verts[inds.x].texcoord;
+    vec2 t1 = vertex_buffer.verts[inds.y].texcoord;
+    vec2 t2 = vertex_buffer.verts[inds.z].texcoord;
+
+    vec3 N = normalize((1.0 - barycentrics.x - barycentrics.y) * n0 + barycentrics.x * n1 + barycentrics.y * n2);
+    vec3 P = (1.0 - barycentrics.x - barycentrics.y) * v0 + barycentrics.x * v1 + barycentrics.y * v2;
+    vec2 TX = (1.0 - barycentrics.x - barycentrics.y) * t0 + barycentrics.x * t1 + barycentrics.y * t2;
+
+    Vertex v;
+    v.pos = P;
+    v.normal = N;
+    v.texcoord = TX;
+
+    return v;
+}
+
+layout(binding = 5, set = 0) uniform sampler2D environment_map;
+
 void main()
 {
-    pay.color = vec3(0.0);
+    uvec4 seed = uvec4( gl_LaunchIDEXT.xy, control.frames_accumulated, 1);
+    vec2 pixel = vec2(gl_LaunchIDEXT.xy);
+    vec2 offset = vec2(pcg4d(seed)) * ldexp(2.0, -32);
+    const vec2 resolution = vec2(gl_LaunchSizeEXT.xy);
+    if (control.frames_accumulated != 0)
+        pixel += mix(vec2(-0.5), vec2(0.5), offset);
 
-    const vec2 pixel_center = vec2(gl_LaunchIDEXT.xy) + vec2(0.5);
-    const float aspect = float(gl_LaunchSizeEXT.x) / float(gl_LaunchSizeEXT.y);
-    vec2 uv = pixel_center / vec2(gl_LaunchSizeEXT.xy);
-    uv.y = 1.0 - uv.y;
-    uv = uv * 2.0 - 1.0;
-    uv.x *= aspect;
+    vec2 uv = (((pixel + 0.5f) / resolution) * 2.f - 1.f);
 
-    vec3 ro = vec3(0.f, 0.1f, 0.15);
-    vec3 rd = normalize(vec3(uv, -1.0));
+    mat4 inv_view = inverse(camera_data.view);
+    vec3 ro = inv_view[3].xyz;
 
-    traceRayEXT(
-        scene,
-        gl_RayFlagsOpaqueEXT,
-        0xFF,
-        0,
-        0,
-        0,
-        ro,
-        0.0,
-        rd,
-        1000.0,
-        0
-    );
+    float aspect = camera_data.proj[1][1] / camera_data.proj[0][0];
+    float tan_half_fov_y = 1.f / camera_data.proj[1][1];
+    vec3 rd = normalize(
+        (uv.x * inv_view[0].xyz * tan_half_fov_y * aspect) - 
+        (uv.y * inv_view[1].xyz * tan_half_fov_y) -
+        inv_view[2].xyz);
 
-    vec3 out_color = pay.color;
-    vec3 normal = vec3(0.0);
-    if (pay.prim_id != -1)
+
+
+    // Path tracer loop
+    vec3 radiance = vec3(0.0);
+    vec3 throughput = vec3(1.0);
+    const int MAX_BOUNCES = 4;
+    for (int i = 0; i < MAX_BOUNCES; ++i)
     {
-        uvec3 inds = index_buffer.indices[pay.prim_id].index;
-        vec3 v0 = vertex_buffer.verts[inds.x].pos;
-        vec3 v1 = vertex_buffer.verts[inds.y].pos;
-        vec3 v2 = vertex_buffer.verts[inds.z].pos;
-        normal = normalize(cross(v2 - v0, v1 - v0));
-        if (dot(normal, rd) > 0.0) normal = normal * -1.f;
-
-        vec3 L = normalize(vec3(1.0));
-        float cos_theata = max(0.0, dot(L, normal));
-        out_color = cos_theata * vec3(0.7, 0.2, 0.4);
-        //out_color = vec3(1.0, 0.0, 1.0);
-        //out_color = normal * 0.5 + 0.5;
+        traceRayEXT(
+            scene,
+            gl_RayFlagsOpaqueEXT,
+            0xFF,
+            0,
+            0,
+            0,
+            ro,
+            0.0,
+            rd,
+            100000.0,
+            0
+        );
+        if (pay.prim_id != -1)
+        {
+            Vertex v = get_interpolated_vertex(pay.instance_id, pay.prim_id, pay.barycentrics);
+            vec3 new_dir = random_cosine_hemisphere(v.normal, seed);
+            vec3 p = ro + pay.t * rd;
+            ro = p + v.normal * 0.001;
+            rd = new_dir;
+        }
+        else
+        {
+            // Miss
+            radiance += throughput * sample_environment_map(rd, environment_map);
+            //radiance += vec3(1.0);
+            break;
+        }
     }
-    //if (pixel.xy == ivec2(0, 0))
-    //    debugPrintfEXT("test");
-    /*f (pixel_center.y < 50.0)
-        imageStore(output_image, ivec2(gl_LaunchIDEXT), vec4(1.0, 0.0, 1.0, 1.0));
-    else*/
-    vec3 v0 = vertex_buffer.verts[0].pos;
-    uvec3 idx = index_buffer.indices[0].index;
-    //debugPrintfEXT("%d %d %d", idx.x, idx.y, idx.z);
+    vec3 out_color = radiance.rgb;
+    if (control.frames_accumulated != 0)
+    {
+        vec4 prev_color = imageLoad(output_image, ivec2(gl_LaunchIDEXT));
+        float total = control.frames_accumulated + 1.0;
+        out_color = mix(out_color.rgb, prev_color.rgb, float(control.frames_accumulated) / total);
+    }
     imageStore(output_image, ivec2(gl_LaunchIDEXT), vec4(out_color, 1.0));
-
 }

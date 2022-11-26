@@ -15,7 +15,7 @@ static void vk_begin_command_buffer(VkCommandBuffer cmd);
 // FIXME: We're gonna need more stuff than this 
 void Renderer::vk_create_descriptor_set_layout()
 {
-	std::array<VkDescriptorSetLayoutBinding, 4> bindings;
+	std::array<VkDescriptorSetLayoutBinding, 6> bindings{};
 	bindings[0].binding = 0;
 	bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
 	bindings[0].descriptorCount = 1;
@@ -36,6 +36,17 @@ void Renderer::vk_create_descriptor_set_layout()
 	bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 	bindings[3].descriptorCount = 1;
 	bindings[3].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+
+	bindings[4].binding = 4;
+	bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+	bindings[4].descriptorCount = 1;
+	bindings[4].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+
+	bindings[5].binding = 5;
+	bindings[5].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+	bindings[5].descriptorCount = 1;
+	bindings[5].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+
 
 	VkDescriptorSetLayoutCreateInfo layout_info{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
 	layout_info.bindingCount = uint32_t(bindings.size());
@@ -114,6 +125,12 @@ Vk_Pipeline Renderer::vk_create_rt_pipeline()
 	VkPipelineLayoutCreateInfo cinfo{ VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
 	cinfo.pSetLayouts = &desc_set_layout;
 	cinfo.setLayoutCount = 1;
+	VkPushConstantRange push_constant_range{};
+	push_constant_range.offset = 0;
+	push_constant_range.size = sizeof(u32);
+	push_constant_range.stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+	cinfo.pushConstantRangeCount = 1;
+	cinfo.pPushConstantRanges = &push_constant_range;
 	VkPipelineLayout layout;
 	vkCreatePipelineLayout(context->device, &cinfo, nullptr, &layout);
 	g_garbage_collector->push([=]()
@@ -204,6 +221,22 @@ Vk_Pipeline Renderer::vk_create_rt_pipeline()
 	return pl;
 }
 
+void Renderer::create_samplers()
+{
+	VkSamplerCreateInfo cinfo{ VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
+	cinfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+	cinfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+	cinfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+	cinfo.minFilter = VK_FILTER_LINEAR;
+	cinfo.magFilter = VK_FILTER_LINEAR;
+	vkCreateSampler(context->device, &cinfo, nullptr, &bilinear_sampler);
+
+	g_garbage_collector->push([=]()
+		{
+			vkDestroySampler(context->device, bilinear_sampler, nullptr);
+		}, Garbage_Collector::SHUTDOWN);
+}
+
 
 Renderer::Renderer(Vk_Context* context, Platform* platform)
 	: context(context),
@@ -223,7 +256,8 @@ void Renderer::initialize()
 	transition_swapchain_images(get_current_frame_command_buffer());
 	vk_create_render_targets(get_current_frame_command_buffer());
 	compute_pp = context->create_compute_pipeline("shaders/spirv/test.comp.spv");
-
+	platform->get_window_size(&window_width, &window_height);
+	create_samplers();
 	initialized = true;
 }
 
@@ -243,83 +277,35 @@ void Renderer::vk_command_buffer_single_submit(VkCommandBuffer cmd)
 	vkQueueSubmit(context->graphics_queue, 1, &submit_info, VK_NULL_HANDLE);
 }
 
-Vk_Acceleration_Structure Renderer::vk_create_acceleration_structure(Mesh* mesh, VkCommandBuffer cmd)
-{
-	VkAccelerationStructureGeometryTrianglesDataKHR triangles{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR };
-	triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
-	triangles.vertexData.deviceAddress = mesh->vertex_buffer_address;
-	triangles.vertexStride = mesh->get_vertex_size();
-	triangles.indexType = VK_INDEX_TYPE_UINT32;
-	triangles.indexData.deviceAddress = mesh->index_buffer_address;
-	triangles.maxVertex = mesh->get_vertex_count() - 1;
-	triangles.transformData = { 0 };
-
-	VkAccelerationStructureGeometryKHR geometry{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR };
-	geometry.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
-	geometry.geometry.triangles = triangles;
-	geometry.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
-
-	VkAccelerationStructureBuildRangeInfoKHR range_info;
-	range_info.firstVertex = 0;
-	range_info.primitiveCount = mesh->get_primitive_count();
-	range_info.primitiveOffset = 0;
-	range_info.transformOffset = 0;
-
-	VkAccelerationStructureBuildGeometryInfoKHR build_info{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR };
-	build_info.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
-	build_info.geometryCount = 1;
-	build_info.pGeometries = &geometry;
-	build_info.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
-	build_info.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-	build_info.srcAccelerationStructure = VK_NULL_HANDLE;
-
-	VkAccelerationStructureBuildSizesInfoKHR size_info{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR };
-	vkGetAccelerationStructureBuildSizesKHR(context->device,
-		VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &build_info, &range_info.primitiveCount, &size_info);
-
-	Vk_Allocated_Buffer buffer_blas = context->allocate_buffer((uint32_t)size_info.accelerationStructureSize,
-		VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-		VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0);
-
-	VkAccelerationStructureKHR new_as;
-	VkAccelerationStructureCreateInfoKHR create_info{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR };
-	create_info.type = build_info.type;
-	create_info.size = size_info.accelerationStructureSize;
-	create_info.buffer = buffer_blas.buffer;
-	create_info.offset = 0;
-	VK_CHECK(vkCreateAccelerationStructureKHR(context->device, &create_info, nullptr, &new_as));
-	build_info.dstAccelerationStructure = new_as;
-
-	Vk_Allocated_Buffer scratch_buffer = context->allocate_buffer((uint32_t)size_info.buildScratchSize,
-		VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-		VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0);
-	build_info.scratchData.deviceAddress = context->get_buffer_device_address(scratch_buffer);
-
-
-	VkAccelerationStructureBuildRangeInfoKHR* p_range_info = &range_info;
-	vk_begin_command_buffer(cmd);
-	vkCmdBuildAccelerationStructuresKHR(cmd, 1, &build_info, &p_range_info);
-
-	vkEndCommandBuffer(cmd);
-	vk_command_buffer_single_submit(cmd);
-
-	// FIXME: Do something about this...
-	vkQueueWaitIdle(context->graphics_queue);
-
-	Vk_Acceleration_Structure as{};
-	as.level = Vk_Acceleration_Structure::Level::BOTTOM_LEVEL;
-	as.acceleration_structure = new_as;
-	as.scratch_buffer = scratch_buffer;
-	as.scratch_buffer_address = build_info.scratchData.deviceAddress;
-	as.acceleration_structure_buffer = buffer_blas;
-	as.acceleration_structure_buffer_address = context->get_acceleration_structure_device_address(as.acceleration_structure);
-
-	return as;
-}
-
 // Loads the meshes from the scene and creates the acceleration structures
 void Renderer::init_scene(ECS* ecs)
 {
+	environment_map = context->load_texture("data/kloppenheim_06_puresky_4k.hdr");
+	g_garbage_collector->push([=]()
+		{
+			vmaDestroyImage(context->allocator, environment_map.image, environment_map.allocation);
+		}, Garbage_Collector::SHUTDOWN);
+	// Find first active camera
+	for (auto [cam] : ecs->filter<Camera_Component>())
+	{
+		scene.active_camera = cam;
+		break;
+	}
+
+	u32 aligned_size = vkinit::aligned_size(
+		sizeof(Camera_Component), 
+		(u32)context->physical_device_properties.properties.limits.minUniformBufferOffsetAlignment
+	);
+	gpu_camera_data = context->allocate_buffer(aligned_size * FRAMES_IN_FLIGHT,
+		VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+		VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+		VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+
+	g_garbage_collector->push([=]()
+		{
+			vmaDestroyBuffer(context->allocator, gpu_camera_data.buffer, gpu_camera_data.allocation);
+		}, Garbage_Collector::SHUTDOWN);
+
 	VkCommandBuffer cmd = get_current_frame_command_buffer();
 	vk_begin_command_buffer(cmd);
 	for (auto [mesh] : ecs->filter<Static_Mesh_Component>())
@@ -350,6 +336,24 @@ void Renderer::init_scene(ECS* ecs)
 	vk_command_buffer_single_submit(cmd);
 
 	vkQueueWaitIdle(context->graphics_queue);
+}
+
+void Renderer::pre_frame()
+{
+	u32 frame_index = frame_counter % FRAMES_IN_FLIGHT;
+	if (scene.active_camera->dirty)
+	{
+		frames_accumulated = 0;
+		scene.active_camera->dirty = false;
+	}
+	void* camera_data;
+	vmaMapMemory(context->allocator, gpu_camera_data.allocation, &camera_data);
+	u32 aligned_size = vkinit::aligned_size(sizeof(Camera_Component),
+		(u32)context->physical_device_properties.properties.limits.minUniformBufferOffsetAlignment
+	);
+	u8* write_address = (u8*)camera_data + aligned_size * frame_index;
+	memcpy(write_address, scene.active_camera, sizeof(Camera_Component));
+	vmaUnmapMemory(context->allocator, gpu_camera_data.allocation);
 }
 
 void Renderer::begin_frame()
@@ -399,7 +403,7 @@ void Renderer::end_frame()
 
 	VkImage next_image = context->swapchain_images[swapchain_image_index];
 	vkCmdBlitImage(cmd, 
-		framebuffer.render_targets[0].image.image, VK_IMAGE_LAYOUT_GENERAL, next_image, VK_IMAGE_LAYOUT_GENERAL, 1, &region, VK_FILTER_LINEAR);
+		final_output.image, VK_IMAGE_LAYOUT_GENERAL, next_image, VK_IMAGE_LAYOUT_GENERAL, 1, &region, VK_FILTER_LINEAR);
 	vk_transition_layout(
 		cmd, next_image,
 		VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
@@ -423,7 +427,6 @@ void Renderer::end_frame()
 	present_info.swapchainCount = 1;
 	present_info.pSwapchains = &context->swapchain;
 	present_info.pImageIndices = &swapchain_image_index;
-
 	present_info.waitSemaphoreCount = 1;
 	present_info.pWaitSemaphores = &context->frame_objects[frame_index].render_finished_sem;
 	vkQueuePresentKHR(context->graphics_queue, &present_info);
@@ -439,7 +442,7 @@ void Renderer::draw(ECS* ecs)
 
 	// Update descriptor set
 
-	VkWriteDescriptorSet writes[4] = { };
+	VkWriteDescriptorSet writes[6] = { };
 	for (int i = 0; i < std::size(writes); ++i)
 		writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 	writes[0].descriptorCount = 1;
@@ -482,7 +485,34 @@ void Renderer::draw(ECS* ecs)
 	writes[3].dstSet = 0;
 	writes[3].pBufferInfo = &buffer_info[1];
 
+	u32 frame_index = frame_counter % FRAMES_IN_FLIGHT;
+	VkDescriptorBufferInfo camera_buf;
+	u32 aligned_size = vkinit::aligned_size(
+		sizeof(Camera_Component),
+		(u32)context->physical_device_properties.properties.limits.minUniformBufferOffsetAlignment
+	);
+	camera_buf.buffer = gpu_camera_data.buffer;
+	camera_buf.offset = aligned_size * frame_index;
+	camera_buf.range = aligned_size;
+	writes[4].descriptorCount = 1;
+	writes[4].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+	writes[4].dstBinding = 4;
+	writes[4].dstSet = 0;
+	writes[4].pBufferInfo = &camera_buf;
+
+	VkDescriptorImageInfo envmap_img{};
+	envmap_img.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+	envmap_img.imageView = environment_map.image_view;
+	envmap_img.sampler = bilinear_sampler;
+	writes[5].descriptorCount = 1;
+	writes[5].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+	writes[5].dstBinding = 5;
+	writes[5].dstSet = 0;
+	writes[5].pImageInfo = &envmap_img;
+
 	vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, rt_pipeline.layout, 0, (uint32_t)std::size(writes), writes);
+
+	vkCmdPushConstants(cmd, rt_pipeline.layout, VK_SHADER_STAGE_RAYGEN_BIT_KHR, 0, sizeof(frames_accumulated), &frames_accumulated);
 
 	// Trace rays
 
@@ -526,7 +556,26 @@ void Renderer::draw(ECS* ecs)
 	);
 
 	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, compute_pp.pipeline);
-	vkCmdDispatch(cmd, 1, 1, 1);
+	// Go for groupsize 8x8?
+	constexpr u32 group_size = 8;
+	glm::uvec3 size = glm::uvec3(window_width, window_height, 1);
+	glm::uvec3 group_count = (size + (group_size - 1)) & ~(group_size - 1);
+	group_count /= group_size;
+	
+	glm::ivec2 p = glm::ivec2(size.x, size.y);
+
+	writes[1].descriptorCount = 1;
+	writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+	writes[1].dstArrayElement = 0;
+	writes[1].dstBinding = 1;
+	VkDescriptorImageInfo img_info2 = {};
+	img_info2.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+	img_info2.imageView = final_output.image_view;
+	writes[1].pImageInfo = &img_info2;
+	writes[1].dstSet = 0;
+	vkCmdPushConstants(cmd, compute_pp.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(p), &p);
+	vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, compute_pp.layout, 0, 2, &writes[0]);
+	vkCmdDispatch(cmd, group_count.x, group_count.y, group_count.z);
 	vkCmdPipelineBarrier(cmd,
 		VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
 		VK_PIPELINE_STAGE_TRANSFER_BIT,
@@ -535,9 +584,8 @@ void Renderer::draw(ECS* ecs)
 		0, nullptr,
 		0, nullptr);
 
+	frames_accumulated++;
 }
-
-
 
 
 void Renderer::transition_swapchain_images(VkCommandBuffer cmd)
@@ -569,18 +617,39 @@ void Renderer::vk_create_render_targets(VkCommandBuffer cmd)
 	i32 w, h;
 	platform->get_window_size(&w, &h);
 	Vk_RenderTarget color_attachment;
-	color_attachment.format = VK_FORMAT_R8G8B8A8_UNORM;
-	color_attachment.image = context->allocate_image({ (uint32_t)w, (uint32_t)h, 1 }, color_attachment.format);
+	color_attachment.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+	color_attachment.image = context->allocate_image(
+		{ (uint32_t)w, (uint32_t)h, 1 }, 
+		color_attachment.format, 
+		VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT
+	);
 	g_garbage_collector->push([=]()
 		{
 			vmaDestroyImage(context->allocator, color_attachment.image.image, color_attachment.image.allocation);
 		}, Garbage_Collector::SHUTDOWN);
+
+
+	final_output = context->allocate_image(
+		{ u32(w), (u32)h, 1 },
+		VK_FORMAT_R8G8B8A8_SNORM,
+		VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_STORAGE_BIT
+	);
+	g_garbage_collector->push([=]()
+		{
+			vmaDestroyImage(context->allocator, final_output.image, final_output.allocation);
+		}, Garbage_Collector::SHUTDOWN);
+
 
 	vk_begin_command_buffer(cmd);
 	vk_transition_layout(cmd, color_attachment.image.image,
 		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
 		0, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
 		VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
+
+	vk_transition_layout(cmd, final_output.image,
+		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+		0, VK_ACCESS_SHADER_WRITE_BIT,
+		VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
 
 	vkEndCommandBuffer(cmd);
 	vk_command_buffer_single_submit(cmd);
@@ -610,7 +679,7 @@ static bool check_extensions(const std::vector<const char*>& device_exts, const 
 
 uint32_t Mesh::get_vertex_buffer_size()
 {
-	return (uint32_t)(sizeof(glm::vec3) * vertices.size());
+	return (uint32_t)(sizeof(vertices[0]) * vertices.size());
 }
 
 uint32_t Mesh::get_index_buffer_size()
@@ -975,7 +1044,7 @@ uint32_t Mesh::get_vertex_count()
 
 uint32_t Mesh::get_vertex_size()
 {
-	return (uint32_t)(sizeof(glm::vec3));
+	return (uint32_t)(sizeof(vertices[0]));
 }
 
 uint32_t Mesh::get_primitive_count()

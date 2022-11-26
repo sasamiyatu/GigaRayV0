@@ -5,6 +5,7 @@
 #include "platform.h"
 #include "spirv-reflect/spirv_reflect.h"
 
+
 constexpr int FRAMES_IN_FLIGHT = 2;
 constexpr bool USE_VALIDATION_LAYERS = true;
 
@@ -98,6 +99,7 @@ struct Vk_Context
 	std::vector<VkImageView> swapchain_image_views;
 	uint32_t device_sbt_alignment; // Device shader binding table alignment requirement
 	VkQueue graphics_queue;
+	VkPhysicalDeviceProperties2 physical_device_properties;
 
 	std::array<Per_Frame_Objects, FRAMES_IN_FLIGHT> frame_objects;
 
@@ -113,7 +115,7 @@ struct Vk_Context
 	void create_sync_objects();
 	Vk_Allocated_Buffer allocate_buffer(uint32_t size,
 		VkBufferUsageFlags usage, VmaMemoryUsage memory_usage, VmaAllocationCreateFlags flags, u64 alignment = 0);
-	Vk_Allocated_Image allocate_image(VkExtent3D extent, VkFormat format);
+	Vk_Allocated_Image allocate_image(VkExtent3D extent, VkFormat format, VkImageUsageFlags usage, VkImageTiling tiling = VK_IMAGE_TILING_OPTIMAL);
 	void free_image(Vk_Allocated_Image img);
 	void free_buffer(Vk_Allocated_Buffer buffer);
 	Vk_Allocated_Buffer create_buffer(VkCommandBuffer cmd, size_t size, void* data, VkBufferUsageFlags usage);
@@ -125,6 +127,7 @@ struct Vk_Context
 	GPU_Buffer create_gpu_buffer(u32 size, VkBufferUsageFlags usage_flags, u32 alignment = 0);
 	Vk_Pipeline create_compute_pipeline(const char* shaderpath);
 	VkDescriptorSetLayout create_layout_from_spirv(u8* bytecode, u32 size);
+	Vk_Allocated_Image load_texture(const char* filepath);
 };
 
 
