@@ -203,10 +203,11 @@ void Vk_Context::find_physical_device()
 	compute_idx = queue_indices.compute_idx;
 	transfer_idx = queue_indices.transfer_idx;
 
-	float queue_prio = 1.f;
+	constexpr u32 queue_count = 2; // 1 primary, 1 async;
+	std::array<float, 2> queue_prio = { 1.f, 1.f };
 	queue_info.queueFamilyIndex = queue_indices.graphics_idx;
-	queue_info.queueCount = 1;
-	queue_info.pQueuePriorities = &queue_prio;
+	queue_info.queueCount = (u32)queue_prio.size();
+	queue_info.pQueuePriorities = queue_prio.data();
 
 	VkDeviceCreateInfo device_create_info{ VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
 	device_create_info.enabledExtensionCount = (uint32_t)device_exts.size();
@@ -227,6 +228,7 @@ void Vk_Context::find_physical_device()
 	device = dev;
 
 	vkGetDeviceQueue(device, graphics_idx, 0, &graphics_queue);
+	vkGetDeviceQueue(device, graphics_idx, 1, &async_upload.upload_queue);
 }
 
 void Vk_Context::init_mem_allocator()
@@ -247,7 +249,6 @@ void Vk_Context::init_mem_allocator()
 		{
 			vmaDestroyAllocator(allocator);
 		}, Garbage_Collector::SHUTDOWN);
-
 }
 
 void Vk_Context::create_command_pool()
@@ -256,9 +257,12 @@ void Vk_Context::create_command_pool()
 	pool_create_info.queueFamilyIndex = graphics_idx;
 	pool_create_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
 	VK_CHECK(vkCreateCommandPool(device, &pool_create_info, nullptr, &command_pool));
+	VK_CHECK(vkCreateCommandPool(device, &pool_create_info, nullptr, &async_command_pool));
 	g_garbage_collector->push([=]()
 		{
 			vkDestroyCommandPool(device, command_pool, nullptr);
+			vkDestroyCommandPool(device, async_command_pool, nullptr);
+
 		},
 		Garbage_Collector::SHUTDOWN);
 
@@ -404,6 +408,14 @@ void Vk_Context::create_sync_objects()
 				vkDestroySemaphore(device, frame_objects[i].render_finished_sem, nullptr);
 			}, Garbage_Collector::SHUTDOWN);
 	}
+
+
+	async_upload.timeline_sem = create_semaphore(true);
+	async_upload.timeline_semaphore_value = 0;
+	g_garbage_collector->push([=]()
+		{
+			vkDestroySemaphore(device, async_upload.timeline_sem, nullptr);
+		}, Garbage_Collector::SHUTDOWN);
 }
 
 Vk_Allocated_Buffer Vk_Context::allocate_buffer(uint32_t size, VkBufferUsageFlags usage, VmaMemoryUsage memory_usage, VmaAllocationCreateFlags flags, u64 alignment)
@@ -455,6 +467,7 @@ Vk_Allocated_Image Vk_Context::allocate_image(VkExtent3D extent, VkFormat format
 	g_garbage_collector->push([=]()
 		{
 			vkDestroyImageView(device, img.image_view, nullptr);
+			vmaDestroyImage(allocator, img.image, img.allocation);
 		}, Garbage_Collector::SHUTDOWN);
 
 	return img;
@@ -530,9 +543,19 @@ VkDeviceAddress Vk_Context::get_acceleration_structure_device_address(VkAccelera
 	return address;
 }
 
-VkSemaphore Vk_Context::create_semaphore()
+VkSemaphore Vk_Context::create_semaphore(bool timeline_sem)
 {
 	VkSemaphoreCreateInfo cinfo{ VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
+
+	VkSemaphoreTypeCreateInfo timelineCreateInfo{};
+	if (timeline_sem)
+	{
+		timelineCreateInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO;
+		timelineCreateInfo.pNext = NULL;
+		timelineCreateInfo.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+		timelineCreateInfo.initialValue = 0;
+		cinfo.pNext = &timelineCreateInfo;
+	}
 
 	VkSemaphore sem;
 	VK_CHECK(vkCreateSemaphore(device, &cinfo, nullptr, &sem));
@@ -651,16 +674,17 @@ VkDescriptorSetLayout Vk_Context::create_layout_from_spirv(u8* bytecode, u32 siz
 
 Vk_Allocated_Image Vk_Context::load_texture_hdri(const char* filepath)
 {
+	constexpr int required_n_comps = 4;
 	stbi_set_flip_vertically_on_load(1);
 	int x, y, comp;
-	float* data = stbi_loadf(filepath, &x, &y, &comp, 0);
+	float* data = stbi_loadf(filepath, &x, &y, &comp, required_n_comps);
 
-	u32 required_size = (x * y * comp) * sizeof(float);
+	u32 required_size = (x * y * required_n_comps) * sizeof(float);
 	Vk_Allocated_Image img = allocate_image(
 		{ (u32)x, (u32)y, 1 }, 
-		VK_FORMAT_R32G32B32_SFLOAT, 
+		VK_FORMAT_R32G32B32A32_SFLOAT, 
 		VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-		VK_IMAGE_TILING_LINEAR
+		VK_IMAGE_TILING_OPTIMAL
 	);
 	Vk_Allocated_Buffer staging_buffer = allocate_buffer(
 		required_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_AUTO, VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);

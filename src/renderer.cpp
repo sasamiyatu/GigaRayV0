@@ -283,10 +283,7 @@ void Renderer::vk_command_buffer_single_submit(VkCommandBuffer cmd)
 void Renderer::init_scene(ECS* ecs)
 {
 	environment_map = context->load_texture_hdri("data/kloppenheim_06_puresky_4k.hdr");
-	g_garbage_collector->push([=]()
-		{
-			vmaDestroyImage(context->allocator, environment_map.image, environment_map.allocation);
-		}, Garbage_Collector::SHUTDOWN);
+
 	// Find first active camera
 	for (auto [cam] : ecs->filter<Camera_Component>())
 	{
@@ -625,22 +622,12 @@ void Renderer::vk_create_render_targets(VkCommandBuffer cmd)
 		color_attachment.format, 
 		VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT
 	);
-	g_garbage_collector->push([=]()
-		{
-			vmaDestroyImage(context->allocator, color_attachment.image.image, color_attachment.image.allocation);
-		}, Garbage_Collector::SHUTDOWN);
-
 
 	final_output = context->allocate_image(
 		{ u32(w), (u32)h, 1 },
 		VK_FORMAT_R8G8B8A8_SNORM,
 		VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_STORAGE_BIT
 	);
-	g_garbage_collector->push([=]()
-		{
-			vmaDestroyImage(context->allocator, final_output.image, final_output.allocation);
-		}, Garbage_Collector::SHUTDOWN);
-
 
 	vk_begin_command_buffer(cmd);
 	vk_transition_layout(cmd, color_attachment.image.image,
@@ -677,16 +664,6 @@ static bool check_extensions(const std::vector<const char*>& device_exts, const 
 		if (!found) return false;
 	}
 	return true;
-}
-
-uint32_t Mesh::get_vertex_buffer_size()
-{
-	return (uint32_t)(sizeof(vertices[0]) * vertices.size());
-}
-
-uint32_t Mesh::get_index_buffer_size()
-{
-	return (uint32_t)(sizeof(uint32_t) * indices.size());
 }
 
 
@@ -1005,51 +982,3 @@ void Renderer::create_top_level_acceleration_structure(ECS* ecs, VkCommandBuffer
 	scene.tlas = scene_tlas;
 }
 
-void Mesh::get_acceleration_structure_build_info(
-	VkAccelerationStructureBuildGeometryInfoKHR* build_info,
-	VkAccelerationStructureGeometryKHR* geometry,
-	VkAccelerationStructureBuildRangeInfoKHR* range_info)
-{
-	VkAccelerationStructureGeometryTrianglesDataKHR triangles{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR };
-	triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
-	triangles.vertexData.deviceAddress = vertex_buffer_address;
-	triangles.vertexStride = get_vertex_size();
-	triangles.indexType = VK_INDEX_TYPE_UINT32;
-	triangles.indexData.deviceAddress = index_buffer_address;
-	triangles.maxVertex = get_vertex_count() - 1;
-	triangles.transformData = { 0 };
-
-	*geometry = { VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR };
-	geometry->geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
-	geometry->geometry.triangles = triangles;
-	geometry->flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
-
-	*range_info = {};
-	range_info->firstVertex = 0;
-	range_info->primitiveCount = get_primitive_count();
-	range_info->primitiveOffset = 0;
-	range_info->transformOffset = 0;
-
-	*build_info = { VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR };
-	build_info->flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
-	build_info->geometryCount = 1;
-	build_info->pGeometries = geometry;
-	build_info->mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
-	build_info->type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-	build_info->srcAccelerationStructure = VK_NULL_HANDLE;
-}
-
-uint32_t Mesh::get_vertex_count()
-{
-	return (uint32_t)vertices.size();
-}
-
-uint32_t Mesh::get_vertex_size()
-{
-	return (uint32_t)(sizeof(vertices[0]));
-}
-
-uint32_t Mesh::get_primitive_count()
-{
-	return (uint32_t)(indices.size() / 3);
-}

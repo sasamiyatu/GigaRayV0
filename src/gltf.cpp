@@ -3,6 +3,8 @@
 #define CGLTF_IMPLEMENTATION
 #include "cgltf/cgltf.h"
 #include "common.h"
+#include "janitor.h"
+#include "r_mesh.h"
 
 template <typename T>
 static void read_data(cgltf_buffer_view* view, u32 stride, const std::map<std::string, u8*>& buffer_data, T* out_data)
@@ -15,7 +17,7 @@ static void read_data(cgltf_buffer_view* view, u32 stride, const std::map<std::s
     memcpy(out_data, start, view->size);
 }
 
-Mesh2 load_gltf_from_file(const char* filepath, Vk_Context* ctx, Resource_Manager<Texture>* texture_manager)
+Mesh2 load_gltf_from_file(const char* filepath, Vk_Context* ctx, Resource_Manager<Texture>* texture_manager, Resource_Manager<Material>* material_manager)
 {
     Mesh2 ret{};
 
@@ -43,26 +45,21 @@ Mesh2 load_gltf_from_file(const char* filepath, Vk_Context* ctx, Resource_Manage
         assert(size == bytes_read);
     }
 
-    std::vector<Material> mats(data->materials_count);
     for (int i = 0; i < data->materials_count; ++i)
     {
         assert(data->materials[i].has_pbr_metallic_roughness == 1);
         assert(data->materials[i].pbr_metallic_roughness.base_color_texture.texture != nullptr);
         assert(data->materials[i].pbr_metallic_roughness.metallic_roughness_texture.texture != nullptr);
-
+        Material new_mat{};
         {
             cgltf_texture_view view = data->materials[i].pbr_metallic_roughness.base_color_texture;
             cgltf_texture* tex = view.texture;
             cgltf_image* img = tex->image;
             std::string file_path = std::string(stripped) + std::string(img->uri);
             Vk_Allocated_Image image = ctx->load_texture(file_path.c_str());
-            g_garbage_collector->push([=]()
-                {
-                    vmaDestroyImage(ctx->allocator, image.image, image.allocation);
-                }, Garbage_Collector::SHUTDOWN);
             Texture t = { image };
             int id = texture_manager->register_resource(t, file_path);
-            mats[i].base_color = id;
+            new_mat.base_color = id;
         }
 
         {
@@ -71,18 +68,14 @@ Mesh2 load_gltf_from_file(const char* filepath, Vk_Context* ctx, Resource_Manage
             cgltf_image* img = tex->image;
             std::string file_path = std::string(stripped) + std::string(img->uri);
             Vk_Allocated_Image image = ctx->load_texture(file_path.c_str());
-            g_garbage_collector->push([=]()
-                {
-                    vmaDestroyImage(ctx->allocator, image.image, image.allocation);
-                }, Garbage_Collector::SHUTDOWN);
             Texture t = { image };
             int id = texture_manager->register_resource(t, file_path);
-            mats[i].metallic_roughness = id;
+            new_mat.metallic_roughness = id;
         }
-
+        assert(data->materials[i].name != nullptr);
+        i32 material_id = material_manager->register_resource(new_mat, data->materials[i].name);
     }
 
-    ret.materials = std::move(mats);
 
     free(stripped);
 
@@ -161,6 +154,8 @@ Mesh2 load_gltf_from_file(const char* filepath, Vk_Context* ctx, Resource_Manage
             vg.texcoord = std::move(texcoords);
             vg.indices = std::move(indices);
 
+            i32 material_id = material_manager->get_id_from_string(prim->material->name);
+            ret.materials.push_back(material_id);
             ret.meshes.emplace_back(vg);
         }
     }
@@ -169,7 +164,6 @@ Mesh2 load_gltf_from_file(const char* filepath, Vk_Context* ctx, Resource_Manage
     {
         free(pair.second);
     }
-
 
     return ret;
 }

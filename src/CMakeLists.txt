@@ -10,7 +10,9 @@ add_executable(GigaRayV0
     gltf.h 
     gltf.cpp
     input.h
-    input.cpp 
+    input.cpp
+    janitor.h
+    janitor.cpp
     misc.h 
     misc.cpp
     obj.h 

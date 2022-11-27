@@ -30,12 +30,10 @@ int main(int argc, char** argv)
 	Vk_Context ctx(&platform);
 	Resource_Manager<Mesh> mesh_manager;
 	Resource_Manager<Texture> texture_manager;
-
+	Resource_Manager<Material> material_manager;
 	Renderer renderer(&ctx, &platform, &mesh_manager, &texture_manager);
 
-
-
-	Mesh2 gltf = load_gltf_from_file("data/cube/Cube.gltf", &ctx, &texture_manager);
+	Mesh2 gltf = load_gltf_from_file("data/cube/Cube.gltf", &ctx, &texture_manager, &material_manager);
 	std::vector<Mesh> meshes(gltf.meshes.size());
 	create_from_mesh2(&gltf, (u32)gltf.meshes.size(), meshes.data());
 

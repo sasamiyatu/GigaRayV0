@@ -75,6 +75,13 @@ struct Garbage_Collector
 
 extern Garbage_Collector* g_garbage_collector;
 
+struct Async_Upload
+{
+	VkQueue upload_queue;
+	VkSemaphore timeline_sem;
+	u64 timeline_semaphore_value;
+};
+
 struct Vk_Context
 {
 	struct Per_Frame_Objects
@@ -92,6 +99,7 @@ struct Vk_Context
 	VmaAllocator allocator;
 	int graphics_idx, compute_idx, transfer_idx;
 	VkCommandPool command_pool;
+	VkCommandPool async_command_pool;
 	VkDescriptorPool descriptor_pool;
 	VkSurfaceKHR surface;
 	VkSwapchainKHR swapchain;
@@ -99,6 +107,7 @@ struct Vk_Context
 	std::vector<VkImageView> swapchain_image_views;
 	uint32_t device_sbt_alignment; // Device shader binding table alignment requirement
 	VkQueue graphics_queue;
+	Async_Upload async_upload;
 	VkPhysicalDeviceProperties2 physical_device_properties;
 
 	std::array<Per_Frame_Objects, FRAMES_IN_FLIGHT> frame_objects;
@@ -123,12 +132,13 @@ struct Vk_Context
 	VkShaderModule create_shader_module_from_file(const char* filepath);
 	VkFence create_fence();
 	VkDeviceAddress get_acceleration_structure_device_address(VkAccelerationStructureKHR as);
-	VkSemaphore create_semaphore();
+	VkSemaphore create_semaphore(bool timeline = false);
 	GPU_Buffer create_gpu_buffer(u32 size, VkBufferUsageFlags usage_flags, u32 alignment = 0);
 	Vk_Pipeline create_compute_pipeline(const char* shaderpath);
 	VkDescriptorSetLayout create_layout_from_spirv(u8* bytecode, u32 size);
 	Vk_Allocated_Image load_texture_hdri(const char* filepath);
 	Vk_Allocated_Image load_texture(const char* filepath);
+	Vk_Allocated_Image load_texture_async(const char* filepath, u64* timeline_semaphore_value);
 };
 
 

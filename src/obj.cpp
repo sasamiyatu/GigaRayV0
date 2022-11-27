@@ -1,7 +1,7 @@
 #include "obj.h"
 #include "common.h"
 #include <iostream>
-#include "renderer.h"
+#include "r_mesh.h"
 
 Mesh load_obj_from_file(const char* filepath)
 {
