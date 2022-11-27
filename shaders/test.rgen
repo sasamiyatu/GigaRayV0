@@ -3,11 +3,13 @@
 #extension GL_EXT_ray_tracing : require
 #extension  GL_EXT_scalar_block_layout : require
 #extension GL_GOOGLE_include_directive : enable
+#extension GL_EXT_nonuniform_qualifier : require
 
 #include "test.glsl"
 #include "scene.glsl"
 #include "random.glsl"
 #include "math.glsl"
+#include "material.glsl"
 
 layout( push_constant ) uniform constants
 {
@@ -26,6 +28,20 @@ layout(binding = 3, set = 0, scalar) readonly buffer index_buffer_t
 {
     Index_Data indices[];
 } index_buffer;
+
+layout (set = 1, binding = 0) uniform sampler2D textures[];
+layout (set = 1, binding = 1) readonly buffer vertex_buffer_array_t
+{
+    Vertex_Data verts[];
+} vertex_buffer_array[];
+layout (set = 1, binding = 2) readonly buffer index_buffer_array_t
+{
+    Index_Data indices[];
+} index_buffer_array[];
+layout (set = 1, binding = 3, scalar) uniform material_array_t
+{
+    Material material;
+} material_array[];
 
 vec3 sample_environment_map(vec3 dir, sampler2D s)
 {
@@ -112,18 +128,21 @@ void main()
         {
             Vertex v = get_interpolated_vertex(pay.instance_id, pay.prim_id, pay.barycentrics);
             vec3 normal = v.normal;
+            Material mat = material_array[pay.instance_id].material;
+            vec3 albedo = mat.base_color_tex != -1 ? textureLod(textures[mat.base_color_tex], v.texcoord, 0).rgb : mat.base_color_factor;
+            albedo = pow(albedo, vec3(2.2));
             if (dot(normal, rd) > 0.0)
                 normal = -normal;
             vec3 new_dir = random_cosine_hemisphere(normal, seed);
             vec3 p = ro + pay.t * rd;
             ro = p + normal * 0.001;
             rd = new_dir;
+            throughput *= albedo;
         }
         else
         {
             // Miss
             radiance += throughput * sample_environment_map(rd, environment_map);
-            //radiance += vec3(1.0);
             break;
         }
     }

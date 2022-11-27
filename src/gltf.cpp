@@ -174,6 +174,7 @@ void create_from_mesh2(Mesh2* m, u32 mesh_count, Mesh* out_meshes)
     for (u32 i = 0; i < mesh_count; ++i)
     {
         Mesh* mesh = &out_meshes[i];
+        mesh->material_id = m->materials[i];
         mesh->indices = m->meshes[i].indices;
         assert(m->meshes[i].pos.size() == m->meshes[i].normal.size()
             && m->meshes[i].pos.size() == m->meshes[i].texcoord.size());

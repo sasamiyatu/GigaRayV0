@@ -11,6 +11,7 @@
 #include "defines.h"
 #include "r_vulkan.h"
 #include "resource_manager.h"
+#include "material.h"
 
 #define VK_CHECK(x)                                                 \
 	do                                                              \
@@ -64,6 +65,7 @@ struct Scene
 {
 	std::optional<Vk_Acceleration_Structure> tlas;
 	struct Camera_Component* active_camera;
+	Vk_Allocated_Buffer material_buffer;
 };
 
 struct Texture
@@ -85,7 +87,10 @@ struct Renderer
 	uint64_t frame_counter = 0;
 	u32 frames_accumulated = 0;
 	uint32_t swapchain_image_index = 0;
+	VkDescriptorPool descriptor_pool;
 	VkDescriptorSetLayout desc_set_layout;
+	VkDescriptorSetLayout bindless_set_layout;
+	VkDescriptorSet bindless_descriptor_set;
 	Vk_Allocated_Buffer shader_binding_table;
 	Scene scene;
 	Vk_Pipeline compute_pp;
@@ -95,13 +100,18 @@ struct Renderer
 
 	Resource_Manager<Mesh>* mesh_manager;
 	Resource_Manager<Texture>* texture_manager;
+	Resource_Manager<Material>* material_manager;
 
-	Renderer(Vk_Context* context, Platform* platform, Resource_Manager<Mesh>* mesh_manager, Resource_Manager<Texture>* texture_manager);
+	Renderer(Vk_Context* context, Platform* platform, 
+		Resource_Manager<Mesh>* mesh_manager, 
+		Resource_Manager<Texture>* texture_manager,
+		Resource_Manager<Material>* material_manager);
 
 	void initialize();
 
 	uint32_t get_frame_index() { return frame_counter % FRAMES_IN_FLIGHT; }
 	VkCommandBuffer get_current_frame_command_buffer();
+	void create_descriptor_pools();
 	void vk_create_descriptor_set_layout();
 	void vk_create_render_targets(VkCommandBuffer cmd);
 	void transition_swapchain_images(VkCommandBuffer cmd);

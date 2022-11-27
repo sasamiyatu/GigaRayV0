@@ -161,6 +161,7 @@ void Vk_Context::find_physical_device()
 		VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_FEATURES
 	};
 
+
 	features2.pNext = &maintenance_feats;
 	maintenance_feats.pNext = &features12;
 	features12.pNext = &features11;
@@ -168,6 +169,7 @@ void Vk_Context::find_physical_device()
 	as_feats.pNext = &rt_pipeline_feats;
 
 	vkGetPhysicalDeviceFeatures2(physical_device, &features2);
+
 
 	VkDevice dev;
 
@@ -430,6 +432,11 @@ Vk_Allocated_Buffer Vk_Context::allocate_buffer(uint32_t size, VkBufferUsageFlag
 
 	Vk_Allocated_Buffer buffer;
 	VK_CHECK(vmaCreateBufferWithAlignment(allocator, &buffer_info, &alloc_info, alignment, &buffer.buffer, &buffer.allocation, nullptr));
+
+	g_garbage_collector->push([=]()
+		{
+			vmaDestroyBuffer(allocator, buffer.buffer, buffer.allocation);
+		}, Garbage_Collector::SHUTDOWN);
 
 	return buffer;
 }
@@ -745,8 +752,6 @@ Vk_Allocated_Image Vk_Context::load_texture_hdri(const char* filepath)
 
 	vkQueueWaitIdle(graphics_queue);
 
-	vmaDestroyBuffer(allocator, staging_buffer.buffer, staging_buffer.allocation);
-
 	return img;
 }
 
@@ -824,7 +829,6 @@ Vk_Allocated_Image Vk_Context::load_texture(const char* filepath)
 
 	vkQueueWaitIdle(graphics_queue);
 
-	vmaDestroyBuffer(allocator, staging_buffer.buffer, staging_buffer.allocation);
 
 	return img;
 }

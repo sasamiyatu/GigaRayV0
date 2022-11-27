@@ -31,7 +31,7 @@ int main(int argc, char** argv)
 	Resource_Manager<Mesh> mesh_manager;
 	Resource_Manager<Texture> texture_manager;
 	Resource_Manager<Material> material_manager;
-	Renderer renderer(&ctx, &platform, &mesh_manager, &texture_manager);
+	Renderer renderer(&ctx, &platform, &mesh_manager, &texture_manager, &material_manager);
 
 	Mesh2 gltf = load_gltf_from_file("data/cube/Cube.gltf", &ctx, &texture_manager, &material_manager);
 	std::vector<Mesh> meshes(gltf.meshes.size());

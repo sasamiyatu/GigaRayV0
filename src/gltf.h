@@ -1,5 +1,6 @@
 #pragma once
 #include "defines.h"
+#include "material.h"
 //#include "renderer.h"
 //#include "resource_manager.h"
 struct Mesh;
@@ -9,13 +10,6 @@ struct Texture;
 template<typename T>
 struct Resource_Manager;
 
-
-struct Material
-{
-	i32 base_color = -1;
-	i32 metallic_roughness = -1;
-	i32 normal_map = -1;
-};
 
 struct Vertex_Group
 {

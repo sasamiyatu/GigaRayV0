@@ -13,6 +13,8 @@ add_executable(GigaRayV0
     input.cpp
     janitor.h
     janitor.cpp
+    material.h 
+    material.cpp
     misc.h 
     misc.cpp
     obj.h 
