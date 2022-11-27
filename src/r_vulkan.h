@@ -127,6 +127,7 @@ struct Vk_Context
 	GPU_Buffer create_gpu_buffer(u32 size, VkBufferUsageFlags usage_flags, u32 alignment = 0);
 	Vk_Pipeline create_compute_pipeline(const char* shaderpath);
 	VkDescriptorSetLayout create_layout_from_spirv(u8* bytecode, u32 size);
+	Vk_Allocated_Image load_texture_hdri(const char* filepath);
 	Vk_Allocated_Image load_texture(const char* filepath);
 };
 

@@ -10,6 +10,7 @@
 #include <optional>
 #include "defines.h"
 #include "r_vulkan.h"
+#include "resource_manager.h"
 
 #define VK_CHECK(x)                                                 \
 	do                                                              \
@@ -93,6 +94,11 @@ struct Scene
 	struct Camera_Component* active_camera;
 };
 
+struct Texture
+{
+	Vk_Allocated_Image image;
+};
+
 struct Renderer
 {
 	i32 window_width, window_height;
@@ -114,7 +120,10 @@ struct Renderer
 	Vk_Allocated_Image environment_map;
 	VkSampler bilinear_sampler;
 
-	Renderer(Vk_Context* context, Platform* platform);
+	Resource_Manager<Mesh>* mesh_manager;
+	Resource_Manager<Texture>* texture_manager;
+
+	Renderer(Vk_Context* context, Platform* platform, Resource_Manager<Mesh>* mesh_manager, Resource_Manager<Texture>* texture_manager);
 
 	void initialize();
 

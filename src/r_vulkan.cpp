@@ -649,7 +649,7 @@ VkDescriptorSetLayout Vk_Context::create_layout_from_spirv(u8* bytecode, u32 siz
 	return layout;
 }
 
-Vk_Allocated_Image Vk_Context::load_texture(const char* filepath)
+Vk_Allocated_Image Vk_Context::load_texture_hdri(const char* filepath)
 {
 	stbi_set_flip_vertically_on_load(1);
 	int x, y, comp;
@@ -661,6 +661,85 @@ Vk_Allocated_Image Vk_Context::load_texture(const char* filepath)
 		VK_FORMAT_R32G32B32_SFLOAT, 
 		VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
 		VK_IMAGE_TILING_LINEAR
+	);
+	Vk_Allocated_Buffer staging_buffer = allocate_buffer(
+		required_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_AUTO, VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+
+	void* mapped;
+	vmaMapMemory(allocator, staging_buffer.allocation, &mapped);
+	memcpy(mapped, data, required_size);
+	vmaUnmapMemory(allocator, staging_buffer.allocation);
+
+	VkCommandBufferAllocateInfo alloc_info{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO };
+
+	alloc_info.commandBufferCount = 1;
+	alloc_info.commandPool = command_pool;
+	alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+	VkCommandBuffer cmd;
+	vkAllocateCommandBuffers(device, &alloc_info, &cmd);
+
+	VkCommandBufferBeginInfo begin_info{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
+	begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+	vkBeginCommandBuffer(cmd, &begin_info);
+
+	VkImageSubresourceLayers subres{};
+	subres.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+	subres.baseArrayLayer = 0;
+	subres.layerCount = 1;
+	subres.mipLevel = 0;
+	VkBufferImageCopy regions{};
+	regions.bufferOffset = 0;
+	regions.bufferImageHeight = 0;
+	regions.bufferRowLength = 0;
+	regions.imageSubresource = subres;
+	regions.imageOffset = { 0, 0, 0 };
+	regions.imageExtent = { (u32)x, (u32)y, 1 };
+
+	vkinit::vk_transition_layout(cmd, img.image,
+		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+		0, VK_ACCESS_TRANSFER_WRITE_BIT,
+		VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT
+	);
+
+	vkCmdCopyBufferToImage(cmd, staging_buffer.buffer, img.image, VK_IMAGE_LAYOUT_GENERAL, 1, &regions);
+
+	vkinit::vk_transition_layout(cmd, img.image,
+		VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+		0, VK_ACCESS_SHADER_READ_BIT,
+		VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+		VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+		| VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
+		| VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_NV
+	);
+
+	vkEndCommandBuffer(cmd);
+
+	VkSubmitInfo submit{ VK_STRUCTURE_TYPE_SUBMIT_INFO };
+	submit.commandBufferCount = 1;
+	submit.pCommandBuffers = &cmd;
+	vkQueueSubmit(graphics_queue, 1, &submit, 0);
+
+	vkQueueWaitIdle(graphics_queue);
+
+	vmaDestroyBuffer(allocator, staging_buffer.buffer, staging_buffer.allocation);
+
+	return img;
+}
+
+Vk_Allocated_Image Vk_Context::load_texture(const char* filepath)
+{
+	constexpr int required_n_comps = 4; // GIVE ME 4 CHANNELS!!!
+
+	stbi_set_flip_vertically_on_load(1);
+	int x, y, comp;
+	u8* data = stbi_load(filepath, &x, &y, &comp, required_n_comps);
+
+	u32 required_size = (x * y * required_n_comps) * sizeof(u8);
+	Vk_Allocated_Image img = allocate_image(
+		{ (u32)x, (u32)y, 1 },
+		VK_FORMAT_R8G8B8A8_UNORM,
+		VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+		VK_IMAGE_TILING_OPTIMAL
 	);
 	Vk_Allocated_Buffer staging_buffer = allocate_buffer(
 		required_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_AUTO, VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);

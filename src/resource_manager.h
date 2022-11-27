@@ -1,7 +1,8 @@
 #pragma once
 #include "defines.h"
-#include "renderer.h"
 #include "obj.h"
+
+struct Mesh;
 
 template <typename T>
 struct Resource
@@ -22,10 +23,23 @@ struct Resource_Manager
 		if constexpr(std::is_same<T, Mesh>::value)
 		{
 			T data = load_obj_from_file(filepath);
-			Resource<T> new_resource = { data, filepath };
-			resources.push_back(new_resource);
+			Resource<T> new_resource = { std::move(data), filepath };
+			resources.emplace_back(new_resource);
 			return next_id++;
 		}
+	}
+
+	int register_resource(T res, std::string path)
+	{
+		// Check if already exists
+		for (const auto& res : resources)
+		{
+			assert(res.filepath != path);
+			// Already exists
+		}
+		Resource<T> new_res = { std::move(res), path };
+		resources.emplace_back(new_res);
+		return next_id++;
 	}
 
 	T* get_resource_with_id(int id)
@@ -34,3 +48,4 @@ struct Resource_Manager
 		return &resources[id].resource;
 	}
 };
+

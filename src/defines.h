@@ -8,6 +8,7 @@
 #include <optional>
 #include <functional>
 #include <array>
+#include <map>
 
 #if _WIN32
 #define NOMINMAX

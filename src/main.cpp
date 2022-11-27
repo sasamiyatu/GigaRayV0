@@ -18,6 +18,7 @@
 #include "input.h"
 #include "game.h"
 #include "timer.h"
+#include "gltf.h"
 
 constexpr int WINDOW_WIDTH = 1280;
 constexpr int WINDOW_HEIGHT = 720;
@@ -27,11 +28,20 @@ int main(int argc, char** argv)
 	Platform platform;
 	platform.init_window(WINDOW_WIDTH, WINDOW_HEIGHT, "GigaRay");
 	Vk_Context ctx(&platform);
-	Renderer renderer(&ctx, &platform);
-
 	Resource_Manager<Mesh> mesh_manager;
+	Resource_Manager<Texture> texture_manager;
+
+	Renderer renderer(&ctx, &platform, &mesh_manager, &texture_manager);
+
+
+
+	Mesh2 gltf = load_gltf_from_file("data/cube/Cube.gltf", &ctx, &texture_manager);
+	std::vector<Mesh> meshes(gltf.meshes.size());
+	create_from_mesh2(&gltf, (u32)gltf.meshes.size(), meshes.data());
+
 	//int32_t mesh_id = mesh_manager.load_from_disk("data/stanford-bunny.obj");
-	int32_t mesh_id = mesh_manager.load_from_disk("data/sponza.obj"); 
+	//int32_t mesh_id = mesh_manager.load_from_disk("data/sponza.obj"); 
+	i32 mesh_id = mesh_manager.register_resource(meshes[0], "cube");
 	ECS ecs{};
 	Transform_Component c{};
 	Camera_Component cam{};

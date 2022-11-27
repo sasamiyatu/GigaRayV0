@@ -238,10 +238,12 @@ void Renderer::create_samplers()
 }
 
 
-Renderer::Renderer(Vk_Context* context, Platform* platform)
+Renderer::Renderer(Vk_Context* context, Platform* platform, Resource_Manager<Mesh>* mesh_manager, Resource_Manager<Texture>* texture_manager)
 	: context(context),
 	platform(platform),
-	rt_pipeline({})
+	rt_pipeline({}),
+	mesh_manager(mesh_manager),
+	texture_manager(texture_manager)
 {
 	initialize();
 }
@@ -280,7 +282,7 @@ void Renderer::vk_command_buffer_single_submit(VkCommandBuffer cmd)
 // Loads the meshes from the scene and creates the acceleration structures
 void Renderer::init_scene(ECS* ecs)
 {
-	environment_map = context->load_texture("data/kloppenheim_06_puresky_4k.hdr");
+	environment_map = context->load_texture_hdri("data/kloppenheim_06_puresky_4k.hdr");
 	g_garbage_collector->push([=]()
 		{
 			vmaDestroyImage(context->allocator, environment_map.image, environment_map.allocation);

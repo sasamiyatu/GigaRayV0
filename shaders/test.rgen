@@ -111,9 +111,12 @@ void main()
         if (pay.prim_id != -1)
         {
             Vertex v = get_interpolated_vertex(pay.instance_id, pay.prim_id, pay.barycentrics);
-            vec3 new_dir = random_cosine_hemisphere(v.normal, seed);
+            vec3 normal = v.normal;
+            if (dot(normal, rd) > 0.0)
+                normal = -normal;
+            vec3 new_dir = random_cosine_hemisphere(normal, seed);
             vec3 p = ro + pay.t * rd;
-            ro = p + v.normal * 0.001;
+            ro = p + normal * 0.001;
             rd = new_dir;
         }
         else

@@ -7,6 +7,8 @@ add_executable(GigaRayV0
     ecs.cpp
     game.h 
     game.cpp
+    gltf.h 
+    gltf.cpp
     input.h
     input.cpp 
     misc.h 

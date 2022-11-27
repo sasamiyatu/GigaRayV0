@@ -1,6 +1,8 @@
 #include "obj.h"
 #include "common.h"
 #include <iostream>
+#include "renderer.h"
+
 Mesh load_obj_from_file(const char* filepath)
 {
     std::string inputfile = filepath;
