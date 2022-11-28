@@ -10,6 +10,8 @@
 #include "random.glsl"
 #include "math.glsl"
 #include "material.glsl"
+#include "ggx.glsl"
+#include "sampling.glsl"
 
 layout( push_constant ) uniform constants
 {
@@ -79,7 +81,7 @@ void main()
     pay.instance_id = -1;
     uvec4 seed = uvec4( gl_LaunchIDEXT.xy, control.frames_accumulated, 1);
     vec2 pixel = vec2(gl_LaunchIDEXT.xy);
-    vec2 offset = vec2(pcg4d(seed)) * ldexp(2.0, -32);
+    vec2 offset = vec2(pcg4d(seed)) * ldexp(1.0, -32);
     const vec2 resolution = vec2(gl_LaunchSizeEXT.xy);
     if (control.frames_accumulated != 0)
         pixel += mix(vec2(-0.5), vec2(0.5), offset);
@@ -122,9 +124,13 @@ void main()
     // vec2 texcoord = v.texcoord;
     // vec3 albedo = mat.base_color_tex != -1 ? textureLod(textures[mat.base_color_tex], texcoord, 0).rgb : mat.base_color_factor.rgb;
     // albedo = pow(albedo, vec3(2.2));
+    // vec3 mr = mat.metallic_roughness_tex != -1 ? textureLod(textures[mat.metallic_roughness_tex], v.texcoord, 0).rgb : vec3(0.0, mat.roughness_factor, mat.metallic_factor);
     // if (pay.instance_id != -1)
     //     c = vec3(1.0, 0.0, 1.0);
-    // imageStore(output_image, ivec2(gl_LaunchIDEXT), vec4(albedo, 1.0));
+    // if (mr.b > 0.2)
+    //     imageStore(output_image, ivec2(gl_LaunchIDEXT), vec4(1.0, 0.0, 1.0, 1.0));
+    // else
+    //     imageStore(output_image, ivec2(gl_LaunchIDEXT), vec4(albedo, 1.0));
     // return;
 
     // Path tracer loop
@@ -154,12 +160,16 @@ void main()
             vec3 normal = v.normal;
             Material mat = material_array.materials[material_id];
             vec3 albedo = mat.base_color_tex != -1 ? textureLod(textures[mat.base_color_tex], v.texcoord, 0).rgb : mat.base_color_factor.rgb;
+            vec2 metallic_roughness = mat.metallic_roughness_tex != -1 ? textureLod(textures[mat.metallic_roughness_tex], v.texcoord, 0).bg : vec2(mat.metallic_factor, mat.roughness_factor);
             albedo = pow(albedo, vec3(2.2));
             if (dot(normal, rd) > 0.0)
                 normal = -normal;
             vec3 p = ro + pay.t * rd;
             ro = p + normal * 0.001;
-            // Next event estimation
+            float roughness = metallic_roughness.g;
+            float metallic = metallic_roughness.r;
+            //Next event estimation
+            #if 1
             {
                 traceRayEXT(
                     scene,
@@ -176,14 +186,50 @@ void main()
                 );
                 if (pay.prim_id == -1)
                 {
-                    radiance += throughput * albedo / M_PI * max(0.0, dot(normal, L));
+                    vec3 V = -rd;
+                    vec3 H = normalize(V + L);
+                    float ndotv = abs(dot(normal, V));
+                    float ldoth = max(0.0, dot(L, H));
+                    float ndoth = max(0.0, dot(normal, H));
+                    float ndotl = max(0.0, dot(normal, L));
+                    vec3 brdf = brdf_ggx_combined(ldoth, ndotv, ndotl, ndoth, metallic, roughness, albedo);
+                    radiance += throughput * brdf * ndotl * 10.f;
                 }
             }
+            #endif
+            float spec_probability = 0.5;
+            vec4 rand = vec4(pcg4d(seed)) * ldexp(1.0, -32);
+            if (rand.x < spec_probability)
+            {
+                mat3 tbn = create_tangent_space(normal);
+                vec3 V = -rd;
+                vec3 Ve = V * tbn;
+                vec3 Li = sampleGGXVNDF(Ve, roughness, rand.y, rand.z);
+                Li = tbn * Li;
+                vec3 new_dir = reflect(rd, Li);
+                vec3 H = Li;
+                float ldoth = max(0.0, dot(new_dir, H));
+                float ndotv = abs(dot(normal, V));
+                float ndoth = max(0.0, dot(normal, H));
+                float ndotl = max(0.0, dot(normal, new_dir));
+                float vdoth = max(0.0, dot(V, H));
 
-            vec3 new_dir = random_cosine_hemisphere(normal, seed);
-
-            rd = new_dir;
-            throughput *= albedo;
+                vec3 F = f_schlick(mix(vec3(0.04), albedo, metallic), vec3(1.0), ldoth);
+                float G2 = ggx_masking_shadowing(ndotv, vdoth, ndotl, ldoth, roughness);
+                float G1 = ggx_masking(ndotv, vdoth, roughness);
+                throughput *= (F * G2 / G1) / spec_probability;
+                rd = new_dir;
+                //vec3 brdf = brdf_ggx_combined(ldoth, ndotv, ndotl, ndoth, metallic, roughness, albedo);
+                //float pdf = pdf_cosine_hemisphere(ndotl);
+            }
+            else
+            {
+                vec3 new_dir = random_cosine_hemisphere(normal, rand.y, rand.z);
+                rd = new_dir;
+                throughput *= mix(albedo, vec3(0.0), metallic) / (1.0 - spec_probability);
+            }
+            if (any(isnan(throughput)))
+                break;
         }
         else
         {
@@ -191,6 +237,7 @@ void main()
             radiance += throughput * sample_environment_map(rd, environment_map);
             break;
         }
+        if (any(isnan(throughput)) || any(isinf(throughput))) break;
     }
     vec3 out_color = radiance.rgb;
     if (control.frames_accumulated != 0)

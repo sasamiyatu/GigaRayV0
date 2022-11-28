@@ -24,24 +24,6 @@ mat3 create_tangent_space(vec3 n)
     return mat3(b1, b2, n);
 }
 
-vec3 random_cosine_hemisphere(vec3 n, inout uvec4 seed)
-{
-    vec2 rand = vec2(pcg4d(seed)) * ldexp(2.0, -32);
-    vec3 dir = vec3(
-        sqrt(rand.x) * cos(2.0 * M_PI * rand.y),
-        sqrt(rand.x) * sin(2.0 * M_PI * rand.y),
-        sqrt(1.0 - rand.x)
-    );
-
-    return create_tangent_space(n) * dir;
-}
-
-float pdf_cosine_hempishere(vec3 n, vec3 l)
-{
-    float ndotl = max(0.0, dot(n, l));
-    return ndotl / M_PI;
-}
-
 
 
 

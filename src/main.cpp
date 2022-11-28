@@ -25,6 +25,7 @@ constexpr int WINDOW_HEIGHT = 720;
 
 int main(int argc, char** argv)
 {
+
 	Platform platform;
 	platform.init_window(WINDOW_WIDTH, WINDOW_HEIGHT, "GigaRay");
 	Vk_Context ctx(&platform);
