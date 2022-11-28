@@ -12,6 +12,7 @@ struct Vertex_Data
     vec3 pos;
     vec3 normal;
     vec2 texcoord;
+    vec4 tangent;
 };
 
 struct Vertex
@@ -19,6 +20,7 @@ struct Vertex
     vec3 pos;
     vec3 normal; 
     vec2 texcoord;
+    vec4 tangent;
 };
 
 struct Index_Data

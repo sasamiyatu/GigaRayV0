@@ -7,7 +7,7 @@ struct Material
     int metallic_roughness_tex;
     int normal_tex;
 
-    vec3 base_color_factor;
+    vec4 base_color_factor;
     float metallic_factor;
     float roughness_factor;
 };

@@ -16,6 +16,7 @@ struct Vertex_Group
 	std::vector<glm::vec3> pos;
 	std::vector<glm::vec3> normal;
 	std::vector<glm::vec2> texcoord;
+	std::vector<glm::vec4> tangent;
 	std::vector<u32> indices;
 };
 

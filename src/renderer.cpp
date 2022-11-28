@@ -10,6 +10,8 @@
 using namespace vkinit;
 
 static constexpr int BINDLESS_TEXTURE_BINDING = 0;
+static constexpr int BINDLESS_VERTEX_BINDING = 1;
+static constexpr int BINDLESS_INDEX_BINDING = 2;
 static constexpr int BINDLESS_UNIFORM_BINDING = 3;
 static constexpr int MAX_MATERIAL_COUNT = 256;
 
@@ -19,7 +21,7 @@ constexpr int MAX_BINDLESS_RESOURCES = 16536;
 // FIXME: We're gonna need more stuff than this 
 void Renderer::vk_create_descriptor_set_layout()
 {
-	std::array<VkDescriptorSetLayoutBinding, 6> bindings{};
+	std::array<VkDescriptorSetLayoutBinding, 4> bindings{};
 
 	// Render target
 	bindings[0].binding = 0;
@@ -33,29 +35,17 @@ void Renderer::vk_create_descriptor_set_layout()
 	bindings[1].descriptorCount = 1;
 	bindings[1].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
 
-	// Vertex buffer
+	// Camera data
 	bindings[2].binding = 2;
-	bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+	bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 	bindings[2].descriptorCount = 1;
 	bindings[2].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
 
-	// Index buffer
+	// Envmap
 	bindings[3].binding = 3;
-	bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+	bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 	bindings[3].descriptorCount = 1;
 	bindings[3].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-
-	// Camera data
-	bindings[4].binding = 4;
-	bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-	bindings[4].descriptorCount = 1;
-	bindings[4].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-
-	// Envmap
-	bindings[5].binding = 5;
-	bindings[5].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-	bindings[5].descriptorCount = 1;
-	bindings[5].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
 
 
 	VkDescriptorSetLayoutCreateInfo layout_info{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
@@ -82,7 +72,7 @@ void Renderer::vk_create_descriptor_set_layout()
 	bindless_bindings[2].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
 
 	bindless_bindings[3].binding = 3;
-	bindless_bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+	bindless_bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 	bindless_bindings[3].descriptorCount = 1;
 	bindless_bindings[3].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
 
@@ -310,7 +300,6 @@ Renderer::Renderer(Vk_Context* context, Platform* platform,
 }
 
 
-
 void Renderer::initialize()
 {
 	create_descriptor_pools();
@@ -366,12 +355,13 @@ void Renderer::vk_command_buffer_single_submit(VkCommandBuffer cmd)
 void Renderer::init_scene(ECS* ecs)
 {
 	environment_map = context->load_texture_hdri("data/kloppenheim_06_puresky_4k.hdr");
-
-	// Update bindless descriptor sets
+	
 	{
+		// Update bindless textures
 		size_t resource_count = (u32)texture_manager->resources.size();
 		std::vector<VkWriteDescriptorSet> writes(resource_count);
 		std::vector<VkDescriptorImageInfo> img_infos(resource_count);
+		std::vector<VkDescriptorBufferInfo> buf_infos;
 		for (size_t i = 0; i < resource_count; ++i)
 		{
 			VkWriteDescriptorSet& w = writes[i];
@@ -388,36 +378,39 @@ void Renderer::init_scene(ECS* ecs)
 			img.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 			w.pImageInfo = &img;
 		}
-
-		size_t material_count = (u32)material_manager->resources.size();
-		scene.material_buffer = context->allocate_buffer(sizeof(Material) * MAX_MATERIAL_COUNT,
-			VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-			VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-
-		void* mapped;
-		vmaMapMemory(context->allocator, scene.material_buffer.allocation, &mapped);
-		Material* writeaddr = (Material*)mapped;
-		for (size_t i = 0; i < material_count; ++i)
+		
 		{
-			*writeaddr = material_manager->resources[i].resource;
-			writeaddr++;
+			// Update material descriptions
+			size_t material_count = (u32)material_manager->resources.size();
+			scene.material_buffer = context->allocate_buffer(sizeof(Material) * MAX_MATERIAL_COUNT,
+				VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+				VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+
+			void* mapped;
+			vmaMapMemory(context->allocator, scene.material_buffer.allocation, &mapped);
+			Material* writeaddr = (Material*)mapped;
+			for (size_t i = 0; i < material_count; ++i)
+			{
+				writeaddr[i] = material_manager->resources[i].resource;
+				assert(material_manager->resources[i].resource.base_color != -1);
+			}
+			vmaUnmapMemory(context->allocator, scene.material_buffer.allocation);
+
+			VkDescriptorBufferInfo buf_info{};
+			buf_info.buffer = scene.material_buffer.buffer;
+			buf_info.offset = 0;
+			buf_info.range = VK_WHOLE_SIZE;
+			buf_infos.push_back(buf_info);
+
+			VkWriteDescriptorSet buf_write{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+			buf_write.descriptorCount = 1;
+			buf_write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+			buf_write.dstArrayElement = 0;
+			buf_write.dstBinding = BINDLESS_UNIFORM_BINDING;
+			buf_write.dstSet = bindless_descriptor_set;
+			buf_write.pBufferInfo = &buf_infos.back();
+			writes.push_back(buf_write);
 		}
-		vmaUnmapMemory(context->allocator, scene.material_buffer.allocation);
-
-		VkDescriptorBufferInfo buf_info{};
-		buf_info.buffer = scene.material_buffer.buffer;
-		buf_info.offset = 0;
-		buf_info.range = VK_WHOLE_SIZE;
-
-		VkWriteDescriptorSet buf_write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-		buf_write.descriptorCount = 1;
-		buf_write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-		buf_write.dstArrayElement = 0;
-		buf_write.dstBinding = BINDLESS_UNIFORM_BINDING;
-		buf_write.dstSet = bindless_descriptor_set;
-		buf_write.pBufferInfo = &buf_info;
-		writes.push_back(buf_write);
-
 		vkUpdateDescriptorSets(context->device, (u32)writes.size(), writes.data(), 0, nullptr);
 	}
 
@@ -442,6 +435,8 @@ void Renderer::init_scene(ECS* ecs)
 	for (auto [mesh] : ecs->filter<Static_Mesh_Component>())
 	{
 		Mesh* m = mesh->manager->get_resource_with_id(mesh->mesh_id);
+		if (m->vertex_buffer.buffer != VK_NULL_HANDLE && m->index_buffer.buffer != VK_NULL_HANDLE)
+			continue;
 		create_vertex_buffer(m, cmd);
 		create_index_buffer(m, cmd);
 	}
@@ -453,6 +448,8 @@ void Renderer::init_scene(ECS* ecs)
 	for (auto [mesh] : ecs->filter<Static_Mesh_Component>())
 	{
 		Mesh* m = mesh->manager->get_resource_with_id(mesh->mesh_id);
+		if (m->blas.has_value())
+			continue;
 		create_bottom_level_acceleration_structure(m);
 		build_bottom_level_acceleration_structure(m, cmd);
 	}
@@ -465,6 +462,47 @@ void Renderer::init_scene(ECS* ecs)
 
 	vkEndCommandBuffer(cmd);
 	vk_command_buffer_single_submit(cmd);
+
+	{
+		// Update vertex / index buffers
+		size_t mesh_count = mesh_manager->resources.size();
+		std::vector<VkWriteDescriptorSet> writes(mesh_count * 2);
+		std::vector<VkDescriptorBufferInfo> buf_infos(mesh_count * 2);
+		for (size_t i = 0; i < mesh_count; ++i)
+		{
+			Mesh* m = &mesh_manager->resources[i].resource;
+
+			VkDescriptorBufferInfo vertex_buffer_info{}, index_buffer_info{};
+			vertex_buffer_info.buffer = m->vertex_buffer.buffer;
+			vertex_buffer_info.offset = 0;
+			vertex_buffer_info.range = VK_WHOLE_SIZE;
+			index_buffer_info.buffer = m->index_buffer.buffer;
+			index_buffer_info.offset = 0;
+			index_buffer_info.range = VK_WHOLE_SIZE;
+
+			VkWriteDescriptorSet vwrite{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+			VkWriteDescriptorSet iwrite{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+			vwrite.descriptorCount = 1;
+			vwrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+			vwrite.dstArrayElement = (u32)i;
+			vwrite.dstBinding = BINDLESS_VERTEX_BINDING;
+			vwrite.dstSet = bindless_descriptor_set;
+			buf_infos[i * 2] = vertex_buffer_info;
+			vwrite.pBufferInfo = &buf_infos[i * 2];
+
+			iwrite.descriptorCount = 1;
+			iwrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+			iwrite.dstArrayElement = (u32)i;
+			iwrite.dstBinding = BINDLESS_INDEX_BINDING;
+			iwrite.dstSet = bindless_descriptor_set;
+			buf_infos[i * 2 + 1] = index_buffer_info;
+			iwrite.pBufferInfo = &buf_infos[i * 2 + 1];
+
+			writes[i * 2 + 0] = vwrite;
+			writes[i * 2 + 1] = iwrite;
+		}
+		vkUpdateDescriptorSets(context->device, (u32)writes.size(), writes.data(), 0, nullptr);
+	}
 
 	vkQueueWaitIdle(context->graphics_queue);
 }
@@ -562,6 +600,8 @@ void Renderer::end_frame()
 	present_info.pWaitSemaphores = &context->frame_objects[frame_index].render_finished_sem;
 	vkQueuePresentKHR(context->graphics_queue, &present_info);
 
+	//vkQueueWaitIdle(context->graphics_queue);
+	vkDeviceWaitIdle(context->device);
 	frame_counter++;
 }
 
@@ -573,7 +613,7 @@ void Renderer::draw(ECS* ecs)
 
 	// Update descriptor set
 
-	VkWriteDescriptorSet writes[6] = { };
+	VkWriteDescriptorSet writes[4] = { };
 	for (int i = 0; i < std::size(writes); ++i)
 		writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 	writes[0].descriptorCount = 1;
@@ -595,27 +635,6 @@ void Renderer::draw(ECS* ecs)
 	writes[1].dstSet = 0;
 	writes[1].pNext = &acr;
 
-	Mesh* m = get_mesh(ecs, 0);
-	// Vertex buffer
-	VkDescriptorBufferInfo buffer_info[2] = {};
-	buffer_info[0].buffer = m->vertex_buffer.buffer;
-	buffer_info[0].offset = 0;
-	buffer_info[0].range = VK_WHOLE_SIZE;
-	buffer_info[1].buffer = m->index_buffer.buffer;
-	buffer_info[1].offset = 0;
-	buffer_info[1].range = VK_WHOLE_SIZE;
-	writes[2].descriptorCount = 1;
-	writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-	writes[2].dstBinding = 2;
-	writes[2].dstSet = 0;
-	writes[2].pBufferInfo = &buffer_info[0];
-
-	writes[3].descriptorCount = 1;
-	writes[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-	writes[3].dstBinding = 3;
-	writes[3].dstSet = 0;
-	writes[3].pBufferInfo = &buffer_info[1];
-
 	u32 frame_index = frame_counter % FRAMES_IN_FLIGHT;
 	VkDescriptorBufferInfo camera_buf;
 	u32 aligned_size = vkinit::aligned_size(
@@ -625,21 +644,21 @@ void Renderer::draw(ECS* ecs)
 	camera_buf.buffer = gpu_camera_data.buffer;
 	camera_buf.offset = aligned_size * frame_index;
 	camera_buf.range = aligned_size;
-	writes[4].descriptorCount = 1;
-	writes[4].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-	writes[4].dstBinding = 4;
-	writes[4].dstSet = 0;
-	writes[4].pBufferInfo = &camera_buf;
+	writes[2].descriptorCount = 1;
+	writes[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+	writes[2].dstBinding = 2;
+	writes[2].dstSet = 0;
+	writes[2].pBufferInfo = &camera_buf;
 
 	VkDescriptorImageInfo envmap_img{};
 	envmap_img.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 	envmap_img.imageView = environment_map.image_view;
 	envmap_img.sampler = bilinear_sampler;
-	writes[5].descriptorCount = 1;
-	writes[5].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-	writes[5].dstBinding = 5;
-	writes[5].dstSet = 0;
-	writes[5].pImageInfo = &envmap_img;
+	writes[3].descriptorCount = 1;
+	writes[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+	writes[3].dstBinding = 3;
+	writes[3].dstSet = 0;
+	writes[3].pImageInfo = &envmap_img;
 
 	vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, rt_pipeline.layout, 1, 1, &bindless_descriptor_set, 0, nullptr);
 	vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, rt_pipeline.layout, 0, (uint32_t)std::size(writes), writes);
@@ -918,7 +937,7 @@ void Renderer::build_bottom_level_acceleration_structure(Mesh* mesh, VkCommandBu
 	VkAccelerationStructureGeometryKHR geometry{};
 	VkAccelerationStructureBuildRangeInfoKHR range_info{};
 	mesh->get_acceleration_structure_build_info(&build_info, &geometry, &range_info);
-
+	
 	build_info.dstAccelerationStructure = mesh->blas.value().acceleration_structure;
 	build_info.scratchData.deviceAddress = mesh->blas.value().scratch_buffer_address;
 
@@ -936,17 +955,26 @@ void Renderer::create_top_level_acceleration_structure(ECS* ecs, VkCommandBuffer
 	std::vector<VkAccelerationStructureInstanceKHR> instances;
 
 	u32 index = 0;
-	VkAccelerationStructureInstanceKHR instance{};
 	for (auto [mesh, xform] : ecs->filter<Static_Mesh_Component, Transform_Component>())
 	{
 		Mesh* m = mesh->manager->get_resource_with_id(mesh->mesh_id);
 
-		VkAccelerationStructureInstanceKHR instance{};
-		instance.transform.matrix[0][0] = 
-			instance.transform.matrix[1][1] = 
-			instance.transform.matrix[2][2] = 1.f;
+		glm::mat4 rot = glm::toMat4(xform->rotation);
+		glm::mat4 trans = glm::translate(glm::mat4(1.0), glm::vec3(xform->pos));
+		glm::mat4 scale = glm::scale(glm::mat4(1.0), glm::vec3(xform->scale));
+		glm::mat4 transform = trans * rot * scale;
 
-		instance.instanceCustomIndex = index++;
+		VkAccelerationStructureInstanceKHR instance{};
+		for (int i = 0; i < 4; ++i)
+			for (int j = 0; j < 3; ++j)
+			{
+				instance.transform.matrix[j][i] = transform[i][j];
+			}
+
+		i32 mat_id = m->material_id;
+		i32 mesh_id = mesh->mesh_id;
+
+		instance.instanceCustomIndex = ((mat_id & 0x3FF) << 14) | (mesh_id & 0x3FFF);
 		instance.mask = 0xFF;
 		instance.instanceShaderBindingTableRecordOffset = 0;
 		instance.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
@@ -955,12 +983,12 @@ void Renderer::create_top_level_acceleration_structure(ECS* ecs, VkCommandBuffer
 		instances.push_back(instance);
 	}
 
-	size_t size = sizeof(instances[0]) * instances.size();
+	size_t size = sizeof(VkAccelerationStructureInstanceKHR) * instances.size();
 	GPU_Buffer instance_buf = context->create_gpu_buffer(
 		(u32)size,
 		VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR
 		| VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-		0
+		16
 	);
 
 	void* mapped;
@@ -976,7 +1004,7 @@ void Renderer::create_top_level_acceleration_structure(ECS* ecs, VkCommandBuffer
 
 	VkAccelerationStructureBuildRangeInfoKHR range_info{};
 	range_info.primitiveOffset = 0;
-	range_info.primitiveCount = 1;
+	range_info.primitiveCount = (u32)instances.size();
 	range_info.firstVertex = 0;
 	range_info.transformOffset = 0;
 
@@ -1059,8 +1087,6 @@ void Renderer::create_top_level_acceleration_structure(ECS* ecs, VkCommandBuffer
 		1, &build_info,
 		&p_range_info
 	);
-
-
 
 	Vk_Acceleration_Structure scene_tlas{};
 	scene_tlas.acceleration_structure = tlas;

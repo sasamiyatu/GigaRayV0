@@ -13,6 +13,6 @@ void main()
 {
     pay.barycentrics = bary;
     pay.prim_id = gl_PrimitiveID;
-    pay.instance_id = gl_InstanceID;
+    pay.instance_id = gl_InstanceCustomIndexEXT;
     pay.t = gl_HitTEXT;
 }

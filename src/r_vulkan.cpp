@@ -759,7 +759,7 @@ Vk_Allocated_Image Vk_Context::load_texture(const char* filepath)
 {
 	constexpr int required_n_comps = 4; // GIVE ME 4 CHANNELS!!!
 
-	stbi_set_flip_vertically_on_load(1);
+	stbi_set_flip_vertically_on_load(0);
 	int x, y, comp;
 	u8* data = stbi_load(filepath, &x, &y, &comp, required_n_comps);
 

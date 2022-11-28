@@ -33,32 +33,39 @@ int main(int argc, char** argv)
 	Resource_Manager<Material> material_manager;
 	Renderer renderer(&ctx, &platform, &mesh_manager, &texture_manager, &material_manager);
 
-	Mesh2 gltf = load_gltf_from_file("data/cube/Cube.gltf", &ctx, &texture_manager, &material_manager);
+	//Mesh2 gltf = load_gltf_from_file("data/cube/Cube.gltf", &ctx, &texture_manager, &material_manager);
+	Mesh2 gltf = load_gltf_from_file("data/sponza/Sponza.gltf", &ctx, &texture_manager, &material_manager);
 	std::vector<Mesh> meshes(gltf.meshes.size());
 	create_from_mesh2(&gltf, (u32)gltf.meshes.size(), meshes.data());
 
 	//int32_t mesh_id = mesh_manager.load_from_disk("data/stanford-bunny.obj");
 	//int32_t mesh_id = mesh_manager.load_from_disk("data/sponza.obj"); 
-	i32 mesh_id = mesh_manager.register_resource(meshes[0], "cube");
+	//i32 mesh_id = mesh_manager.register_resource(meshes[30], "cube");
 	ECS ecs{};
 	Transform_Component c{};
+	c.pos = glm::vec3(0.0, 2.2, 0.0);
 	Camera_Component cam{};
 	cam.proj = glm::perspective(glm::radians(75.f), (float)WINDOW_WIDTH/(float)WINDOW_HEIGHT, 0.1f, 1000.f);
 	cam.view = glm::lookAt(glm::vec3(0.f, 0.1f, 0.15), glm::vec3(0.f, 0.1f, 0.f), glm::vec3(0.f, 1.f, 0.f));
-	Static_Mesh_Component m{&mesh_manager, mesh_id};
+	//Static_Mesh_Component m{&mesh_manager, mesh_id};
 	Renderable_Component r{ &renderer, false};
 
 	Game_State game_state;
 	game_state.ecs = &ecs;
 
-	ecs.add_entity(c, m, r);
+	for (size_t i = 0; i < meshes.size(); ++i)
+	{
+		i32 mesh_id = mesh_manager.register_resource(meshes[i], std::to_string(i));
+		Static_Mesh_Component meshcomp = { &mesh_manager, mesh_id };
+		ecs.add_entity(Transform_Component(), meshcomp);
+	}
+	//ecs.add_entity(Transform_Component(), m, r);
+	//ecs.add_entity(c, m, r);
 	game_state.player_entity = ecs.add_entity(cam, Transform_Component(), Velocity_Component());
 	ecs.get_component<Transform_Component>(game_state.player_entity)->pos = glm::vec3(0.f, 0.1f, 0.15f);
 
 	Timer timer;
 
-	Static_Mesh_Component* mesh_comp = ecs.get_component<Static_Mesh_Component>(mesh_id);
-	Mesh* mesh = mesh_comp->manager->get_resource_with_id(mesh_comp->mesh_id);
 	renderer.init_scene(&ecs);
 
 	bool quit = false;

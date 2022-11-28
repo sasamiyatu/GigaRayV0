@@ -35,9 +35,12 @@ struct Resource_Manager
 	int register_resource(T& res, std::string path)
 	{
 		// Check if already exists
-		for (const auto& res : resources)
+		size_t res_count = resources.size();
+		for (size_t i = 0; i < res_count; ++i)
 		{
-			assert(res.filepath != path); // Already exists
+			assert(resources[i].filepath != path);
+			if (resources[i].filepath == path)
+				return (int)i;
 		}
 		Resource<T> new_res = { std::move(res), path };
 		resources.emplace_back(std::move(new_res));
@@ -60,23 +63,4 @@ struct Resource_Manager
 		if (id >= (int)next_id) return nullptr;
 		return &resources[id].resource;
 	}
-};
-
-template<typename T>
-struct Resource_Manager2 : Resource_Manager<T>
-{
-};
-
-template <>
-struct Resource_Manager2<Texture> : Resource_Manager<Texture>
-{
-	VmaAllocator allocator;
-
-	//~Resource_Manager2()
-	//{
-	//	for (auto& res : resources)
-	//	{
-
-	//	}
-	//}
 };
