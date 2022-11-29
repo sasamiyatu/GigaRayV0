@@ -92,6 +92,20 @@ Vertex get_interpolated_vertex(int custom_instance_id, int primitive_id, vec2 ba
     return v;
 }
 
+float get_specular_probability(Material_Properties material, vec3 V, vec3 shading_normal)
+{
+    float f0 = luminance(mix(DIELECTRIC_F0, material.base_color, material.metallic));
+    float diffuse_reflectance = luminance((1.0 - material.metallic) * material.base_color);
+    float fresnel = clamp(luminance(f_schlick(vec3(f0), vec3(1.0), max(0.f, dot(V, shading_normal)))), 0.0, 1.0);
+
+    float specular = fresnel;
+    float diffuse = diffuse_reflectance * (1.0 - fresnel);
+
+    float p = (specular / max(0.0001f, (specular + diffuse)));
+
+    return clamp(p, 0.1f, 0.9f);
+}
+
 vec3 L = normalize(vec3(0.0, 1.0, 0.2));
 
 void main()
@@ -179,19 +193,16 @@ void main()
             int material_id = int((pay.instance_id >> 14) & 0x3FF); 
             Vertex v = get_interpolated_vertex(geom_id, pay.prim_id, pay.barycentrics);
             vec3 normal = v.normal;
-            Material mat = material_array.materials[material_id];
-            vec3 albedo = mat.base_color_tex != -1 ? textureLod(textures[mat.base_color_tex], v.texcoord, 0).rgb : mat.base_color_factor.rgb;
-            vec2 metallic_roughness = mat.metallic_roughness_tex != -1 ? textureLod(textures[mat.metallic_roughness_tex], v.texcoord, 0).bg : vec2(mat.metallic_factor, mat.roughness_factor);
-            albedo = pow(albedo, vec3(2.2));
-            if (dot(v.geometric_normal, -rd) < 0.0) v.geometric_normal *= -1.0;
-            if (dot(v.geometric_normal, v.normal) < 0.0) v.normal *= -1.0;
+            vec3 albedo = v.material.base_color;
+            //if (dot(v.geometric_normal, -rd) < 0.0) v.geometric_normal *= -1.0;
+            //if (dot(v.geometric_normal, v.normal) < 0.0) v.normal *= -1.0;
             //    normal = -normal;
             vec3 p = ro + pay.t * rd;
-            ro = p + normal * 0.01;
-            float roughness = metallic_roughness.g;
-            float metallic = metallic_roughness.r;
+            ro = p + normal * 0.001;
+            float roughness = v.material.roughness;
+            float metallic = v.material.metallic;
             //Next event estimation
-            #if 0
+            #if 1
             {
                 traceRayEXT(
                     scene,
@@ -215,41 +226,41 @@ void main()
                     float ndoth = max(0.0, dot(normal, H));
                     float ndotl = max(0.0, dot(normal, L));
                     vec3 brdf = brdf_ggx_combined(ldoth, ndotv, ndotl, ndoth, metallic, roughness, albedo);
-                    radiance += throughput * brdf * ndotl * 10.f;
+                    //radiance += throughput * brdf * ndotl * 10.f; aaaaa
+                    radiance += throughput * eval_combined_brdf(normal, L, V, v.material) * 100.f;
                 }
             }
             #endif
-            float spec_probability = mix(0.5, 1.0, metallic);
+            float spec_probability = get_specular_probability(v.material, -rd, normal);
             vec4 rand = vec4(pcg4d(seed)) * ldexp(1.0, -32);
-            mat3 tbn = create_tangent_space(normal);
-            if (rand.x < spec_probability)
-            {
-                vec3 V = -rd;
-                vec3 Ve = V * tbn;
-                vec3 Li = sampleGGXVNDF(Ve, roughness, rand.yz);
-                Li = tbn * Li;
-                vec3 new_dir = reflect(rd, Li);
-                vec3 H = Li;
-                float ldoth = max(0.0, dot(new_dir, H));
-                float ndotv = abs(dot(normal, V));
-                float ndoth = max(0.0, dot(normal, H));
-                float ndotl = max(0.0, dot(normal, new_dir));
-                float vdoth = max(0.0, dot(V, H));
 
-                vec3 F = f_schlick(mix(vec3(0.04), albedo, metallic), vec3(1.0), ldoth);
-                float G2 = ggx_masking_shadowing(ndotv, vdoth, ndotl, ldoth, roughness);
-                float G1 = ggx_masking(ndotv, vdoth, roughness);
-                throughput *= (F * G2 / G1) / spec_probability;
-                rd = new_dir;
-                //vec3 brdf = brdf_ggx_combined(ldoth, ndotv, ndotl, ndoth, metallic, roughness, albedo);
-                //float pdf = pdf_cosine_hemisphere(ndotl);
+            int brdf_type;
+            if (v.material.metallic == 1.0f && v.material.roughness == 0.0f) {
+			    // Fast path for mirrors
+			    brdf_type = SPECULAR_TYPE;
             }
             else
             {
-                vec3 new_dir = tbn * random_cosine_hemisphere(rand.yz);
-                rd = new_dir;
-                throughput *= mix(albedo, vec3(0.0), metallic) / (1.0 - spec_probability);
+                if (rand.x < spec_probability)
+                {
+                    brdf_type = SPECULAR_TYPE;
+                    throughput /= spec_probability;
+                }
+                else
+                {
+                    brdf_type = DIFFUSE_TYPE;
+                    throughput /= (1.0 - spec_probability);
+                }
             }
+
+            vec3 brdf_weight;
+            vec3 new_dir;
+            if (!eval_indirect_combined_brdf(rand.yz, normal, v.geometric_normal, -rd, v.material, brdf_type, new_dir, brdf_weight))
+            {
+                break;
+            }
+            rd = new_dir;
+            throughput *= brdf_weight;
             if (any(isnan(throughput)))
                 break;
         }
@@ -257,7 +268,7 @@ void main()
         {
             // Miss
             radiance += throughput * sample_environment_map(rd, environment_map);
-            //radiance += throughput;
+            //radiance += throughput * vec3(1.0, 0.0, 1.0);a
             break;
         }
         if (any(isnan(throughput)) || any(isinf(throughput))) break;

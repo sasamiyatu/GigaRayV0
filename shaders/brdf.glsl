@@ -3,6 +3,7 @@
 
 #include "color.glsl"
 #include "material.glsl"
+#include "ggx.glsl"
 
 #define DIFFUSE_TYPE 1
 #define SPECULAR_TYPE 2
@@ -60,11 +61,26 @@ brdf_data prepare_brdf_data(vec3 view, vec3 shading_normal, vec3 light_direction
     return data;
 }
 
+float GGX_D(float alphaSquared, float NdotH) {
+	float b = ((alphaSquared - 1.0f) * NdotH * NdotH + 1.0f);
+	return alphaSquared / (M_PI * b * b);
+}
+
 // Smith G1 term (masking function) further optimized for GGX distribution (by substituting G_a into G1_GGX)
 float Smith_G1_GGX(float alpha, float NdotS, float alphaSquared, float NdotSSquared) {
 	return 2.0f / (sqrt(((alphaSquared * (1.0f - NdotSSquared)) + NdotSSquared) / NdotSSquared) + 1.0f);
 }
 
+// Smith G2 term (masking-shadowing function) for GGX distribution
+// Height correlated version - optimized by substituing G_Lambda for G_Lambda_GGX and dividing by (4 * NdotL * NdotV) to cancel out 
+// the terms in specular BRDF denominator
+// Source: "Moving Frostbite to Physically Based Rendering" by Lagarde & de Rousiers
+// Note that returned value is G2 / (4 * NdotL * NdotV) and therefore includes division by specular BRDF denominator
+float Smith_G2_Height_Correlated_GGX_Lagarde(float alphaSquared, float NdotL, float NdotV) {
+	float a = NdotV * sqrt(alphaSquared + NdotL * (NdotL - alphaSquared * NdotL));
+	float b = NdotL * sqrt(alphaSquared + NdotV * (NdotV - alphaSquared * NdotV));
+	return 0.5f / (a + b + 0.0001);
+}
 
 // A fraction G2/G1 where G2 is height correlated can be expressed using only G1 terms
 // Source: "Implementing a Simple Anisotropic Rough Diffuse Material with Stochastic Evaluation", Appendix A by Heitz & Dupuy
@@ -113,7 +129,7 @@ bool eval_indirect_combined_brdf(
     out vec3 new_ray_dir, out vec3 brdf_weight
 )
 {
-    if (dot(shading_normal, V_world) <= 0.f) return false;
+    //if (dot(shading_normal, V_world) <= 0.f) return false;
 
     vec4 q_rotation_to_z = get_rotation_to_z_axis(shading_normal);
     vec3 V = rotate_point(q_rotation_to_z, V_world); // Transform to tangent space
@@ -142,12 +158,40 @@ bool eval_indirect_combined_brdf(
     }
 
     if (luminance(brdf_weight) == 0.0f) return false;
+    //debugPrintfEXT("lum");
 
     new_ray_dir = normalize(rotate_point(invert_rotation(q_rotation_to_z), L));
 
     if (dot(geometric_normal, new_ray_dir) <= 0.0) return false;
 
     return true;
+}
+
+vec3 eval_specular(brdf_data data)
+{
+    float D = GGX_D(data.alpha_squared, data.ndoth);
+    float G2 = Smith_G2_Height_Correlated_GGX_Lagarde(data.alpha_squared, data.ndotl, data.ndotv);
+    float Vis = v_smith_ggx_correlated(data.ndotl, data.ndotv, data.alpha);
+    
+   // float D = d_ggx(data.ndoth, data.alpha);
+    return data.F * G2 * D * data.ndotl;
+    //return vec3(G2 * D * data.ndotl);
+    //return data.F * G2 * D * data.ndotl;
+}
+
+vec3 eval_diffuse(const brdf_data data) {
+    // Lambertian
+	return data.diffuse_reflectance * (ONE_OVER_PI * data.ndotl); 
+}
+
+vec3 eval_combined_brdf(vec3 N, vec3 L, vec3 V, Material_Properties mat)
+{
+    vec3 H = normalize(L + V);
+    const brdf_data data = prepare_brdf_data(V, N, L, H, mat);
+
+    vec3 specular = eval_specular(data);
+    vec3 diffuse = eval_diffuse(data);
+    return specular + (1.0 - data.F) * diffuse;
 }
 
 #endif
