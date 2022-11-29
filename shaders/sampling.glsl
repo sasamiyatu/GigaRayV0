@@ -1,11 +1,12 @@
 #ifndef SAMPLING_H
 #define SAMPLING_H
 
+#include "math.glsl"
 // Input Ve: view direction
 // Input alpha_x, alpha_y: roughness parameters
 // Input U1, U2: uniform random numbers
 // Output Ne: normal sampled with PDF D_Ve(Ne) = G1(Ve) * max(0, dot(Ve, Ne)) * D(Ne) / Ve.z
-vec3 sampleGGXVNDF(vec3 Ve, float alpha, float U1, float U2)
+vec3 sampleGGXVNDF(vec3 Ve, float alpha, vec2 u)
 {
     // Section 3.2: transforming the view direction to the hemisphere configuration
     vec3 Vh = normalize(vec3(alpha * Ve.x, alpha * Ve.y, Ve.z));
@@ -14,8 +15,8 @@ vec3 sampleGGXVNDF(vec3 Ve, float alpha, float U1, float U2)
     vec3 T1 = lensq > 0 ? vec3(-Vh.y, Vh.x, 0) * inversesqrt(lensq) : vec3(1,0,0);
     vec3 T2 = cross(Vh, T1);
     // Section 4.2: parameterization of the projected area
-    float r = sqrt(U1);
-    float phi = 2.0 * M_PI * U2;
+    float r = sqrt(u.x);
+    float phi = 2.0 * M_PI * u.y;
     float t1 = r * cos(phi);
     float t2 = r * sin(phi);
     float s = 0.5 * (1.0 + Vh.z);
@@ -27,15 +28,18 @@ vec3 sampleGGXVNDF(vec3 Ve, float alpha, float U1, float U2)
     return Ne;
 }
 
-vec3 random_cosine_hemisphere(vec3 n, float u0, float u1)
+vec3 random_cosine_hemisphere(vec2 u)
 {
+    float a = sqrt(u.x);
+    float b = 2.0 * M_PI * u.y;
+
     vec3 dir = vec3(
-        sqrt(u0) * cos(2.0 * M_PI * u1),
-        sqrt(u0) * sin(2.0 * M_PI * u1),
-        sqrt(1.0 - u0)
+        a * cos(b),
+        a * sin(b),
+        sqrt(1.0 - u.x)
     );
 
-    return create_tangent_space(n) * dir;
+    return dir;
 }
 
 float pdf_cosine_hemisphere(float ndotl)

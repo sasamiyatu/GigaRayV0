@@ -4,6 +4,7 @@
 
 
 #define M_PI 3.14159265359
+#define ONE_OVER_PI (1.0 / M_PI)
 // Frisvad
 mat3 create_tangent_space(vec3 n)
 {
@@ -24,10 +25,30 @@ mat3 create_tangent_space(vec3 n)
     return mat3(b1, b2, n);
 }
 
+// Quaternion stuff
 
+// Calculates rotation quaternion from input vector to the vector (0, 0, 1)
+// Input vector must be normalized!
+vec4 get_rotation_to_z_axis(vec3 v) {
 
+	// Handle special case when input is exact or near opposite of (0, 0, 1)
+	if (v.z < -0.99999f) return vec4(1.0f, 0.0f, 0.0f, 0.0f);
 
+	return normalize(vec4(v.y, -v.x, 0.0f, 1.0f + v.z));
+}
 
+// Optimized point rotation using quaternion
+// Source: https://gamedev.stackexchange.com/questions/28395/rotating-vector3-by-a-quaternion
+vec3 rotate_point(vec4 q, vec3 v) {
+	const vec3 q_axis = vec3(q);
+	return 2.0f * dot(q_axis, v) * q_axis + (q.w * q.w - dot(q_axis, q_axis)) * v + 2.0f * q.w * cross(q_axis, v);
+}
+
+// Returns the quaternion with inverted rotation
+vec4 invert_rotation(vec4 q)
+{
+	return vec4(-q.x, -q.y, -q.z, q.w);
+}
 
 
 #endif

@@ -12,6 +12,7 @@
 #include "material.glsl"
 #include "ggx.glsl"
 #include "sampling.glsl"
+#include "brdf.glsl"
 
 layout( push_constant ) uniform constants
 {
@@ -19,6 +20,7 @@ layout( push_constant ) uniform constants
 } control;
 
 layout(location = 0) rayPayloadEXT Ray_Payload pay;
+layout(location = 1) rayPayloadEXT Miss_Payload miss_payload;
 layout(binding = 0, set = 0, rgba32f) uniform image2D output_image;
 layout(binding = 1, set = 0) uniform accelerationStructureEXT scene;
 layout(binding = 3, set = 0) uniform sampler2D environment_map;
@@ -47,20 +49,23 @@ vec3 sample_environment_map(vec3 dir, sampler2D s)
     return texture(s, uv).rgb;
 }
 
-Vertex get_interpolated_vertex(int instance_id, int primitive_id, vec2 barycentrics)
+Vertex get_interpolated_vertex(int custom_instance_id, int primitive_id, vec2 barycentrics)
 {
-    uvec3 inds = index_buffer_array[instance_id].indices[primitive_id].index;
-    vec3 v0 = vertex_buffer_array[instance_id].verts[inds.x].pos;
-    vec3 v1 = vertex_buffer_array[instance_id].verts[inds.y].pos;
-    vec3 v2 = vertex_buffer_array[instance_id].verts[inds.z].pos;
+    int geom_id = int((pay.instance_id) & 0x3FFF);
+    int material_id = int((pay.instance_id >> 14) & 0x3FF);
 
-    vec3 n0 = vertex_buffer_array[instance_id].verts[inds.x].normal;
-    vec3 n1 = vertex_buffer_array[instance_id].verts[inds.y].normal;
-    vec3 n2 = vertex_buffer_array[instance_id].verts[inds.z].normal;
+    uvec3 inds = index_buffer_array[geom_id].indices[primitive_id].index;
+    vec3 v0 = vertex_buffer_array[geom_id].verts[inds.x].pos;
+    vec3 v1 = vertex_buffer_array[geom_id].verts[inds.y].pos;
+    vec3 v2 = vertex_buffer_array[geom_id].verts[inds.z].pos;
 
-    vec2 t0 = vertex_buffer_array[instance_id].verts[inds.x].texcoord;
-    vec2 t1 = vertex_buffer_array[instance_id].verts[inds.y].texcoord;
-    vec2 t2 = vertex_buffer_array[instance_id].verts[inds.z].texcoord;
+    vec3 n0 = vertex_buffer_array[geom_id].verts[inds.x].normal;
+    vec3 n1 = vertex_buffer_array[geom_id].verts[inds.y].normal;
+    vec3 n2 = vertex_buffer_array[geom_id].verts[inds.z].normal;
+
+    vec2 t0 = vertex_buffer_array[geom_id].verts[inds.x].texcoord;
+    vec2 t1 = vertex_buffer_array[geom_id].verts[inds.y].texcoord;
+    vec2 t2 = vertex_buffer_array[geom_id].verts[inds.z].texcoord;
 
     vec3 N = normalize((1.0 - barycentrics.x - barycentrics.y) * n0 + barycentrics.x * n1 + barycentrics.y * n2);
     vec3 P = (1.0 - barycentrics.x - barycentrics.y) * v0 + barycentrics.x * v1 + barycentrics.y * v2;
@@ -70,6 +75,19 @@ Vertex get_interpolated_vertex(int instance_id, int primitive_id, vec2 barycentr
     v.pos = P;
     v.normal = N;
     v.texcoord = TX;
+    v.geometric_normal = normalize(cross(v1-v0, v2-v0));
+
+    Material mat = material_array.materials[material_id];
+
+    Material_Properties matprop;
+    vec3 albedo = mat.base_color_tex != -1 ? textureLod(textures[mat.base_color_tex], v.texcoord, 0).rgb : mat.base_color_factor.rgb;
+    albedo = pow(albedo, vec3(2.2));
+
+    vec2 metallic_roughness = mat.metallic_roughness_tex != -1 ? textureLod(textures[mat.metallic_roughness_tex], v.texcoord, 0).bg : vec2(mat.metallic_factor, mat.roughness_factor);
+
+    v.material.base_color = albedo;
+    v.material.metallic = metallic_roughness.x;
+    v.material.roughness = metallic_roughness.y;
 
     return v;
 }
@@ -79,6 +97,7 @@ vec3 L = normalize(vec3(0.0, 1.0, 0.2));
 void main()
 {
     pay.instance_id = -1;
+    pay.prim_id = -1;
     uvec4 seed = uvec4( gl_LaunchIDEXT.xy, control.frames_accumulated, 1);
     vec2 pixel = vec2(gl_LaunchIDEXT.xy);
     vec2 offset = vec2(pcg4d(seed)) * ldexp(1.0, -32);
@@ -98,40 +117,42 @@ void main()
         (uv.y * inv_view[1].xyz * tan_half_fov_y) -
         inv_view[2].xyz);
 
-    // vec3 c = sample_environment_map(rd, environment_map);
-    //         traceRayEXT(
-    //         scene,
-    //         gl_RayFlagsOpaqueEXT,
-    //         0xFF,
-    //         0,
-    //         0,
-    //         0,
-    //         ro,
-    //         0.0,
-    //         rd,
-    //         100000.0,
-    //         0
-    //     );
+#if 0
+    vec3 c = sample_environment_map(rd, environment_map);
+            traceRayEXT(
+            scene,
+            gl_RayFlagsOpaqueEXT,
+            0xFF,
+            0,
+            0,
+            0,
+            ro,
+            0.0,
+            rd,
+            100000.0,
+            0
+        );
     
-    // int geom_id = int((pay.instance_id) & 0x3FFF);
-    // int material_id = int((pay.instance_id >> 14) & 0x3FF);
-    // Vertex v = get_interpolated_vertex(geom_id, pay.prim_id, pay.barycentrics);
-    // Material mat = material_array.materials[material_id];
-    // if (gl_LaunchIDEXT.xy == ivec2(640, 360))
-    // {
-    //     debugPrintfEXT("id: %d, tex_id: %d", material_id, mat.base_color_tex);
-    // }
-    // vec2 texcoord = v.texcoord;
-    // vec3 albedo = mat.base_color_tex != -1 ? textureLod(textures[mat.base_color_tex], texcoord, 0).rgb : mat.base_color_factor.rgb;
-    // albedo = pow(albedo, vec3(2.2));
-    // vec3 mr = mat.metallic_roughness_tex != -1 ? textureLod(textures[mat.metallic_roughness_tex], v.texcoord, 0).rgb : vec3(0.0, mat.roughness_factor, mat.metallic_factor);
-    // if (pay.instance_id != -1)
-    //     c = vec3(1.0, 0.0, 1.0);
-    // if (mr.b > 0.2)
-    //     imageStore(output_image, ivec2(gl_LaunchIDEXT), vec4(1.0, 0.0, 1.0, 1.0));
-    // else
-    //     imageStore(output_image, ivec2(gl_LaunchIDEXT), vec4(albedo, 1.0));
-    // return;
+    int geom_id = int((pay.instance_id) & 0x3FFF);
+    int material_id = int((pay.instance_id >> 14) & 0x3FF);
+    Vertex v = get_interpolated_vertex(geom_id, pay.prim_id, pay.barycentrics);
+    Material mat = material_array.materials[material_id];
+    if (gl_LaunchIDEXT.xy == ivec2(640, 360))
+    {
+        debugPrintfEXT("id: %d, tex_id: %d", material_id, mat.base_color_tex);
+    }
+    vec2 texcoord = v.texcoord;
+    vec3 albedo = mat.base_color_tex != -1 ? textureLod(textures[mat.base_color_tex], texcoord, 0).rgb : mat.base_color_factor.rgb;
+    albedo = pow(albedo, vec3(2.2));
+    vec3 mr = mat.metallic_roughness_tex != -1 ? textureLod(textures[mat.metallic_roughness_tex], v.texcoord, 0).rgb : vec3(0.0, mat.roughness_factor, mat.metallic_factor);
+    if (pay.instance_id != -1)
+        c = vec3(1.0, 0.0, 1.0);
+    if (mr.b > 0.2)
+        imageStore(output_image, ivec2(gl_LaunchIDEXT), vec4(1.0, 0.0, 1.0, 1.0));
+    else
+        imageStore(output_image, ivec2(gl_LaunchIDEXT), vec4(albedo, 1.0));
+    return;
+#endif 
 
     // Path tracer loop
     vec3 radiance = vec3(0.0);
@@ -162,14 +183,15 @@ void main()
             vec3 albedo = mat.base_color_tex != -1 ? textureLod(textures[mat.base_color_tex], v.texcoord, 0).rgb : mat.base_color_factor.rgb;
             vec2 metallic_roughness = mat.metallic_roughness_tex != -1 ? textureLod(textures[mat.metallic_roughness_tex], v.texcoord, 0).bg : vec2(mat.metallic_factor, mat.roughness_factor);
             albedo = pow(albedo, vec3(2.2));
-            if (dot(normal, rd) > 0.0)
-                normal = -normal;
+            if (dot(v.geometric_normal, -rd) < 0.0) v.geometric_normal *= -1.0;
+            if (dot(v.geometric_normal, v.normal) < 0.0) v.normal *= -1.0;
+            //    normal = -normal;
             vec3 p = ro + pay.t * rd;
-            ro = p + normal * 0.001;
+            ro = p + normal * 0.01;
             float roughness = metallic_roughness.g;
             float metallic = metallic_roughness.r;
             //Next event estimation
-            #if 1
+            #if 0
             {
                 traceRayEXT(
                     scene,
@@ -197,14 +219,14 @@ void main()
                 }
             }
             #endif
-            float spec_probability = 0.5;
+            float spec_probability = mix(0.5, 1.0, metallic);
             vec4 rand = vec4(pcg4d(seed)) * ldexp(1.0, -32);
+            mat3 tbn = create_tangent_space(normal);
             if (rand.x < spec_probability)
             {
-                mat3 tbn = create_tangent_space(normal);
                 vec3 V = -rd;
                 vec3 Ve = V * tbn;
-                vec3 Li = sampleGGXVNDF(Ve, roughness, rand.y, rand.z);
+                vec3 Li = sampleGGXVNDF(Ve, roughness, rand.yz);
                 Li = tbn * Li;
                 vec3 new_dir = reflect(rd, Li);
                 vec3 H = Li;
@@ -224,7 +246,7 @@ void main()
             }
             else
             {
-                vec3 new_dir = random_cosine_hemisphere(normal, rand.y, rand.z);
+                vec3 new_dir = tbn * random_cosine_hemisphere(rand.yz);
                 rd = new_dir;
                 throughput *= mix(albedo, vec3(0.0), metallic) / (1.0 - spec_probability);
             }
@@ -235,6 +257,7 @@ void main()
         {
             // Miss
             radiance += throughput * sample_environment_map(rd, environment_map);
+            //radiance += throughput;
             break;
         }
         if (any(isnan(throughput)) || any(isinf(throughput))) break;

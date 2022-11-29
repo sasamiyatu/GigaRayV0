@@ -58,9 +58,9 @@ vec3 brdf_ggx_combined(float ldoth, float ndotv, float ndotl, float ndoth, float
     float D = d_ggx(ndoth, roughness);
     vec3 Fr = D * F * Vis;
 
-    vec3 Fd = albedo / M_PI * (1.0 - F);
-    //return Fd;
-    return Fr + mix(Fd, vec3(0.0), metallic);
+    vec3 Fd = mix(albedo, vec3(0.0), metallic) / M_PI * (1.0 - F);
+
+    return Fr + Fd;
 }
 
 #endif

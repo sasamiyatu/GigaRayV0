@@ -752,6 +752,8 @@ Vk_Allocated_Image Vk_Context::load_texture_hdri(const char* filepath)
 
 	vkQueueWaitIdle(graphics_queue);
 
+	stbi_image_free(data);
+
 	return img;
 }
 
@@ -829,6 +831,7 @@ Vk_Allocated_Image Vk_Context::load_texture(const char* filepath)
 
 	vkQueueWaitIdle(graphics_queue);
 
+	stbi_image_free(data);
 
 	return img;
 }

@@ -10,5 +10,4 @@ layout(location = 0) rayPayloadInEXT Ray_Payload pay;
 void main()
 {
     pay.prim_id = -1;
-    pay.t = -1.f;
 }

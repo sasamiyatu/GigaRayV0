@@ -1,6 +1,7 @@
 #ifndef MATERIAL_H
 #define MATERIAL_H
 
+// GPU material struct
 struct Material 
 {
     int base_color_tex;
@@ -12,7 +13,14 @@ struct Material
     float roughness_factor;
 };
 
-
+// Shading material info
+struct Material_Properties
+{
+    vec3 base_color;
+    float metallic;
+    vec3 emissive;
+    float roughness;
+};
 
 
 
