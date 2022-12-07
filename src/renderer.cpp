@@ -632,11 +632,7 @@ void Renderer::pre_frame()
 		scene.current_frame_camera.proj = scene.active_camera->get_projection_matrix(aspect_ratio, 0.01f, 1000.f);
 	}
 	scene.current_frame_camera.frame_index = glm::uvec4((u32)frame_counter);
-	void* camera_data;
-	vmaMapMemory(context->allocator, gpu_camera_data.staging_buffer.allocation, &camera_data);
-	u8* write_address = (u8*)camera_data;
-	memcpy(write_address, &scene.current_frame_camera, sizeof(GPU_Camera_Data));
-	vmaUnmapMemory(context->allocator, gpu_camera_data.staging_buffer.allocation);	
+	gpu_camera_data.update_staging_buffer(context->allocator, current_frame_index, &scene.current_frame_camera, sizeof(GPU_Camera_Data));
 }
 
 void Renderer::begin_frame()
@@ -669,7 +665,7 @@ void Renderer::begin_frame()
 	vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, query_pools[current_frame_index], 0);
 
 	// Update camera data
-	gpu_camera_data.upload(cmd);
+	gpu_camera_data.upload(cmd, current_frame_index);
 	
 	vkinit::memory_barrier2(
 		cmd,
@@ -772,9 +768,7 @@ void Renderer::end_frame()
 	char title[256];
 	sprintf(title, "cpu time: %.2f ms, gpu time: %.2f ms", (cpu_frame_end - cpu_frame_begin) * 1000.0, current_frame_gpu_time * 1e-6);
 	SDL_SetWindowTitle(platform->window.window, title);
-	//printf("total cpu frame time: %f\n", (cpu_frame_end - cpu_frame_begin));
 
-	//vkQueueWaitIdle(context->graphics_queue); // FIXME: Fix synchronization
 	frame_counter++;
 	current_frame_index = (current_frame_index + 1) % FRAMES_IN_FLIGHT;
 }
@@ -1228,12 +1222,8 @@ void Renderer::create_top_level_acceleration_structure(ECS* ecs, VkCommandBuffer
 		16
 	);
 
-	void* mapped;
-	vmaMapMemory(context->allocator, instance_buf.staging_buffer.allocation, &mapped);
-	memcpy(mapped, instances.data(), size);
-	vmaUnmapMemory(context->allocator, instance_buf.staging_buffer.allocation);
-
-	instance_buf.upload(cmd);
+	instance_buf.update_staging_buffer(context->allocator, current_frame_index, instances.data(), size);
+	instance_buf.upload(cmd, current_frame_index);
 
 	vkinit::memory_barrier(cmd,
 		VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,

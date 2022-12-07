@@ -656,7 +656,8 @@ GPU_Buffer Vk_Context::create_gpu_buffer(u32 size, VkBufferUsageFlags usage_flag
 
 	buffer.size = (size_t)size;
 	buffer.gpu_buffer = allocate_buffer(size, usage_flags | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_AUTO, 0, alignment);
-	buffer.staging_buffer = allocate_buffer(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_AUTO, VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT, alignment);
+	for (int i = 0; i < FRAMES_IN_FLIGHT; ++i)
+		buffer.staging_buffer[i] = allocate_buffer(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_AUTO, VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT, alignment);
 
 	return buffer;
 }
@@ -1096,14 +1097,22 @@ static bool check_extensions(const std::vector<const char*>& device_exts, const 
 	return true;
 }
 
-void GPU_Buffer::upload(VkCommandBuffer cmd)
+void GPU_Buffer::upload(VkCommandBuffer cmd, u32 frame_index)
 {
 	VkBufferCopy copy_region{};
 	copy_region.srcOffset = 0; // Optional
 	copy_region.dstOffset = 0; // Optional
 	copy_region.size = size;
 
-	vkCmdCopyBuffer(cmd, staging_buffer.buffer, gpu_buffer.buffer, 1, &copy_region);
+	vkCmdCopyBuffer(cmd, staging_buffer[frame_index].buffer, gpu_buffer.buffer, 1, &copy_region);
+}
+
+void GPU_Buffer::update_staging_buffer(VmaAllocator allocator, u32 frame_index, void* data, size_t data_size)
+{
+	void* mapped;
+	vmaMapMemory(allocator, staging_buffer[frame_index].allocation, &mapped);
+	memcpy(mapped, data, data_size);
+	vmaUnmapMemory(allocator, staging_buffer[frame_index].allocation);
 }
 
 void Garbage_Collector::push(std::function<void()> func, DESTROY_TIME timing)

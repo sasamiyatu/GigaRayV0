@@ -6,7 +6,7 @@
 #include "spirv-reflect/spirv_reflect.h"
 
 
-constexpr int FRAMES_IN_FLIGHT = 1;
+constexpr int FRAMES_IN_FLIGHT = 2;
 #ifdef _DEBUG
 constexpr bool USE_VALIDATION_LAYERS = true;
 #else
@@ -30,10 +30,11 @@ struct Vk_Allocated_Image
 struct GPU_Buffer
 {
 	Vk_Allocated_Buffer gpu_buffer;
-	Vk_Allocated_Buffer staging_buffer;
+	std::array<Vk_Allocated_Buffer, FRAMES_IN_FLIGHT> staging_buffer;
 	size_t size;
 
-	void upload(VkCommandBuffer cmd);
+	void upload(VkCommandBuffer cmd, u32 frame_index);
+	void update_staging_buffer(VmaAllocator allocator, u32 frame_index, void* data, size_t data_size);
 };
 
 struct Vk_Pipeline
