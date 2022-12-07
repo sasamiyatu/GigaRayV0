@@ -403,8 +403,7 @@ void Renderer::initialize()
 
 VkCommandBuffer Renderer::get_current_frame_command_buffer()
 {
-	uint32_t frame_index = get_frame_index();
-	return context->frame_objects[frame_index].cmd;
+	return context->frame_objects[current_frame_index].cmd;
 }
 
 void Renderer::create_descriptor_pools()
@@ -520,11 +519,14 @@ void Renderer::init_scene(ECS* ecs)
 		sizeof(Camera_Component), 
 		(u32)context->physical_device_properties.properties.limits.minUniformBufferOffsetAlignment
 	);
-	gpu_camera_data = context->allocate_buffer(aligned_size * FRAMES_IN_FLIGHT,
+	/*gpu_camera_data = context->allocate_buffer(aligned_size * FRAMES_IN_FLIGHT,
 		VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
 		VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-		VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-
+		VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);*/
+	gpu_camera_data = context->create_gpu_buffer(
+		aligned_size * FRAMES_IN_FLIGHT,
+		VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+		VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE);
 	VkCommandBuffer cmd = get_current_frame_command_buffer();
 	vk_begin_command_buffer(cmd);
 	for (auto [mesh] : ecs->filter<Static_Mesh_Component>())
@@ -602,10 +604,24 @@ void Renderer::init_scene(ECS* ecs)
 	vkQueueWaitIdle(context->graphics_queue);
 }
 
+void full_barrier(VkCommandBuffer cmd)
+{
+	VkMemoryBarrier2 barrier{ VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
+	barrier.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+	barrier.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+	barrier.srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+	barrier.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+
+	VkDependencyInfo dep_info{};
+	dep_info.memoryBarrierCount = 1;
+	dep_info.pMemoryBarriers = &barrier;
+	dep_info.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+
+	vkCmdPipelineBarrier2(cmd, &dep_info);
+}
+
 void Renderer::pre_frame()
 {
-	u32 frame_index = frame_counter % FRAMES_IN_FLIGHT;
-
 	// Update cameras
 	if (scene.active_camera->dirty)
 	{
@@ -615,48 +631,62 @@ void Renderer::pre_frame()
 		scene.current_frame_camera.view = scene.active_camera->get_view_matrix();
 		scene.current_frame_camera.proj = scene.active_camera->get_projection_matrix(aspect_ratio, 0.01f, 1000.f);
 	}
-
+	scene.current_frame_camera.frame_index = glm::uvec4((u32)frame_counter);
 	void* camera_data;
-	vmaMapMemory(context->allocator, gpu_camera_data.allocation, &camera_data);
-	u32 aligned_size = vkinit::aligned_size(sizeof(GPU_Camera_Data),
-		(u32)context->physical_device_properties.properties.limits.minUniformBufferOffsetAlignment
-	);
-	u8* write_address = (u8*)camera_data + aligned_size * frame_index;
+	vmaMapMemory(context->allocator, gpu_camera_data.staging_buffer.allocation, &camera_data);
+	u8* write_address = (u8*)camera_data;
 	memcpy(write_address, &scene.current_frame_camera, sizeof(GPU_Camera_Data));
-	vmaUnmapMemory(context->allocator, gpu_camera_data.allocation);
+	vmaUnmapMemory(context->allocator, gpu_camera_data.staging_buffer.allocation);	
 }
 
 void Renderer::begin_frame()
 {
 	cpu_frame_begin = timer->get_current_time();
 
-	uint32_t frame_index = get_frame_index();
-	vkWaitForFences(context->device, 1, &context->frame_objects[frame_index].fence, VK_TRUE, UINT64_MAX);
-	vkResetFences(context->device, 1, &context->frame_objects[frame_index].fence);
+	vkWaitForFences(context->device, 1, &context->frame_objects[current_frame_index].fence, VK_TRUE, UINT64_MAX);
+	double after_fence = timer->get_current_time();
+	//printf("fence wait time: %f\n", after_fence - cpu_frame_begin);
+	vkResetFences(context->device, 1, &context->frame_objects[current_frame_index].fence);
 	vkAcquireNextImageKHR(context->device, context->swapchain,
-		UINT64_MAX, context->frame_objects[frame_index].image_available_sem,
+		UINT64_MAX, context->frame_objects[current_frame_index].image_available_sem,
 		VK_NULL_HANDLE, &swapchain_image_index);
 
 	VkCommandBuffer cmd = get_current_frame_command_buffer();
 	VkImage next_image = context->swapchain_images[swapchain_image_index];
 
+
 	// Time from two frames ago
 	u64 query_results[2];
-	vkGetQueryPoolResults(context->device, query_pools[frame_index], 0, (u32)std::size(query_results), sizeof(query_results), query_results, sizeof(query_results[0]), VK_QUERY_RESULT_64_BIT);
+	vkGetQueryPoolResults(context->device, query_pools[current_frame_index], 0, (u32)std::size(query_results), sizeof(query_results), query_results, sizeof(query_results[0]), VK_QUERY_RESULT_64_BIT);
 	double frame_gpu_begin = double(query_results[0]) * context->physical_device_properties.properties.limits.timestampPeriod;
 	double frame_gpu_end = double(query_results[1]) * context->physical_device_properties.properties.limits.timestampPeriod;
 
 	current_frame_gpu_time = frame_gpu_end - frame_gpu_begin;
-
+	vkResetCommandBuffer(cmd, 0);
 	vk_begin_command_buffer(cmd);
 
-	vkCmdResetQueryPool(cmd, query_pools[frame_index], 0, 128);
-	vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, query_pools[frame_index], 0);
+	vkCmdResetQueryPool(cmd, query_pools[current_frame_index], 0, 128);
+	vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, query_pools[current_frame_index], 0);
+
+	// Update camera data
+	gpu_camera_data.upload(cmd);
+	
+	vkinit::memory_barrier2(
+		cmd,
+		VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT,
+		VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR
+	);
 
 	vk_transition_layout(cmd, next_image,
-		VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_GENERAL,
-		0, VK_ACCESS_SHADER_WRITE_BIT,
-		VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR
+		VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+		VK_ACCESS_HOST_READ_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+		VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR
+	);
+	
+	vk_transition_layout(cmd, final_output.image,
+		VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+		VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT, VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
+		VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT
 	);
 }
 
@@ -681,8 +711,6 @@ void Renderer::trace_primary_rays()
 
 void Renderer::end_frame()
 {
-	uint32_t frame_index = get_frame_index();
-
 	VkCommandBuffer cmd = get_current_frame_command_buffer();
 
 	VkImageBlit region{};
@@ -702,37 +730,41 @@ void Renderer::end_frame()
 	dst_layer.mipLevel = 0;
 	dst_layer.layerCount = 1;
 	region.dstSubresource = dst_layer;
-
+	vk_transition_layout(cmd, final_output.image,
+		VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+		VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
+		VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT
+	);
 	VkImage next_image = context->swapchain_images[swapchain_image_index];
 	vkCmdBlitImage(cmd, 
-		final_output.image, VK_IMAGE_LAYOUT_GENERAL, next_image, VK_IMAGE_LAYOUT_GENERAL, 1, &region, VK_FILTER_LINEAR);
+		final_output.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, next_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region, VK_FILTER_LINEAR);
 	vk_transition_layout(
 		cmd, next_image,
-		VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-		0, 0,
-		VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT
+		VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+		VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT | VK_ACCESS_HOST_WRITE_BIT,
+		VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT
 	);
-
-	vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, query_pools[frame_index], 1);
+	
+	vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, query_pools[current_frame_index], 1);
 
 	VkSubmitInfo submit{ VK_STRUCTURE_TYPE_SUBMIT_INFO };
 	submit.commandBufferCount = 1;
 	submit.pCommandBuffers = &cmd;
 	submit.signalSemaphoreCount = 1;
 	submit.waitSemaphoreCount = 1;
-	submit.pWaitSemaphores = &context->frame_objects[frame_index].image_available_sem;
-	submit.pSignalSemaphores = &context->frame_objects[frame_index].render_finished_sem;
+	submit.pWaitSemaphores = &context->frame_objects[current_frame_index].image_available_sem;
+	submit.pSignalSemaphores = &context->frame_objects[current_frame_index].render_finished_sem;
 
 	vkEndCommandBuffer(cmd);
 
-	vkQueueSubmit(context->graphics_queue, 1, &submit, context->frame_objects[frame_index].fence);
+	vkQueueSubmit(context->graphics_queue, 1, &submit, context->frame_objects[current_frame_index].fence);
 
 	VkPresentInfoKHR present_info{ VK_STRUCTURE_TYPE_PRESENT_INFO_KHR };
 	present_info.swapchainCount = 1;
 	present_info.pSwapchains = &context->swapchain;
 	present_info.pImageIndices = &swapchain_image_index;
 	present_info.waitSemaphoreCount = 1;
-	present_info.pWaitSemaphores = &context->frame_objects[frame_index].render_finished_sem;
+	present_info.pWaitSemaphores = &context->frame_objects[current_frame_index].render_finished_sem;
 	vkQueuePresentKHR(context->graphics_queue, &present_info);
 
 	cpu_frame_end = timer->get_current_time();
@@ -740,9 +772,11 @@ void Renderer::end_frame()
 	char title[256];
 	sprintf(title, "cpu time: %.2f ms, gpu time: %.2f ms", (cpu_frame_end - cpu_frame_begin) * 1000.0, current_frame_gpu_time * 1e-6);
 	SDL_SetWindowTitle(platform->window.window, title);
+	//printf("total cpu frame time: %f\n", (cpu_frame_end - cpu_frame_begin));
 
-	vkQueueWaitIdle(context->graphics_queue); // FIXME: Fix synchronization
+	//vkQueueWaitIdle(context->graphics_queue); // FIXME: Fix synchronization
 	frame_counter++;
+	current_frame_index = (current_frame_index + 1) % FRAMES_IN_FLIGHT;
 }
 
 void Renderer::draw()
@@ -762,7 +796,7 @@ void Renderer::draw()
 	{
 		Descriptor_Info(0, framebuffer.render_targets[0].image.image_view, VK_IMAGE_LAYOUT_GENERAL),
 		Descriptor_Info(scene.tlas.value().acceleration_structure),
-		Descriptor_Info(gpu_camera_data.buffer, aligned_size * frame_index, aligned_size),
+		Descriptor_Info(gpu_camera_data.gpu_buffer.buffer, 0, aligned_size),
 		Descriptor_Info(bilinear_sampler, environment_map.image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
 	};
 	vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, rt_pipeline.layout, 1, 1, &bindless_descriptor_set, 0, nullptr);
@@ -789,7 +823,8 @@ void Renderer::draw()
 	hit_region.size = 32;
 
 	VkStridedDeviceAddressRegionKHR callable_region{};
-
+	
+	//printf("Trace rays cmd at: %f\n", timer->get_current_time());
 	vkCmdTraceRaysKHR(
 		cmd,
 		&raygen_region,
@@ -798,7 +833,7 @@ void Renderer::draw()
 		&callable_region,
 		window_width, window_height, 1
 	);
-
+	
 	VkMemoryBarrier memory_barrier{ VK_STRUCTURE_TYPE_MEMORY_BARRIER };
 	memory_barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
 	memory_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
@@ -847,6 +882,7 @@ void Renderer::draw()
 	writes[1].dstSet = 0;
 	vkCmdPushConstants(cmd, compute_pp.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(p), &p);
 	vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, compute_pp.layout, 0, 2, &writes[0]);
+	//printf("compute dispatch at: %f\n", timer->get_current_time());
 	vkCmdDispatch(cmd, group_count.x, group_count.y, group_count.z);
 	vkCmdPipelineBarrier(cmd,
 		VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
@@ -898,9 +934,9 @@ void Renderer::vk_create_render_targets(VkCommandBuffer cmd)
 	Render_Target color_attachment;
 	color_attachment.format = VK_FORMAT_R32G32B32A32_SFLOAT;
 	color_attachment.image = context->allocate_image(
-		{ (uint32_t)w, (uint32_t)h, 1 }, 
-		color_attachment.format, 
-		VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT
+		{ (uint32_t)w, (uint32_t)h, 1 },
+		color_attachment.format,
+		VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT
 	);
 
 	final_output = context->allocate_image(
@@ -969,7 +1005,7 @@ void Renderer::vk_create_render_targets(VkCommandBuffer cmd)
 		VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
 
 	vk_transition_layout(cmd, final_output.image,
-		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
 		0, VK_ACCESS_SHADER_WRITE_BIT,
 		VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
 

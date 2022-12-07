@@ -3,9 +3,10 @@
 
 #include "test.glsl"
 
-layout(set = 0, binding = 2) uniform camera_buffer{
+layout(set = 0, binding = 2, scalar) uniform camera_buffer{
 	mat4 view;
 	mat4 proj;
+    uint frame_index;
 } camera_data;
 
 layout(binding = 1, set = 0) uniform accelerationStructureEXT scene;

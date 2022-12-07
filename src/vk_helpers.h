@@ -78,4 +78,20 @@ namespace vkinit
 	{
 		return (size + alignment - 1) & ~(alignment - 1);
 	}
+
+	inline void memory_barrier2(VkCommandBuffer cmd, 
+		VkAccessFlags2 src_access_flags, VkAccessFlags2 dst_access_flags,
+		VkPipelineStageFlags2 src_stage_flags, VkPipelineStageFlagBits2 dst_stage_flags)
+	{
+		VkMemoryBarrier2 memory_barrier{ VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
+		memory_barrier.srcAccessMask = src_access_flags;
+		memory_barrier.srcStageMask = src_stage_flags;
+		memory_barrier.dstAccessMask = dst_access_flags;
+		memory_barrier.dstStageMask = dst_stage_flags;
+
+		VkDependencyInfo dep_info{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+		dep_info.memoryBarrierCount = 1;
+		dep_info.pMemoryBarriers = &memory_barrier;
+		vkCmdPipelineBarrier2(cmd, &dep_info);
+	}
 }

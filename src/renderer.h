@@ -66,6 +66,7 @@ struct GPU_Camera_Data
 {
 	glm::mat4 view;
 	glm::mat4 proj;
+	glm::uvec4 frame_index;
 };
 
 struct Scene
@@ -105,6 +106,7 @@ struct Renderer
 	Vk_Allocated_Image final_output; // This is what gets blitted into the swapchain at the end
 	uint64_t frame_counter = 0;
 	u32 frames_accumulated = 0;
+	u32 current_frame_index = 0;
 	uint32_t swapchain_image_index = 0;
 	VkDescriptorPool descriptor_pool;
 	VkDescriptorSetLayout desc_set_layout;
@@ -114,7 +116,7 @@ struct Renderer
 	Vk_Allocated_Buffer shader_binding_table;
 	Scene scene;
 	Vk_Pipeline compute_pp;
-	Vk_Allocated_Buffer gpu_camera_data;
+	GPU_Buffer gpu_camera_data;
 	Vk_Allocated_Image environment_map;
 	VkSampler bilinear_sampler;
 	VkQueryPool query_pools[FRAMES_IN_FLIGHT];
@@ -139,7 +141,6 @@ struct Renderer
 
 	void initialize();
 
-	uint32_t get_frame_index() { return frame_counter % FRAMES_IN_FLIGHT; }
 	VkCommandBuffer get_current_frame_command_buffer();
 	void create_descriptor_pools();
 	void vk_create_descriptor_set_layout();

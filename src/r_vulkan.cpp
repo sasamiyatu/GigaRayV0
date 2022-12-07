@@ -83,7 +83,7 @@ void Vk_Context::create_instance(Platform_Window* window)
 	{
 		VkDebugUtilsMessengerCreateInfoEXT ci{ VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT };
 		ci.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT;
-		ci.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT;// | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+		ci.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
 		ci.pfnUserCallback = debug_callback;
 		VK_CHECK(vkCreateDebugUtilsMessengerEXT(instance, &ci, nullptr, &debug_messenger));
 		g_garbage_collector->push([=]()
@@ -146,6 +146,10 @@ void Vk_Context::find_physical_device()
 	VkPhysicalDeviceFeatures2 features2{
 		VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2
 	};
+	VkPhysicalDeviceVulkan13Features features13
+	{
+		VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES
+	};
 	VkPhysicalDeviceVulkan12Features features12{
 		VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES
 	};
@@ -165,8 +169,8 @@ void Vk_Context::find_physical_device()
 	};
 
 
-	features2.pNext = &maintenance_feats;
-	maintenance_feats.pNext = &features12;
+	features2.pNext = &features13;
+	features13.pNext = &features12;
 	features12.pNext = &features11;
 	features11.pNext = &as_feats;
 	as_feats.pNext = &rt_pipeline_feats;
@@ -805,15 +809,15 @@ Vk_Allocated_Image Vk_Context::load_texture_hdri(const char* filepath)
 	regions.imageExtent = { (u32)x, (u32)y, 1 };
 
 	vkinit::vk_transition_layout(cmd, img.image,
-		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
 		0, VK_ACCESS_TRANSFER_WRITE_BIT,
 		VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT
 	);
 
-	vkCmdCopyBufferToImage(cmd, staging_buffer.buffer, img.image, VK_IMAGE_LAYOUT_GENERAL, 1, &regions);
+	vkCmdCopyBufferToImage(cmd, staging_buffer.buffer, img.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &regions);
 
 	vkinit::vk_transition_layout(cmd, img.image,
-		VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+		VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
 		0, VK_ACCESS_SHADER_READ_BIT,
 		VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
 		VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
@@ -1044,15 +1048,15 @@ Vk_Allocated_Image Vk_Context::load_texture(const char* filepath)
 	regions.imageExtent = { (u32)x, (u32)y, 1 };
 
 	vkinit::vk_transition_layout(cmd, img.image,
-		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
 		0, VK_ACCESS_TRANSFER_WRITE_BIT,
 		VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT
 	);
 
-	vkCmdCopyBufferToImage(cmd, staging_buffer.buffer, img.image, VK_IMAGE_LAYOUT_GENERAL, 1, &regions);
+	vkCmdCopyBufferToImage(cmd, staging_buffer.buffer, img.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &regions);
 
 	vkinit::vk_transition_layout(cmd, img.image,
-		VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+		VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
 		0, VK_ACCESS_SHADER_READ_BIT,
 		VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
 		VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
