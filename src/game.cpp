@@ -8,12 +8,12 @@ void Game_State::simulate(float dt)
 
 	glm::mat4 orientation = glm::toMat4(xform->rotation);
 
-	float sensitivity = 40.f;
+	float sensitivity = .1f;
 	float yaw_delta = (float)mouse_state.xrel * sensitivity;
 	float pitch_delta = (float)mouse_state.yrel * sensitivity;
 
-	player_state.yaw += yaw_delta * dt;
-	player_state.pitch += pitch_delta * dt;
+	player_state.yaw += yaw_delta;
+	player_state.pitch += pitch_delta;
 
 	mouse_state.xrel = 0;
 	mouse_state.yrel = 0;

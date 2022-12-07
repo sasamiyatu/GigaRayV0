@@ -5,6 +5,12 @@
 
 #define M_PI 3.14159265359
 #define ONE_OVER_PI (1.0 / M_PI)
+
+struct Ray
+{
+    vec3 ro;
+    vec3 rd;
+};
 // Frisvad
 mat3 create_tangent_space(vec3 n)
 {
@@ -50,5 +56,27 @@ vec4 invert_rotation(vec4 q)
 	return vec4(-q.x, -q.y, -q.z, q.w);
 }
 
+Ray get_camera_ray(mat4 view, mat4 proj)
+{
+    vec2 pixel = vec2(gl_LaunchIDEXT.xy);
+    const vec2 resolution = vec2(gl_LaunchSizeEXT.xy);
+
+    vec2 uv = (((pixel + 0.5f) / resolution) * 2.f - 1.f);
+
+    mat4 inv_view = inverse(view);
+    vec3 ro = inv_view[3].xyz;
+    float aspect = camera_data.proj[1][1] / camera_data.proj[0][0];
+    float tan_half_fov_y = 1.f / camera_data.proj[1][1];
+    vec3 rd = normalize(
+        (uv.x * inv_view[0].xyz * tan_half_fov_y * aspect) - 
+        (uv.y * inv_view[1].xyz * tan_half_fov_y) -
+        inv_view[2].xyz);
+
+    Ray r;
+    r.ro = ro;
+    r.rd = rd;
+
+    return r;
+}
 
 #endif

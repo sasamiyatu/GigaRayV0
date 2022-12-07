@@ -16,7 +16,7 @@ struct Mesh
 	std::vector<uint32_t> indices;
 	i32 material_id = -1;
 
-	std::optional<Vk_Acceleration_Structure> blas;
+	std::optional<Acceleration_Structure> blas;
 	
 	Vk_Allocated_Buffer vertex_buffer;
 	Vk_Allocated_Buffer index_buffer;

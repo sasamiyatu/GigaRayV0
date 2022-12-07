@@ -15,3 +15,17 @@ uint32_t read_entire_file(const char* filepath, uint8_t** data)
 	CloseHandle(h);
 	return (uint32_t)bytes_read;
 }
+
+int count_set_bits(int n)
+{
+    // `count` stores the total bits set in `n`
+    int count = 0;
+
+    while (n)
+    {
+        n = n & (n - 1);    // clear the least significant bit set
+        count++;
+    }
+
+    return count;
+}

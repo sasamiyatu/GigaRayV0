@@ -10,4 +10,5 @@ struct Timer
 
 	Timer();
 	float update();
+	double get_current_time();
 };

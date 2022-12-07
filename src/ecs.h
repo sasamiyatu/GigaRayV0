@@ -39,10 +39,15 @@ struct Transform_Component
 
 struct Camera_Component
 {
-	glm::mat4 view;
-	glm::mat4 proj;
-	bool dirty = false;
+	glm::vec3 origin;
+	float fov;
+	glm::vec3 forward;
+	bool dirty = true;
+	glm::vec3 up;
+
 	void set_transform(Transform_Component* xform);
+	glm::mat4 get_projection_matrix(float aspect_ratio, float znear, float zfar);
+	glm::mat4 get_view_matrix();
 };
 
 struct Static_Mesh_Component

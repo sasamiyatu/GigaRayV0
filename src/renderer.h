@@ -12,6 +12,8 @@
 #include "r_vulkan.h"
 #include "resource_manager.h"
 #include "material.h"
+#include "gbuffer.h"
+#include "timer.h"
 
 #define VK_CHECK(x)                                                 \
 	do                                                              \
@@ -27,7 +29,7 @@
 struct ECS;
 
 
-struct Vk_RenderTarget
+struct Render_Target
 {
 	Vk_Allocated_Image image;
 	VkFormat format;
@@ -35,13 +37,13 @@ struct Vk_RenderTarget
 	std::string name;
 };
 
-struct Vk_Framebuffer
+struct Framebuffer
 {
-	std::vector<Vk_RenderTarget> render_targets;
+	std::vector<Render_Target> render_targets;
 };
 
 
-struct Vk_Acceleration_Structure
+struct Acceleration_Structure
 {
 	enum Level
 	{
@@ -60,11 +62,17 @@ struct Vk_Acceleration_Structure
 	VkDeviceAddress tlas_instances_address;
 };
 
+struct GPU_Camera_Data
+{
+	glm::mat4 view;
+	glm::mat4 proj;
+};
 
 struct Scene
 {
-	std::optional<Vk_Acceleration_Structure> tlas;
+	std::optional<Acceleration_Structure> tlas;
 	struct Camera_Component* active_camera;
+	GPU_Camera_Data current_frame_camera;
 	Vk_Allocated_Buffer material_buffer;
 };
 
@@ -74,15 +82,26 @@ struct Texture
 
 };
 
+struct Gbuffer
+{
+	Render_Target normal;
+	Render_Target world_pos;
+	Render_Target albedo;
+	Render_Target depth;
+};
+
 struct Renderer
 {
 	i32 window_width, window_height;
+	float aspect_ratio;
 	Vk_Context* context;
 	Platform* platform;
 	bool initialized = false;
 
 	Vk_Pipeline rt_pipeline;
-	Vk_Framebuffer framebuffer;
+	Raytracing_Pipeline primary_ray_pipeline;
+
+	Framebuffer framebuffer;
 	Vk_Allocated_Image final_output; // This is what gets blitted into the swapchain at the end
 	uint64_t frame_counter = 0;
 	u32 frames_accumulated = 0;
@@ -97,15 +116,25 @@ struct Renderer
 	Vk_Allocated_Buffer gpu_camera_data;
 	Vk_Allocated_Image environment_map;
 	VkSampler bilinear_sampler;
+	VkQueryPool query_pools[FRAMES_IN_FLIGHT];
+
+	double current_frame_gpu_time;
+	double cpu_frame_begin;
+	double cpu_frame_end;
 
 	Resource_Manager<Mesh>* mesh_manager;
 	Resource_Manager<Texture>* texture_manager;
 	Resource_Manager<Material>* material_manager;
 
+	Timer* timer;
+
+	Gbuffer gbuffer;
+
 	Renderer(Vk_Context* context, Platform* platform, 
 		Resource_Manager<Mesh>* mesh_manager, 
 		Resource_Manager<Texture>* texture_manager,
-		Resource_Manager<Material>* material_manager);
+		Resource_Manager<Material>* material_manager,
+		Timer* timer);
 
 	void initialize();
 
@@ -119,6 +148,7 @@ struct Renderer
 
 	void vk_command_buffer_single_submit(VkCommandBuffer cmd);
 	Vk_Pipeline vk_create_rt_pipeline();
+	Raytracing_Pipeline create_gbuffer_rt_pipeline();
 
 	void create_vertex_buffer(Mesh* mesh, VkCommandBuffer cmd);
 	void create_index_buffer(Mesh* mesh, VkCommandBuffer cmd);
@@ -126,11 +156,13 @@ struct Renderer
 	void build_bottom_level_acceleration_structure(Mesh* mesh, VkCommandBuffer cmd);
 	void create_top_level_acceleration_structure(ECS* ecs, VkCommandBuffer cmd);
 
-
+	void do_frame(ECS* ecs);
 	void init_scene(ECS* ecs);
 	void pre_frame();
 	void begin_frame();
+	void render_gbuffer();
+	void trace_primary_rays();
 	void end_frame();
-	void draw(ECS* ecs);
+	void draw();
 };
 

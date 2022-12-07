@@ -9,6 +9,19 @@
 #include <functional>
 #include <array>
 #include <map>
+#define VK_NO_PROTOTYPES
+#include "vulkan/vulkan.h"
+
+#define VK_CHECK(x)                                                 \
+	do                                                              \
+	{                                                               \
+		VkResult err = x;                                           \
+		if (err)                                                    \
+		{                                                           \
+			printf("Detected Vulkan error: %d\n", err);			    \
+			abort();                                                \
+		}                                                           \
+	} while (0)
 
 #if _WIN32
 #define NOMINMAX

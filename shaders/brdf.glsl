@@ -41,7 +41,11 @@ brdf_data prepare_brdf_data(vec3 view, vec3 shading_normal, vec3 light_direction
     data.diffuse_reflectance = mat.base_color * (1.f - mat.metallic);
 
     data.roughness = mat.roughness;
+#ifdef SQUARE_ROUGHNESS
     data.alpha = mat.roughness * mat.roughness;
+#else
+    data.alpha = mat.roughness;
+#endif
     data.alpha_squared = data.alpha * data.alpha;
 
     data.V = view;
@@ -146,10 +150,10 @@ bool eval_indirect_combined_brdf(
 
         brdf_weight = data.diffuse_reflectance; // Lambertian, simplified
 
-        vec3 H_spec = sampleGGXVNDF(V, data.alpha, u); // Use a different random number
+        vec3 H_spec = sampleGGXVNDF(V, data.alpha, u); // FIXME: Use a different random number
 
         float vdoth = max(0.0001, dot(V, H_spec));
-        brdf_weight *= (vec3(1.0) - f_schlick(data.specular_f0, vec3(1.0), vdoth));
+        //brdf_weight *= (vec3(1.0) - f_schlick(data.specular_f0, vec3(1.0), vdoth));
     }
     else if (brdf_type == SPECULAR_TYPE)
     {
@@ -158,7 +162,6 @@ bool eval_indirect_combined_brdf(
     }
 
     if (luminance(brdf_weight) == 0.0f) return false;
-    //debugPrintfEXT("lum");
 
     new_ray_dir = normalize(rotate_point(invert_rotation(q_rotation_to_z), L));
 

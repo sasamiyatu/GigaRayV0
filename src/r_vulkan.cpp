@@ -3,6 +3,9 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb/stb_image.h"
 #include "vk_helpers.h"
+#include "shaders.h"
+
+#define VSYNC 0
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL debug_callback(
 	VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
@@ -170,6 +173,8 @@ void Vk_Context::find_physical_device()
 
 	vkGetPhysicalDeviceFeatures2(physical_device, &features2);
 
+	device_sbt_alignment = rt_pipeline_props.shaderGroupBaseAlignment;
+	device_shader_group_handle_size = rt_pipeline_props.shaderGroupHandleSize;
 
 	VkDevice dev;
 
@@ -298,6 +303,9 @@ static VkSurfaceFormatKHR get_surface_format(const std::vector<VkSurfaceFormatKH
 
 static VkPresentModeKHR get_present_mode(const std::vector<VkPresentModeKHR>& present_modes)
 {
+#if VSYNC == 1
+	return VK_PRESENT_MODE_FIFO_KHR;
+#else
 	for (const auto& m : present_modes)
 	{
 		if (m == VK_PRESENT_MODE_MAILBOX_KHR)
@@ -305,6 +313,7 @@ static VkPresentModeKHR get_present_mode(const std::vector<VkPresentModeKHR>& pr
 	}
 
 	return VK_PRESENT_MODE_FIFO_KHR;
+#endif
 }
 
 void Vk_Context::create_swapchain(Platform* platform)
@@ -528,7 +537,73 @@ VkShaderModule Vk_Context::create_shader_module_from_file(const char* filepath)
 	VkShaderModule sm;
 	VK_CHECK(vkCreateShaderModule(device, &create_info, nullptr, &sm));
 
+	free(data);
+
 	return sm;
+}
+
+VkShaderModule Vk_Context::create_shader_module_from_bytes(u32* bytes, size_t size)
+{
+	VkShaderModuleCreateInfo create_info{ VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO };
+	create_info.codeSize = size;
+	create_info.pCode = bytes;
+
+	VkShaderModule sm;
+	VK_CHECK(vkCreateShaderModule(device, &create_info, nullptr, &sm));
+	return sm;
+}
+
+VkDescriptorUpdateTemplate Vk_Context::create_descriptor_update_template(Shader* shader, VkPipelineBindPoint bind_point, VkPipelineLayout pipeline_layout)
+{
+	VkDescriptorUpdateTemplate update_template;
+
+	// Find highest set bit
+	int n = shader->resource_mask;
+	int msb_pos = 0;
+	while (n >>= 1)
+		msb_pos++;
+
+	int count = msb_pos + 1;
+
+	std::vector<VkDescriptorUpdateTemplateEntry> entries(count);
+	
+	for (int i = 0; i < count; ++i)
+	{
+		if (shader->resource_mask & (1 << i))
+		{
+			entries[i].descriptorCount = 1;
+			entries[i].descriptorType = shader->descriptor_types[i];
+			entries[i].dstArrayElement = 0;
+			entries[i].dstBinding = i;
+		}
+		else
+		{
+			entries[i] = {};
+		}
+	}
+
+	VkDescriptorUpdateTemplateCreateInfo cinfo{ VK_STRUCTURE_TYPE_DESCRIPTOR_UPDATE_TEMPLATE_CREATE_INFO };
+	cinfo.descriptorUpdateEntryCount = count;
+	cinfo.pDescriptorUpdateEntries = entries.data();
+	cinfo.pipelineBindPoint = bind_point;
+	cinfo.pipelineLayout = pipeline_layout;
+	cinfo.templateType = VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_PUSH_DESCRIPTORS_KHR;
+	cinfo.set = 0;
+	vkCreateDescriptorUpdateTemplate(device, &cinfo, nullptr, &update_template);
+
+	return update_template;
+}
+
+VkQueryPool Vk_Context::create_query_pool()
+{
+	constexpr u32 query_count = 128;
+	VkQueryPool query_pool;
+	VkQueryPoolCreateInfo cinfo{ VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO };
+	cinfo.queryType = VK_QUERY_TYPE_TIMESTAMP;
+	cinfo.queryCount = query_count;
+	vkCreateQueryPool(device, &cinfo, nullptr, &query_pool);
+
+	return query_pool;
 }
 
 VkFence Vk_Context::create_fence()
@@ -592,6 +667,7 @@ void Vk_Context::free_buffer(Vk_Allocated_Buffer buffer)
 
 Vk_Pipeline Vk_Context::create_compute_pipeline(const char* shaderpath)
 {
+
 	u8* data;
 	u32 size = read_entire_file(shaderpath, &data);
 	VkShaderModule shader = create_shader_module_from_file(shaderpath);
@@ -755,6 +831,166 @@ Vk_Allocated_Image Vk_Context::load_texture_hdri(const char* filepath)
 	stbi_image_free(data);
 
 	return img;
+}
+
+Raytracing_Pipeline Vk_Context::create_raytracing_pipeline(
+	VkShaderModule rgen, VkShaderModule rmiss, VkShaderModule rchit,
+	VkDescriptorSetLayout* layouts, int num_layouts)
+{
+	constexpr int n_rt_shader_stages = 3;
+	constexpr int n_rt_shader_groups = 3;
+
+	constexpr int raygen_index = 0;
+	constexpr int miss_index = 1;
+	constexpr int closest_hit_index = 2;
+
+	constexpr int raygen_group_index = 0;
+	constexpr int miss_group_index = 1;
+	constexpr int hit_group_index = 2;
+
+	std::array<VkPipelineShaderStageCreateInfo, n_rt_shader_stages> pssci{ };
+
+	pssci[raygen_index].sType = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
+	pssci[raygen_index].module = rgen;
+	pssci[raygen_index].pName = "main";
+	pssci[raygen_index].stage = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+
+	pssci[miss_index].sType = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
+	pssci[miss_index].module = rmiss;
+	pssci[miss_index].pName = "main";
+	pssci[miss_index].stage = VK_SHADER_STAGE_MISS_BIT_KHR;
+
+	pssci[closest_hit_index].sType = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
+	pssci[closest_hit_index].module = rchit;
+	pssci[closest_hit_index].pName = "main";
+	pssci[closest_hit_index].stage = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+
+	std::array<VkRayTracingShaderGroupCreateInfoKHR, n_rt_shader_groups> rtsgci{};
+	rtsgci[raygen_group_index].sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
+	rtsgci[raygen_group_index].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+	rtsgci[raygen_group_index].generalShader = raygen_index;
+	rtsgci[raygen_group_index].closestHitShader = VK_SHADER_UNUSED_KHR;
+	rtsgci[raygen_group_index].anyHitShader = VK_SHADER_UNUSED_KHR;
+	rtsgci[raygen_group_index].intersectionShader = VK_SHADER_UNUSED_KHR;
+
+	rtsgci[miss_group_index] = rtsgci[raygen_group_index];
+	rtsgci[miss_group_index].sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
+	rtsgci[miss_group_index].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+	rtsgci[miss_group_index].generalShader = miss_index;
+	rtsgci[miss_group_index].closestHitShader = VK_SHADER_UNUSED_KHR;
+	rtsgci[miss_group_index].anyHitShader = VK_SHADER_UNUSED_KHR;
+	rtsgci[miss_group_index].intersectionShader = VK_SHADER_UNUSED_KHR;
+
+	rtsgci[hit_group_index].sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
+	rtsgci[hit_group_index].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
+	rtsgci[hit_group_index].generalShader = VK_SHADER_UNUSED_KHR;
+	rtsgci[hit_group_index].closestHitShader = closest_hit_index;
+	rtsgci[hit_group_index].anyHitShader = VK_SHADER_UNUSED_KHR;
+	rtsgci[hit_group_index].intersectionShader = VK_SHADER_UNUSED_KHR;
+
+	VkPipelineLayout pipeline_layout;
+	VkPipelineLayoutCreateInfo layout_create_info{ VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
+	layout_create_info.pSetLayouts = layouts;
+	layout_create_info.setLayoutCount = num_layouts;
+	VkPushConstantRange pc_range{};
+	pc_range.offset = 0;
+	pc_range.size = 128;
+	pc_range.stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+	layout_create_info.pPushConstantRanges = &pc_range;
+	layout_create_info.pushConstantRangeCount = 1;
+	vkCreatePipelineLayout(device, &layout_create_info, nullptr, &pipeline_layout);
+
+	VkRayTracingPipelineCreateInfoKHR rtpci{ VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR };
+	rtpci.stageCount = (uint32_t)pssci.size();
+	rtpci.pStages = pssci.data();
+	rtpci.groupCount = (uint32_t)rtsgci.size();
+	rtpci.pGroups = rtsgci.data();
+	rtpci.maxPipelineRayRecursionDepth = 1;
+	rtpci.layout = pipeline_layout;
+
+	VkPipeline rt_pipeline;
+	VK_CHECK(vkCreateRayTracingPipelinesKHR(
+		device,
+		VK_NULL_HANDLE,
+		VK_NULL_HANDLE,
+		1, &rtpci,
+		nullptr,
+		&rt_pipeline));
+
+	Vk_Pipeline ret{};
+
+	for (int i = 0; i < num_layouts; ++i)
+		ret.desc_sets[i] = layouts[i];
+	ret.layout = pipeline_layout;
+	ret.pipeline = rt_pipeline;
+
+
+	uint32_t group_count = (uint32_t)rtsgci.size();
+	uint32_t group_handle_size = device_shader_group_handle_size;
+	uint32_t shader_group_base_alignment = device_sbt_alignment;
+	uint32_t group_size_aligned = (group_handle_size + shader_group_base_alignment - 1) & ~(shader_group_base_alignment - 1);
+
+	uint32_t sbt_size = group_count * group_size_aligned;
+
+	std::vector<uint8_t> shader_handle_storage(sbt_size);
+	VK_CHECK(vkGetRayTracingShaderGroupHandlesKHR(
+		device,
+		rt_pipeline,
+		0,
+		group_count,
+		sbt_size,
+		shader_handle_storage.data()
+	));
+
+	Vk_Allocated_Buffer rt_sbt_buffer = allocate_buffer(sbt_size,
+		VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+		VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+		VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR,
+		VMA_MEMORY_USAGE_AUTO,
+		VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
+	);
+
+	void* mapped;
+	vmaMapMemory(allocator, rt_sbt_buffer.allocation, &mapped);
+	uint8_t* pdata = (uint8_t*)mapped;
+	for (uint32_t g = 0; g < group_count; ++g)
+	{
+		memcpy(pdata, shader_handle_storage.data() + g * group_handle_size,
+			group_handle_size);
+		pdata += group_size_aligned;
+	}
+	vmaUnmapMemory(allocator, rt_sbt_buffer.allocation);
+
+	Raytracing_Pipeline rt_pp;
+	rt_pp.pipeline = ret;
+
+	Shader_Binding_Table sbt{};
+	sbt.sbt_data = rt_sbt_buffer;
+
+	VkDeviceAddress base = get_buffer_device_address(rt_sbt_buffer);
+	VkStridedDeviceAddressRegionKHR raygen_region{};
+	raygen_region.deviceAddress = base + raygen_group_index * device_sbt_alignment;
+	raygen_region.stride = group_handle_size;
+	raygen_region.size = group_size_aligned;
+
+	VkStridedDeviceAddressRegionKHR miss_region{};
+	miss_region.deviceAddress = base + miss_group_index * device_sbt_alignment;
+	miss_region.stride = group_handle_size;
+	miss_region.size = group_size_aligned;
+
+	VkStridedDeviceAddressRegionKHR hit_region{};
+	hit_region.deviceAddress = base + hit_group_index * device_sbt_alignment;
+	hit_region.stride = group_handle_size;
+	hit_region.size = group_size_aligned;
+
+	sbt.raygen_region = raygen_region;
+	sbt.miss_region = miss_region;
+	sbt.chit_region = hit_region;
+	sbt.callable_region = {};
+
+	rt_pp.shader_binding_table = sbt;
+
+	return rt_pp;
 }
 
 Vk_Allocated_Image Vk_Context::load_texture(const char* filepath)

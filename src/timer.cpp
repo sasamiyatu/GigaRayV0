@@ -17,3 +17,8 @@ float Timer::update()
 	ticks = new_ticks;
 	return dt;
 }
+
+double Timer::get_current_time()
+{
+	return (double)SDL_GetPerformanceCounter() * inv_pfreq;
+}

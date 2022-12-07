@@ -19,6 +19,6 @@ void handle_mouse_event(SDL_Event event)
 {
 	mouse_state.x = event.motion.x;
 	mouse_state.y = event.motion.y;
-	mouse_state.xrel = event.motion.xrel;
-	mouse_state.yrel = event.motion.yrel;
+	mouse_state.xrel += event.motion.xrel;
+	mouse_state.yrel += event.motion.yrel;
 }

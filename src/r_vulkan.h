@@ -7,18 +7,12 @@
 
 
 constexpr int FRAMES_IN_FLIGHT = 2;
+#if DEBUG
 constexpr bool USE_VALIDATION_LAYERS = true;
+#else
+constexpr bool USE_VALIDATION_LAYERS = false;
+#endif
 
-#define VK_CHECK(x)                                                 \
-	do                                                              \
-	{                                                               \
-		VkResult err = x;                                           \
-		if (err)                                                    \
-		{                                                           \
-			printf("Detected Vulkan error: %d\n", err);			    \
-			abort();                                                \
-		}                                                           \
-	} while (0)
 
 struct Vk_Allocated_Buffer
 {
@@ -47,6 +41,22 @@ struct Vk_Pipeline
 	VkPipeline pipeline;
 	VkPipelineLayout layout;
 	std::array<VkDescriptorSetLayout, 4> desc_sets;
+};
+
+
+struct Shader_Binding_Table
+{
+	Vk_Allocated_Buffer sbt_data;
+	VkStridedDeviceAddressRegionKHR raygen_region;
+	VkStridedDeviceAddressRegionKHR miss_region;
+	VkStridedDeviceAddressRegionKHR chit_region;
+	VkStridedDeviceAddressRegionKHR callable_region;
+};
+
+struct Raytracing_Pipeline
+{
+	Vk_Pipeline pipeline;
+	Shader_Binding_Table shader_binding_table;
 };
 
 struct Garbage_Collector
@@ -106,6 +116,7 @@ struct Vk_Context
 	std::vector<VkImage> swapchain_images;
 	std::vector<VkImageView> swapchain_image_views;
 	uint32_t device_sbt_alignment; // Device shader binding table alignment requirement
+	uint32_t device_shader_group_handle_size;
 	VkQueue graphics_queue;
 	Async_Upload async_upload;
 	VkPhysicalDeviceProperties2 physical_device_properties;
@@ -122,6 +133,7 @@ struct Vk_Context
 	void create_command_pool();
 	void create_swapchain(Platform* platform);
 	void create_sync_objects();
+	VkQueryPool create_query_pool();
 	Vk_Allocated_Buffer allocate_buffer(uint32_t size,
 		VkBufferUsageFlags usage, VmaMemoryUsage memory_usage, VmaAllocationCreateFlags flags, u64 alignment = 0);
 	Vk_Allocated_Image allocate_image(VkExtent3D extent, VkFormat format, VkImageUsageFlags usage, VkImageTiling tiling = VK_IMAGE_TILING_OPTIMAL);
@@ -130,6 +142,8 @@ struct Vk_Context
 	Vk_Allocated_Buffer create_buffer(VkCommandBuffer cmd, size_t size, void* data, VkBufferUsageFlags usage);
 	VkDeviceAddress get_buffer_device_address(const Vk_Allocated_Buffer& buf);
 	VkShaderModule create_shader_module_from_file(const char* filepath);
+	VkShaderModule create_shader_module_from_bytes(u32* bytes, size_t size);
+	VkDescriptorUpdateTemplate Vk_Context::create_descriptor_update_template(struct Shader* shader, VkPipelineBindPoint bind_point, VkPipelineLayout pipeline_layout);
 	VkFence create_fence();
 	VkDeviceAddress get_acceleration_structure_device_address(VkAccelerationStructureKHR as);
 	VkSemaphore create_semaphore(bool timeline = false);
@@ -139,6 +153,9 @@ struct Vk_Context
 	Vk_Allocated_Image load_texture_hdri(const char* filepath);
 	Vk_Allocated_Image load_texture(const char* filepath);
 	Vk_Allocated_Image load_texture_async(const char* filepath, u64* timeline_semaphore_value);
+	Raytracing_Pipeline create_raytracing_pipeline(
+		VkShaderModule rgen, VkShaderModule rmiss, VkShaderModule rchit,
+		VkDescriptorSetLayout* layouts, int num_layouts);
 };
 
 
