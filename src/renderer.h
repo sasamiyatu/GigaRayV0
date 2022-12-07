@@ -109,7 +109,6 @@ struct Renderer
 	u32 current_frame_index = 0;
 	uint32_t swapchain_image_index = 0;
 	VkDescriptorPool descriptor_pool;
-	VkDescriptorSetLayout desc_set_layout;
 	VkDescriptorSetLayout bindless_set_layout;
 	VkDescriptorSet bindless_descriptor_set;
 	VkDescriptorUpdateTemplate descriptor_update_template;
@@ -143,7 +142,8 @@ struct Renderer
 
 	VkCommandBuffer get_current_frame_command_buffer();
 	void create_descriptor_pools();
-	void vk_create_descriptor_set_layout();
+	void create_bindless_descriptor_set_layout();
+	VkDescriptorSetLayout create_descriptor_set_layout(struct Shader* shader);
 	void vk_create_render_targets(VkCommandBuffer cmd);
 	void transition_swapchain_images(VkCommandBuffer cmd);
 	void create_samplers();

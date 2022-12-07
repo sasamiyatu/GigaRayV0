@@ -42,6 +42,7 @@ struct Vk_Pipeline
 	VkPipeline pipeline;
 	VkPipelineLayout layout;
 	std::array<VkDescriptorSetLayout, 4> desc_sets;
+	VkDescriptorUpdateTemplate update_template; // Push descriptor update template
 };
 
 
@@ -154,6 +155,7 @@ struct Vk_Context
 	Vk_Allocated_Image load_texture_hdri(const char* filepath);
 	Vk_Allocated_Image load_texture(const char* filepath);
 	Vk_Allocated_Image load_texture_async(const char* filepath, u64* timeline_semaphore_value);
+	VkDescriptorSetLayout create_descriptor_set_layout(struct Shader* shader);
 	Raytracing_Pipeline create_raytracing_pipeline(
 		VkShaderModule rgen, VkShaderModule rmiss, VkShaderModule rchit,
 		VkDescriptorSetLayout* layouts, int num_layouts);

@@ -20,41 +20,8 @@ static void vk_begin_command_buffer(VkCommandBuffer cmd);
 
 constexpr int MAX_BINDLESS_RESOURCES = 16536;
 // FIXME: We're gonna need more stuff than this 
-void Renderer::vk_create_descriptor_set_layout()
+void Renderer::create_bindless_descriptor_set_layout()
 {
-	std::array<VkDescriptorSetLayoutBinding, 4> bindings{};
-
-	// Render target
-	bindings[0].binding = 0;
-	bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-	bindings[0].descriptorCount = 1;
-	bindings[0].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-
-	// Acceleration structure
-	bindings[1].binding = 1;
-	bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-	bindings[1].descriptorCount = 1;
-	bindings[1].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-
-	// Camera data
-	bindings[2].binding = 2;
-	bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-	bindings[2].descriptorCount = 1;
-	bindings[2].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-
-	// Envmap
-	bindings[3].binding = 3;
-	bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-	bindings[3].descriptorCount = 1;
-	bindings[3].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-
-
-	VkDescriptorSetLayoutCreateInfo layout_info{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
-	layout_info.bindingCount = uint32_t(bindings.size());
-	layout_info.pBindings = bindings.data();
-	layout_info.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
-	VK_CHECK(vkCreateDescriptorSetLayout(context->device, &layout_info, nullptr, &desc_set_layout));
-
 	// Bindless stuff
 	std::array<VkDescriptorSetLayoutBinding, 4> bindless_bindings{};
 	bindless_bindings[0].binding = 0;
@@ -77,7 +44,7 @@ void Renderer::vk_create_descriptor_set_layout()
 	bindless_bindings[3].descriptorCount = 1;
 	bindless_bindings[3].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
 
-	layout_info = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
+	VkDescriptorSetLayoutCreateInfo layout_info = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
 	layout_info.bindingCount = uint32_t(bindless_bindings.size());
 	layout_info.pBindings = bindless_bindings.data();
 	layout_info.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
@@ -97,7 +64,6 @@ void Renderer::vk_create_descriptor_set_layout()
 
 	g_garbage_collector->push([=]()
 		{
-			vkDestroyDescriptorSetLayout(context->device, desc_set_layout, nullptr);
 			vkDestroyDescriptorSetLayout(context->device, bindless_set_layout, nullptr);
 		}, Garbage_Collector::SHUTDOWN);
 
@@ -111,6 +77,36 @@ void Renderer::vk_create_descriptor_set_layout()
 
 	VK_CHECK(vkAllocateDescriptorSets(context->device, &alloc_info, &bindless_descriptor_set));
 	// NOTE: No descriptor pools because we are using push descriptors for now!!
+}
+
+VkDescriptorSetLayout Renderer::create_descriptor_set_layout(Shader* shader)
+{
+	VkDescriptorSetLayoutCreateInfo cinfo{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
+	assert(shader->resource_mask != 0);
+	u32 binding_count = 0;
+	for (int n = shader->resource_mask; n != 0; n >>= 1)
+		binding_count++;
+
+	std::vector<VkDescriptorSetLayoutBinding> bindings(binding_count);
+
+	for (u32 i = 0; i < binding_count; ++i)
+	{
+		if ((shader->resource_mask >> i) & 1)
+		{
+			bindings[i].binding = i;
+			bindings[i].descriptorCount = 1;
+			bindings[i].descriptorType = shader->descriptor_types[i];
+			bindings[i].stageFlags = shader->shader_stage;
+		}
+	}
+
+	cinfo.bindingCount = binding_count;
+	cinfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
+	cinfo.pBindings = bindings.data();
+
+	VkDescriptorSetLayout layout;
+	vkCreateDescriptorSetLayout(context->device, &cinfo, nullptr, &layout);
+	return layout;
 }
 
 
@@ -173,9 +169,11 @@ Vk_Pipeline Renderer::vk_create_rt_pipeline()
 	rtsgci[hit_group_index].anyHitShader = VK_SHADER_UNUSED_KHR;
 	rtsgci[hit_group_index].intersectionShader = VK_SHADER_UNUSED_KHR;
 
+	VkDescriptorSetLayout push_desc_layout = create_descriptor_set_layout(&rgen_shader);
+
 	// Create pipeline layout
 	VkPipelineLayoutCreateInfo cinfo{ VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
-	VkDescriptorSetLayout layouts[] = { desc_set_layout, bindless_set_layout };
+	VkDescriptorSetLayout layouts[] = { push_desc_layout, bindless_set_layout };
 	cinfo.pSetLayouts = layouts;
 	cinfo.setLayoutCount = (u32)std::size(layouts);
 	VkPushConstantRange push_constant_range{};
@@ -210,6 +208,7 @@ Vk_Pipeline Renderer::vk_create_rt_pipeline()
 
 	g_garbage_collector->push([=]()
 		{
+			vkDestroyDescriptorSetLayout(context->device, push_desc_layout, nullptr);
 			vkDestroyPipeline(context->device, rt_pipeline, nullptr);
 		}, Garbage_Collector::SHUTDOWN);
 
@@ -380,7 +379,7 @@ Renderer::Renderer(Vk_Context* context, Platform* platform,
 void Renderer::initialize()
 {
 	create_descriptor_pools();
-	vk_create_descriptor_set_layout();
+	create_bindless_descriptor_set_layout();
 
 	rt_pipeline = vk_create_rt_pipeline();
 	primary_ray_pipeline = create_gbuffer_rt_pipeline();
@@ -786,16 +785,17 @@ void Renderer::draw()
 		(u32)context->physical_device_properties.properties.limits.minUniformBufferOffsetAlignment
 	);
 
-	Descriptor_Info descriptor_info[] =
 	{
-		Descriptor_Info(0, framebuffer.render_targets[0].image.image_view, VK_IMAGE_LAYOUT_GENERAL),
-		Descriptor_Info(scene.tlas.value().acceleration_structure),
-		Descriptor_Info(gpu_camera_data.gpu_buffer.buffer, 0, aligned_size),
-		Descriptor_Info(bilinear_sampler, environment_map.image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
-	};
+		Descriptor_Info descriptor_info[] =
+		{
+			Descriptor_Info(0, framebuffer.render_targets[0].image.image_view, VK_IMAGE_LAYOUT_GENERAL),
+			Descriptor_Info(scene.tlas.value().acceleration_structure),
+			Descriptor_Info(gpu_camera_data.gpu_buffer.buffer, 0, aligned_size),
+			Descriptor_Info(bilinear_sampler, environment_map.image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+		};
+		vkCmdPushDescriptorSetWithTemplateKHR(cmd, descriptor_update_template, rt_pipeline.layout, 0, descriptor_info);
+	}
 	vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, rt_pipeline.layout, 1, 1, &bindless_descriptor_set, 0, nullptr);
-	vkCmdPushDescriptorSetWithTemplateKHR(cmd, descriptor_update_template, rt_pipeline.layout, 0, descriptor_info);
-
 	vkCmdPushConstants(cmd, rt_pipeline.layout, VK_SHADER_STAGE_RAYGEN_BIT_KHR, 0, sizeof(frames_accumulated), &frames_accumulated);
 
 	// Trace rays
@@ -847,36 +847,16 @@ void Renderer::draw()
 	glm::uvec3 group_count = (size + (group_size - 1)) & ~(group_size - 1);
 	group_count /= group_size;
 	
+	{
+		Descriptor_Info descriptor_info[] = {
+			Descriptor_Info(0, framebuffer.render_targets[0].image.image_view,  VK_IMAGE_LAYOUT_GENERAL),
+			Descriptor_Info(0, final_output.image_view ,VK_IMAGE_LAYOUT_GENERAL)
+		};
+		vkCmdPushDescriptorSetWithTemplateKHR(cmd, compute_pp.update_template, compute_pp.layout, 0, descriptor_info);
+	}
+
 	glm::ivec2 p = glm::ivec2(size.x, size.y);
-
-
-	// TODO: Convert this to descriptor templates aswell
-	VkWriteDescriptorSet writes[2] = {};
-	for (int i = 0; i < std::size(writes); ++i)
-		writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-
-	writes[0].descriptorCount = 1;
-	writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-	writes[0].dstArrayElement = 0;
-	writes[0].dstBinding = 0;
-	VkDescriptorImageInfo img_info{};
-	img_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-	img_info.imageView = framebuffer.render_targets[0].image.image_view;
-	writes[0].pImageInfo = &img_info;
-	writes[0].dstSet = 0;
-
-	writes[1].descriptorCount = 1;
-	writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-	writes[1].dstArrayElement = 0;
-	writes[1].dstBinding = 1;
-	VkDescriptorImageInfo img_info2 = {};
-	img_info2.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-	img_info2.imageView = final_output.image_view;
-	writes[1].pImageInfo = &img_info2;
-	writes[1].dstSet = 0;
 	vkCmdPushConstants(cmd, compute_pp.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(p), &p);
-	vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, compute_pp.layout, 0, 2, &writes[0]);
-	//printf("compute dispatch at: %f\n", timer->get_current_time());
 	vkCmdDispatch(cmd, group_count.x, group_count.y, group_count.z);
 	vkCmdPipelineBarrier(cmd,
 		VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,

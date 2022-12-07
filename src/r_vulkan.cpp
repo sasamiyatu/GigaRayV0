@@ -672,22 +672,50 @@ void Vk_Context::free_buffer(Vk_Allocated_Buffer buffer)
 	vmaFreeMemory(allocator, buffer.allocation);
 }
 
+VkDescriptorSetLayout Vk_Context::create_descriptor_set_layout(Shader* shader)
+{
+	VkDescriptorSetLayoutCreateInfo cinfo{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
+	assert(shader->resource_mask != 0);
+	u32 binding_count = 0;
+	for (int n = shader->resource_mask; n != 0; n >>= 1)
+		binding_count++;
+
+	std::vector<VkDescriptorSetLayoutBinding> bindings(binding_count);
+
+	for (u32 i = 0; i < binding_count; ++i)
+	{
+		if ((shader->resource_mask >> i) & 1)
+		{
+			bindings[i].binding = i;
+			bindings[i].descriptorCount = 1;
+			bindings[i].descriptorType = shader->descriptor_types[i];
+			bindings[i].stageFlags = shader->shader_stage;
+		}
+	}
+
+	cinfo.bindingCount = binding_count;
+	cinfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
+	cinfo.pBindings = bindings.data();
+
+	VkDescriptorSetLayout layout;
+	vkCreateDescriptorSetLayout(device, &cinfo, nullptr, &layout);
+	return layout;
+}
+
 Vk_Pipeline Vk_Context::create_compute_pipeline(const char* shaderpath)
 {
-
-	u8* data;
-	u32 size = read_entire_file(shaderpath, &data);
-	VkShaderModule shader = create_shader_module_from_file(shaderpath);
-
+	Shader shader;
+	bool success = load_shader_from_file(&shader, device, shaderpath);
+	assert(success);
 
 	VkComputePipelineCreateInfo cinfo{ VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO };
 	
 	VkPipelineShaderStageCreateInfo shader_stage_cinfo{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
-	shader_stage_cinfo.module = shader;
+	shader_stage_cinfo.module = shader.shader;
 	shader_stage_cinfo.pName = "main";
 	shader_stage_cinfo.stage = VK_SHADER_STAGE_COMPUTE_BIT;
 
-	VkDescriptorSetLayout set_layout = create_layout_from_spirv(data, size);
+	VkDescriptorSetLayout set_layout = create_descriptor_set_layout(&shader);
 
 	VkPipelineLayoutCreateInfo layout_cinfo{ VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
 	layout_cinfo.pSetLayouts = &set_layout;
@@ -707,20 +735,21 @@ Vk_Pipeline Vk_Context::create_compute_pipeline(const char* shaderpath)
 	VkPipeline pipeline;
 	vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &cinfo, nullptr, &pipeline);
 
-	vkDestroyShaderModule(device, shader, nullptr);
+	Vk_Pipeline pp{};
+	pp.desc_sets = { set_layout };
+	pp.layout = pipeline_layout;
+	pp.pipeline = pipeline;
+	pp.update_template = create_descriptor_update_template(&shader, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_layout);
+
+	vkDestroyShaderModule(device, shader.shader, nullptr);
 	g_garbage_collector->push([=]()
 		{
 			vkDestroyPipeline(device, pipeline, nullptr);
 			vkDestroyPipelineLayout(device, pipeline_layout, nullptr);
 			vkDestroyDescriptorSetLayout(device, set_layout, nullptr);
+			vkDestroyDescriptorUpdateTemplate(device, pp.update_template, nullptr);
 		}, Garbage_Collector::SHUTDOWN);
 
-	Vk_Pipeline pp{};
-	pp.desc_sets = { set_layout };
-	pp.layout = pipeline_layout;
-	pp.pipeline = pipeline;
-	//cinfo.stage = shader_stage_cinfo;
-	//cinfo.layout
 	return pp;
 }
 
