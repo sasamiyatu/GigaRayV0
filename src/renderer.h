@@ -10,6 +10,10 @@
 #include <optional>
 #include "defines.h"
 #include "r_vulkan.h"
+#include "resource_manager.h"
+#include "material.h"
+#include "gbuffer.h"
+#include "timer.h"
 
 #define VK_CHECK(x)                                                 \
 	do                                                              \
@@ -22,14 +26,10 @@
 		}                                                           \
 	} while (0)
 
+struct ECS;
 
-struct Vk_Pipeline
-{
-	VkPipeline pipeline;
-	VkPipelineLayout layout;
-};
 
-struct Vk_RenderTarget
+struct Render_Target
 {
 	Vk_Allocated_Image image;
 	VkFormat format;
@@ -37,18 +37,13 @@ struct Vk_RenderTarget
 	std::string name;
 };
 
-struct Vk_Framebuffer
+struct Framebuffer
 {
-	std::vector<Vk_RenderTarget> render_targets;
+	std::vector<Render_Target> render_targets;
 };
 
-struct StagingBuffer
-{
-	Vk_Allocated_Buffer buffer;
-	VkCommandBuffer cmd;
-};
 
-struct Vk_Acceleration_Structure
+struct Acceleration_Structure
 {
 	enum Level
 	{
@@ -67,76 +62,110 @@ struct Vk_Acceleration_Structure
 	VkDeviceAddress tlas_instances_address;
 };
 
-struct Mesh
+struct GPU_Camera_Data
 {
-	struct Renderer* renderer;
-
-	std::vector<glm::vec3> vertices;
-	std::vector<uint32_t> indices;
-	std::optional<Vk_Acceleration_Structure> blas;
-	Vk_Allocated_Buffer vertex_buffer;
-	Vk_Allocated_Buffer index_buffer;
-	VkDeviceAddress vertex_buffer_address;
-	VkDeviceAddress index_buffer_address;
-
-	uint32_t get_vertex_buffer_size();
-	uint32_t get_index_buffer_size();
-	uint32_t get_vertex_count();
-	uint32_t get_vertex_size();
-	uint32_t get_primitive_count();
-
-	void create_vertex_buffer(struct Renderer* renderer);
-	void create_index_buffer(struct Renderer* renderer);
-
-	void build_bottom_level_acceleration_structure();
-};
-
-struct Instance
-{
-	glm::mat4 transform;
-	Mesh* mesh;
+	glm::mat4 view;
+	glm::mat4 proj;
+	glm::uvec4 frame_index;
 };
 
 struct Scene
 {
-	std::vector<Mesh> meshes;
-	std::vector<Instance> instances;
-	std::optional<Vk_Acceleration_Structure> tlas;
+	std::optional<Acceleration_Structure> tlas;
+	struct Camera_Component* active_camera;
+	GPU_Camera_Data current_frame_camera;
+	Vk_Allocated_Buffer material_buffer;
+};
+
+struct Texture
+{
+	Vk_Allocated_Image image;
+
+};
+
+struct Gbuffer
+{
+	Render_Target normal;
+	Render_Target world_pos;
+	Render_Target albedo;
+	Render_Target depth;
 };
 
 struct Renderer
 {
+	i32 window_width, window_height;
+	float aspect_ratio;
 	Vk_Context* context;
 	Platform* platform;
 	bool initialized = false;
 
 	Vk_Pipeline rt_pipeline;
-	Vk_Framebuffer framebuffer;
+	Raytracing_Pipeline primary_ray_pipeline;
+
+	Framebuffer framebuffer;
+	Vk_Allocated_Image final_output; // This is what gets blitted into the swapchain at the end
 	uint64_t frame_counter = 0;
+	u32 frames_accumulated = 0;
+	u32 current_frame_index = 0;
 	uint32_t swapchain_image_index = 0;
-	VkDescriptorSetLayout desc_set_layout;
+	VkDescriptorPool descriptor_pool;
+	VkDescriptorSetLayout bindless_set_layout;
+	VkDescriptorSet bindless_descriptor_set;
+	VkDescriptorUpdateTemplate descriptor_update_template;
 	Vk_Allocated_Buffer shader_binding_table;
 	Scene scene;
-	std::array<StagingBuffer, FRAMES_IN_FLIGHT> staging_buffers; //FIXME: Make gpu buffer 
-	Renderer(Vk_Context* context, Platform* platform);
+	Vk_Pipeline compute_pp;
+	GPU_Buffer gpu_camera_data;
+	Vk_Allocated_Image environment_map;
+	VkSampler bilinear_sampler;
+	VkQueryPool query_pools[FRAMES_IN_FLIGHT];
+
+	double current_frame_gpu_time;
+	double cpu_frame_begin;
+	double cpu_frame_end;
+
+	Resource_Manager<Mesh>* mesh_manager;
+	Resource_Manager<Texture>* texture_manager;
+	Resource_Manager<Material>* material_manager;
+
+	Timer* timer;
+
+	Gbuffer gbuffer;
+
+	Renderer(Vk_Context* context, Platform* platform, 
+		Resource_Manager<Mesh>* mesh_manager, 
+		Resource_Manager<Texture>* texture_manager,
+		Resource_Manager<Material>* material_manager,
+		Timer* timer);
 
 	void initialize();
 
-	uint32_t get_frame_index() { return frame_counter % FRAMES_IN_FLIGHT; }
 	VkCommandBuffer get_current_frame_command_buffer();
-	void vk_create_descriptor_set_layout();
+	void create_descriptor_pools();
+	void create_bindless_descriptor_set_layout();
+	VkDescriptorSetLayout create_descriptor_set_layout(struct Shader* shader);
 	void vk_create_render_targets(VkCommandBuffer cmd);
-	void vk_create_staging_buffers();
 	void transition_swapchain_images(VkCommandBuffer cmd);
+	void create_samplers();
 
 	void vk_command_buffer_single_submit(VkCommandBuffer cmd);
 	Vk_Pipeline vk_create_rt_pipeline();
-	void vk_upload_cpu_to_gpu(VkBuffer dst, void* data, uint32_t size);
-	Vk_Acceleration_Structure vk_create_acceleration_structure(Mesh* mesh, VkCommandBuffer cmd);
-	Vk_Acceleration_Structure vk_create_top_level_acceleration_structure(Mesh* mesh, VkCommandBuffer cmd);
+	Raytracing_Pipeline create_gbuffer_rt_pipeline();
 
+	void create_vertex_buffer(Mesh* mesh, VkCommandBuffer cmd);
+	void create_index_buffer(Mesh* mesh, VkCommandBuffer cmd);
+	void create_bottom_level_acceleration_structure(Mesh* mesh);
+	void build_bottom_level_acceleration_structure(Mesh* mesh, VkCommandBuffer cmd);
+	void create_top_level_acceleration_structure(ECS* ecs, VkCommandBuffer cmd);
+
+	void do_frame(ECS* ecs);
+	void init_scene(ECS* ecs);
+	void pre_frame();
 	void begin_frame();
+	void render_gbuffer();
+	void trace_primary_rays();
 	void end_frame();
-	void draw(struct ECS* ecs);
+	void draw();
+	void cleanup();
 };
 

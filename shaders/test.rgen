@@ -1,83 +1,241 @@
 #version 460
 #extension GL_EXT_debug_printf : enable
 #extension GL_EXT_ray_tracing : require
-#extension  GL_EXT_scalar_block_layout : require
+#extension GL_EXT_scalar_block_layout : require
 #extension GL_GOOGLE_include_directive : enable
+#extension GL_EXT_nonuniform_qualifier : require
+
+#define SQUARE_ROUGHNESS
+#define MAX_BOUNCES 4
 
 #include "test.glsl"
+#include "scene.glsl"
+#include "random.glsl"
+#include "math.glsl"
+#include "material.glsl"
+#include "ggx.glsl"
+#include "sampling.glsl"
+#include "brdf.glsl"
 
-struct Vertex_Data
+layout( push_constant ) uniform constants
 {
-    vec3 pos;
-};
-
-struct Index_Data
-{
-    uvec3 index;
-};
+    uint frames_accumulated;
+} control;
 
 layout(location = 0) rayPayloadEXT Ray_Payload pay;
+layout(location = 1) rayPayloadEXT Miss_Payload miss_payload;
 layout(binding = 0, set = 0, rgba32f) uniform image2D output_image;
-layout(binding = 1, set = 0) uniform accelerationStructureEXT scene;
-layout(binding = 2, set = 0, scalar) readonly buffer vertex_buffer_t
-{
-    Vertex_Data verts[];
-} vertex_buffer;
 
-layout(binding = 3, set = 0, scalar) readonly buffer index_buffer_t
+
+vec3 sample_environment_map(vec3 dir, sampler2D s)
 {
-    Index_Data indices[];
-} index_buffer;
+    // y = -cos(theta) -> theta = -arccos(y)
+    float theta = acos(-dir.y);
+    float phi = atan(dir.z, -dir.x) + M_PI;
+    vec2 uv = vec2(phi / (2.0 * M_PI), theta / M_PI);
+
+    return texture(s, uv).rgb;
+}
+
+
+// normal is geometric normal
+vec3 offset_ray(vec3 p, vec3 n)
+{
+    const float int_scale = 256.0f;
+    const float float_scale = 1.0f / 65536.0f;
+    const float origin = 1.0f / 32.0f;
+    ivec3 of_i = ivec3(int_scale * n);
+
+    vec3 p_i = vec3(
+        intBitsToFloat(floatBitsToInt(p.x) + ((p.x < 0.0) ? -of_i.x : of_i.x)),
+        intBitsToFloat(floatBitsToInt(p.y) + ((p.y < 0.0) ? -of_i.y : of_i.y)),
+        intBitsToFloat(floatBitsToInt(p.z) + ((p.z < 0.0) ? -of_i.z : of_i.z))
+    );
+
+    return vec3(
+        abs(p.x) < origin ? p.x + float_scale * n.x : p_i.x,
+        abs(p.y) < origin ? p.y + float_scale * n.y : p_i.y,
+        abs(p.z) < origin ? p.z + float_scale * n.z : p_i.z
+    );
+}
+
+float get_specular_probability(Material_Properties material, vec3 V, vec3 shading_normal)
+{
+    float f0 = luminance(mix(DIELECTRIC_F0, material.base_color, material.metallic));
+    float diffuse_reflectance = luminance((1.0 - material.metallic) * material.base_color);
+    float fresnel = clamp(luminance(f_schlick(vec3(f0), vec3(1.0), max(0.f, dot(V, shading_normal)))), 0.0, 1.0);
+
+    float specular = fresnel;
+    float diffuse = diffuse_reflectance * (1.0 - fresnel);
+
+    float p = (specular / max(0.0001f, (specular + diffuse)));
+
+    return clamp(p, 0.1f, 0.9f);
+}
+
+vec3 L = normalize(vec3(0.0, 1.0, 0.2));
 
 void main()
 {
-    pay.color = vec3(0.0);
+    pay.instance_id = -1;
+    pay.prim_id = -1;
+    uvec4 seed = uvec4( gl_LaunchIDEXT.xy, control.frames_accumulated, 1);
+    vec2 pixel = vec2(gl_LaunchIDEXT.xy);
+    vec2 offset = vec2(pcg4d(seed)) * ldexp(1.0, -32);
+    const vec2 resolution = vec2(gl_LaunchSizeEXT.xy);
+    if (control.frames_accumulated != 0)
+        pixel += mix(vec2(-0.5), vec2(0.5), offset);
 
-    const vec2 pixel_center = vec2(gl_LaunchIDEXT.xy) + vec2(0.5);
-    const float aspect = float(gl_LaunchSizeEXT.x) / float(gl_LaunchSizeEXT.y);
-    vec2 uv = pixel_center / vec2(gl_LaunchSizeEXT.xy);
-    uv.y = 1.0 - uv.y;
-    uv = uv * 2.0 - 1.0;
-    uv.x *= aspect;
+    vec2 uv = (((pixel + 0.5f) / resolution) * 2.f - 1.f);
 
-    vec3 ro = vec3(0.f, 0.1f, 0.15);
-    vec3 rd = normalize(vec3(uv, -1.0));
+    mat4 inv_view = inverse(camera_data.view);
+    vec3 ro = inv_view[3].xyz;
+    vec3 camera_pos = ro;
+    float aspect = camera_data.proj[1][1] / camera_data.proj[0][0];
+    float tan_half_fov_y = 1.f / camera_data.proj[1][1];
+    vec3 rd = normalize(
+        (uv.x * inv_view[0].xyz * tan_half_fov_y * aspect) - 
+        (uv.y * inv_view[1].xyz * tan_half_fov_y) -
+        inv_view[2].xyz);
 
-    traceRayEXT(
-        scene,
-        gl_RayFlagsOpaqueEXT,
-        0xFF,
-        0,
-        0,
-        0,
-        ro,
-        0.0,
-        rd,
-        1000.0,
-        0
-    );
-
-    vec3 out_color = pay.color;
-    vec3 normal = vec3(0.0);
-    if (pay.prim_id != -1)
+#if 0
+    vec3 c = sample_environment_map(rd, environment_map);
+            traceRayEXT(
+            scene,
+            gl_RayFlagsOpaqueEXT,
+            0xFF,
+            0,
+            0,
+            0,
+            ro,
+            0.0,
+            rd,
+            100000.0,
+            0
+        );
+    
+    int geom_id = int((pay.instance_id) & 0x3FFF);
+    int material_id = int((pay.instance_id >> 14) & 0x3FF);
+    Vertex v = get_interpolated_vertex(pay.instance_id, pay.prim_id, pay.barycentrics);
+    Material mat = material_array.materials[material_id];
+    if (gl_LaunchIDEXT.xy == ivec2(640, 360))
     {
-        uvec3 inds = index_buffer.indices[pay.prim_id].index;
-        vec3 v0 = vertex_buffer.verts[inds.x].pos;
-        vec3 v1 = vertex_buffer.verts[inds.y].pos;
-        vec3 v2 = vertex_buffer.verts[inds.z].pos;
-        normal = normalize(cross(v2 - v0, v1 - v0));
-        if (dot(normal, rd) > 0.0) normal = normal * -1.f;
-
-        vec3 L = normalize(vec3(1.0));
-        float cos_theata = max(0.0, dot(L, normal));
-        out_color = cos_theata * vec3(0.7, 0.2, 0.4);
-        //out_color = normal * 0.5 + 0.5;
+        debugPrintfEXT("id: %d, tex_id: %d", material_id, mat.base_color_tex);
     }
-    //if (pixel.xy == ivec2(0, 0))
-    //    debugPrintfEXT("test");
-    /*f (pixel_center.y < 50.0)
+    vec2 texcoord = v.texcoord;
+    vec3 albedo = mat.base_color_tex != -1 ? textureLod(textures[mat.base_color_tex], texcoord, 0).rgb : mat.base_color_factor.rgb;
+    albedo = pow(albedo, vec3(2.2));
+    vec3 mr = mat.metallic_roughness_tex != -1 ? textureLod(textures[mat.metallic_roughness_tex], v.texcoord, 0).rgb : vec3(0.0, mat.roughness_factor, mat.metallic_factor);
+    if (pay.instance_id != -1)
+        c = vec3(1.0, 0.0, 1.0);
+    if (mr.b > 0.2)
         imageStore(output_image, ivec2(gl_LaunchIDEXT), vec4(1.0, 0.0, 1.0, 1.0));
-    else*/
-    imageStore(output_image, ivec2(gl_LaunchIDEXT), vec4(out_color, 1.0));
+    else
+        imageStore(output_image, ivec2(gl_LaunchIDEXT), vec4(albedo, 1.0));
+    return;
+#endif 
 
+    // Path tracer loop
+    vec3 radiance = vec3(0.0);
+    vec3 throughput = vec3(1.0);
+    for (int i = 0; i < MAX_BOUNCES; ++i)
+    {
+        traceRayEXT(
+            scene,
+            gl_RayFlagsOpaqueEXT,
+            0xFF,
+            0,
+            0,
+            0,
+            ro,
+            0.0,
+            rd,
+            100000.0,
+            0
+        );
+        if (pay.prim_id != -1)
+        {
+            Vertex v = get_interpolated_vertex(pay.instance_id, pay.prim_id, pay.barycentrics);
+            vec3 normal = v.normal;
+            vec3 albedo = v.material.base_color;
+           // if (dot(v.geometric_normal, -rd) < 0.0) v.geometric_normal *= -1.0;
+            //if (dot(v.geometric_normal, v.normal) < 0.0) v.normal *= -1.0;
+
+            vec3 p = v.pos;
+            //ro = offset_ray(p, v.geometric_normal);
+            ro = p + v.geometric_normal * 0.001;
+            float roughness = v.material.roughness;
+            float metallic = v.material.metallic;
+            //Next event estimation
+            #if 1
+            {
+                traceRayEXT(
+                    scene,
+                    gl_RayFlagsOpaqueEXT | gl_RayFlagsTerminateOnFirstHitEXT,
+                    0xFF,
+                    0,
+                    0,
+                    0,
+                    ro,
+                    0.0,
+                    L,
+                    10000.f,
+                    0
+                );
+                if (pay.prim_id == -1)
+                {
+                    vec3 V = -rd;
+                    radiance += throughput * eval_combined_brdf(normal, L, V, v.material) * 10.f;
+                }
+            }
+            #endif
+            float spec_probability = get_specular_probability(v.material, -rd, normal);
+            vec4 rand = vec4(pcg4d(seed)) * ldexp(1.0, -32);
+            int brdf_type;
+            if (v.material.metallic == 1.0f && v.material.roughness == 0.0f) {
+			    // Fast path for mirrors
+			    brdf_type = SPECULAR_TYPE;
+            }
+            else
+            {
+                if (rand.x < spec_probability)
+                {
+                    brdf_type = SPECULAR_TYPE;
+                    throughput /= spec_probability;
+                }
+                else
+                {
+                    brdf_type = DIFFUSE_TYPE;
+                    throughput /= (1.0 - spec_probability);
+                }
+            }
+
+            vec3 brdf_weight;
+            vec3 new_dir;
+            if (!eval_indirect_combined_brdf(rand.yz, normal, v.geometric_normal, -rd, v.material, brdf_type, new_dir, brdf_weight))
+            {
+                break;
+            }
+            rd = new_dir;
+            throughput *= brdf_weight;
+            if (any(isnan(throughput)))
+                break;
+        }
+        else
+        {
+            // Miss 
+            radiance += throughput * sample_environment_map(rd, environment_map);
+            break;
+        }
+        if (any(isnan(throughput)) || any(isinf(throughput))) break;
+    }
+    vec3 out_color = radiance.rgb;
+    if (control.frames_accumulated != 0)
+    {
+        vec4 prev_color = imageLoad(output_image, ivec2(gl_LaunchIDEXT));
+        float total = control.frames_accumulated + 1.0;
+        out_color = mix(out_color.rgb, prev_color.rgb, float(control.frames_accumulated) / total);
+    }
+
+    imageStore(output_image, ivec2(gl_LaunchIDEXT), vec4(out_color, 1.0));
 }

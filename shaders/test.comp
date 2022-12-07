@@ -1,0 +1,28 @@
+#version 460
+
+#extension GL_EXT_debug_printf : enable
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(binding = 0, set = 0, rgba32f) uniform image2D input_image;
+layout(binding = 1, set = 0, rgba32f) uniform image2D output_image;
+
+layout( push_constant ) uniform constants
+{
+    ivec2 size;
+} control;
+
+void main()
+{
+    ivec3 p = ivec3(gl_GlobalInvocationID);
+    if (any(lessThan(p, ivec3(0))) || any(greaterThanEqual(p.xy, control.size)))
+        return;
+    
+    const float exposure = 1.0;
+    vec4 color = imageLoad(input_image, p.xy);
+    color.rgb = color.rgb / (color.rgb + 1.0);
+    color.rgb *= exposure;
+    vec3 gamma_corrected = pow(color.rgb, vec3(0.4545));
+    imageStore(output_image, p.xy, vec4(gamma_corrected.rgb, 1.0));
+    //imageStore(output_image, p.xy, vec4(1.0, 0.0, 1.0, 1.0));
+}

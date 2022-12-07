@@ -8,3 +8,6 @@
 	of bytes read. 
 */
 uint32_t read_entire_file(const char* filepath, uint8_t** data);
+
+// Function to count the total number of set bits in `n`
+int count_set_bits(int n);

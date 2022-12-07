@@ -1,0 +1,49 @@
+#version 460
+#extension GL_EXT_ray_tracing : require
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_nonuniform_qualifier : require
+
+#include "scene.glsl"
+#include "math.glsl"
+
+#define NORMAL_BINDING 0
+#define WORLD_POS_BINDING 4
+#define ALBEDO_BINDING 5
+#define DEPTH_BINDING 6
+
+layout(location = 0) rayPayloadEXT Ray_Payload pay;
+
+layout(binding = NORMAL_BINDING, set = 0, rgba32f) uniform image2D normal_output;
+layout(binding = WORLD_POS_BINDING, set = 0, rgba32f) uniform image2D world_pos_output;
+layout(binding = ALBEDO_BINDING, set = 0, rgba32f) uniform image2D albedo_output;
+layout(binding = DEPTH_BINDING, set = 0, rgba32f) uniform image2D depth_output;
+
+void main()
+{
+    Ray r = get_camera_ray(camera_data.view, camera_data.proj);
+    ivec2 p = ivec2(gl_LaunchIDEXT.xy);
+
+    traceRayEXT(
+        scene,
+        gl_RayFlagsOpaqueEXT,
+        0xFF,
+        0,
+        0,
+        0,
+        r.ro,
+        0.0,
+        r.rd,
+        100000.0,
+        0
+    );
+
+    if (pay.instance_id != -1)
+    {
+        Vertex v = get_interpolated_vertex(pay.instance_id, pay.prim_id, pay.barycentrics);
+        imageStore(normal_output, p, vec4(v.normal, 1.0));
+        imageStore(world_pos_output, p, vec4(v.pos, 1.0));
+        imageStore(albedo_output, p, vec4(v.material.base_color, 1.0));
+        imageStore(depth_output, p, vec4(pay.t, 0.0, 0.0, 1.0));
+    }
+}

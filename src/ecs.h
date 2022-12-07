@@ -9,12 +9,15 @@
 #include <tuple>
 #include <iostream>
 
-constexpr int ECS_MAX_COMPONENTS = 1024;
 
 #define ECS_COMPONENTS \
 	X(Transform_Component, transform_component) \
 	X(Static_Mesh_Component, static_mesh_component) \
-	X(Renderable_Component, renderable_component)
+	X(Renderable_Component, renderable_component) \
+	X(Camera_Component, camera_component) \
+	X(Velocity_Component, velocity_component)
+
+
 
 struct Renderable_Component
 {
@@ -22,11 +25,29 @@ struct Renderable_Component
 	bool render_ready;
 };
 
+struct Velocity_Component
+{
+	glm::vec3 velocity;
+};
+
 struct Transform_Component
 {
 	glm::quat rotation = glm::quat_identity<float, glm::packed_highp>();
 	glm::vec3 pos = glm::vec3(0.f);
 	float scale = 1.0;
+};
+
+struct Camera_Component
+{
+	glm::vec3 origin;
+	float fov;
+	glm::vec3 forward;
+	bool dirty = true;
+	glm::vec3 up;
+
+	void set_transform(Transform_Component* xform);
+	glm::mat4 get_projection_matrix(float aspect_ratio, float znear, float zfar);
+	glm::mat4 get_view_matrix();
 };
 
 struct Static_Mesh_Component
@@ -221,7 +242,7 @@ struct ECS
 				for (auto& c : *(std::get<0>(this->comps)))
 				{
 					bool found = true;
-					std::apply([&found, c](auto&&... args) {((found = found && args->get_component(c) != nullptr), ...); }, this->comps);
+					std::apply([&found, c](auto&&... args) {((found = (found && args->get_component(c) != nullptr)), ...); }, this->comps);
 					if (found)
 					{
 						i = c;
@@ -235,24 +256,13 @@ struct ECS
 		Filter_Iterator()
 		{
 		}
-		
-		template <class Tuple, size_t... Is>
-		constexpr auto get_comp_pointers_impl(Tuple t, u32 entity_id,
-			std::index_sequence<Is...>)
-		{
-			return std::make_tuple((std::get<Is>(t)->get_component(entity_id))...);
-		}
-
-		template <size_t N, class Tuple>
-		constexpr auto get_comp_ptr(Tuple t, u32 entity_id)
-		{
-			return get_comp_pointers_impl(t, entity_id, std::make_index_sequence<N>{});
-		}
 
 		value_type operator*()
 		{
-			constexpr std::size_t siz = std::tuple_size<std::tuple<ECS_Component_Entry<T>*...>>::value;
-			return get_comp_ptr<siz>(comps, current_idx);
+			return std::apply([&](auto&&... args)
+				{
+					return std::make_tuple(args->get_component(current_idx)...);
+				}, this->comps);
 		}
 
 		Filter_Iterator operator++()
@@ -262,7 +272,7 @@ struct ECS
 			do
 			{
 				idx++;
-				std::apply([&found, &idx](auto&&... args) {((found = found && args->get_component(idx) != nullptr), ...); }, this->comps);
+				std::apply([&found, &idx](auto&&... args) {((found = (found && args->get_component(idx) != nullptr)), ...); }, this->comps);
 			} while (!found && idx < max_idx);
 			current_idx = idx;
 			return *this;
@@ -311,8 +321,7 @@ struct ECS
 	template <typename ...T>
 	Filter_Helper<T...> filter()
 	{	
-		Filter_Helper<T...> helper = Filter_Helper<T...>(get_ptr<T>()...);
-		return helper;
+		return Filter_Helper<T...>(get_ptr<T>()...);
 	}
 
 	template<typename T>
