@@ -117,12 +117,10 @@ void Renderer::vk_create_descriptor_set_layout()
 // FIXME: Hardcoded shaders and hitgroups
 Vk_Pipeline Renderer::vk_create_rt_pipeline()
 {
-	VkShaderModule rgen_shader = context->create_shader_module_from_file("shaders/spirv/test.rgen.spv");
-	VkShaderModule rmiss_shader = context->create_shader_module_from_file("shaders/spirv/test.rmiss.spv");
-	VkShaderModule rchit_shader = context->create_shader_module_from_file("shaders/spirv/test.rchit.spv");
-
-	//Shader rgen_shader, rmiss_shader, rchit_shader;
-	//load_shader_from_file()
+	Shader rgen_shader, rmiss_shader, rchit_shader;
+	load_shader_from_file(&rgen_shader, context->device, "shaders/spirv/test.rgen.spv");
+	load_shader_from_file(&rmiss_shader, context->device, "shaders/spirv/test.rmiss.spv");
+	load_shader_from_file(&rchit_shader, context->device, "shaders/spirv/test.rchit.spv");
 
 	constexpr int n_rt_shader_stages = 3;
 	constexpr int n_rt_shader_groups = 3;
@@ -138,17 +136,17 @@ Vk_Pipeline Renderer::vk_create_rt_pipeline()
 	std::array<VkPipelineShaderStageCreateInfo, n_rt_shader_stages> pssci{ };
 
 	pssci[raygen_index].sType = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
-	pssci[raygen_index].module = rgen_shader;
+	pssci[raygen_index].module = rgen_shader.shader;
 	pssci[raygen_index].pName = "main";
 	pssci[raygen_index].stage = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
 
 	pssci[miss_index].sType = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
-	pssci[miss_index].module = rmiss_shader;
+	pssci[miss_index].module = rmiss_shader.shader;
 	pssci[miss_index].pName = "main";
 	pssci[miss_index].stage = VK_SHADER_STAGE_MISS_BIT_KHR;
 
 	pssci[closest_hit_index].sType = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
-	pssci[closest_hit_index].module = rchit_shader;
+	pssci[closest_hit_index].module = rchit_shader.shader;
 	pssci[closest_hit_index].pName = "main";
 	pssci[closest_hit_index].stage = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
 
@@ -259,10 +257,11 @@ Vk_Pipeline Renderer::vk_create_rt_pipeline()
 	shader_binding_table = rt_sbt_buffer;
 	context->device_sbt_alignment = group_size_aligned;
 
-	vkDestroyShaderModule(context->device, rgen_shader, nullptr);
-	vkDestroyShaderModule(context->device, rmiss_shader, nullptr);
-	vkDestroyShaderModule(context->device, rchit_shader, nullptr);
+	vkDestroyShaderModule(context->device, rgen_shader.shader, nullptr);
+	vkDestroyShaderModule(context->device, rmiss_shader.shader, nullptr);
+	vkDestroyShaderModule(context->device, rchit_shader.shader, nullptr);
 
+	descriptor_update_template = context->create_descriptor_update_template(&rgen_shader, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, pl.layout);
 
 	return pl;
 }
@@ -742,6 +741,7 @@ void Renderer::end_frame()
 	sprintf(title, "cpu time: %.2f ms, gpu time: %.2f ms", (cpu_frame_end - cpu_frame_begin) * 1000.0, current_frame_gpu_time * 1e-6);
 	SDL_SetWindowTitle(platform->window.window, title);
 
+	vkQueueWaitIdle(context->graphics_queue); // FIXME: Fix synchronization
 	frame_counter++;
 }
 
@@ -752,56 +752,21 @@ void Renderer::draw()
 	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, rt_pipeline.pipeline);
 
 	// Update descriptor set
-
-	VkWriteDescriptorSet writes[4] = { };
-	for (int i = 0; i < std::size(writes); ++i)
-		writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-	writes[0].descriptorCount = 1;
-	writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-	writes[0].dstArrayElement = 0;
-	writes[0].dstBinding = 0;
-	VkDescriptorImageInfo img_info{};
-	img_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-	img_info.imageView = framebuffer.render_targets[0].image.image_view;
-	writes[0].pImageInfo = &img_info;
-	writes[0].dstSet = 0;
-
-	VkWriteDescriptorSetAccelerationStructureKHR acr{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR };
-	acr.accelerationStructureCount = 1;
-	acr.pAccelerationStructures = &scene.tlas.value().acceleration_structure;
-	writes[1].descriptorCount = 1;
-	writes[1].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-	writes[1].dstBinding = 1;
-	writes[1].dstSet = 0;
-	writes[1].pNext = &acr;
-
 	u32 frame_index = frame_counter % FRAMES_IN_FLIGHT;
-	VkDescriptorBufferInfo camera_buf;
 	u32 aligned_size = vkinit::aligned_size(
 		sizeof(Camera_Component),
 		(u32)context->physical_device_properties.properties.limits.minUniformBufferOffsetAlignment
 	);
-	camera_buf.buffer = gpu_camera_data.buffer;
-	camera_buf.offset = aligned_size * frame_index;
-	camera_buf.range = aligned_size;
-	writes[2].descriptorCount = 1;
-	writes[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-	writes[2].dstBinding = 2;
-	writes[2].dstSet = 0;
-	writes[2].pBufferInfo = &camera_buf;
 
-	VkDescriptorImageInfo envmap_img{};
-	envmap_img.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-	envmap_img.imageView = environment_map.image_view;
-	envmap_img.sampler = bilinear_sampler;
-	writes[3].descriptorCount = 1;
-	writes[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-	writes[3].dstBinding = 3;
-	writes[3].dstSet = 0;
-	writes[3].pImageInfo = &envmap_img;
-
+	Descriptor_Info descriptor_info[] =
+	{
+		Descriptor_Info(0, framebuffer.render_targets[0].image.image_view, VK_IMAGE_LAYOUT_GENERAL),
+		Descriptor_Info(scene.tlas.value().acceleration_structure),
+		Descriptor_Info(gpu_camera_data.buffer, aligned_size * frame_index, aligned_size),
+		Descriptor_Info(bilinear_sampler, environment_map.image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+	};
 	vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, rt_pipeline.layout, 1, 1, &bindless_descriptor_set, 0, nullptr);
-	vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, rt_pipeline.layout, 0, (uint32_t)std::size(writes), writes);
+	vkCmdPushDescriptorSetWithTemplateKHR(cmd, descriptor_update_template, rt_pipeline.layout, 0, descriptor_info);
 
 	vkCmdPushConstants(cmd, rt_pipeline.layout, VK_SHADER_STAGE_RAYGEN_BIT_KHR, 0, sizeof(frames_accumulated), &frames_accumulated);
 
@@ -855,6 +820,22 @@ void Renderer::draw()
 	
 	glm::ivec2 p = glm::ivec2(size.x, size.y);
 
+
+	// TODO: Convert this to descriptor templates aswell
+	VkWriteDescriptorSet writes[2] = {};
+	for (int i = 0; i < std::size(writes); ++i)
+		writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+
+	writes[0].descriptorCount = 1;
+	writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+	writes[0].dstArrayElement = 0;
+	writes[0].dstBinding = 0;
+	VkDescriptorImageInfo img_info{};
+	img_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+	img_info.imageView = framebuffer.render_targets[0].image.image_view;
+	writes[0].pImageInfo = &img_info;
+	writes[0].dstSet = 0;
+
 	writes[1].descriptorCount = 1;
 	writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
 	writes[1].dstArrayElement = 0;
@@ -876,6 +857,13 @@ void Renderer::draw()
 		0, nullptr);
 
 	frames_accumulated++;
+}
+
+void Renderer::cleanup()
+{
+	for (int i = 0; i < FRAMES_IN_FLIGHT; ++i)
+		vkDestroyQueryPool(context->device, query_pools[i], nullptr);
+	vkDestroyDescriptorUpdateTemplate(context->device, descriptor_update_template, nullptr);
 }
 
 

@@ -9,12 +9,18 @@ struct Shader
 	u32 resource_mask; // Which resources are actually in use
 };
 
+struct Descriptor_Acceleration_Structure_Info
+{
+	VkAccelerationStructureKHR acceleration_structure;
+};
+
 struct Descriptor_Info
 {
 	union
 	{
 		VkDescriptorBufferInfo buffer_info;
 		VkDescriptorImageInfo image_info;
+		Descriptor_Acceleration_Structure_Info acceleration_structure_info;
 	};
 
 	Descriptor_Info()
@@ -40,6 +46,11 @@ struct Descriptor_Info
 		buffer_info.buffer = buffer;
 		buffer_info.offset = 0;
 		buffer_info.range = VK_WHOLE_SIZE;
+	}
+
+	Descriptor_Info(VkAccelerationStructureKHR acceleration_structure)
+	{
+		acceleration_structure_info.acceleration_structure = acceleration_structure;
 	}
 };
 

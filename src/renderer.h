@@ -110,6 +110,7 @@ struct Renderer
 	VkDescriptorSetLayout desc_set_layout;
 	VkDescriptorSetLayout bindless_set_layout;
 	VkDescriptorSet bindless_descriptor_set;
+	VkDescriptorUpdateTemplate descriptor_update_template;
 	Vk_Allocated_Buffer shader_binding_table;
 	Scene scene;
 	Vk_Pipeline compute_pp;
@@ -164,5 +165,6 @@ struct Renderer
 	void trace_primary_rays();
 	void end_frame();
 	void draw();
+	void cleanup();
 };
 

@@ -575,6 +575,8 @@ VkDescriptorUpdateTemplate Vk_Context::create_descriptor_update_template(Shader*
 			entries[i].descriptorType = shader->descriptor_types[i];
 			entries[i].dstArrayElement = 0;
 			entries[i].dstBinding = i;
+			entries[i].offset = sizeof(Descriptor_Info) * i;
+			entries[i].stride = sizeof(Descriptor_Info);
 		}
 		else
 		{

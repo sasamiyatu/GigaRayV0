@@ -7,7 +7,7 @@
 
 
 constexpr int FRAMES_IN_FLIGHT = 2;
-#if DEBUG
+#ifdef _DEBUG
 constexpr bool USE_VALIDATION_LAYERS = true;
 #else
 constexpr bool USE_VALIDATION_LAYERS = false;

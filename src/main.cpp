@@ -99,6 +99,8 @@ int main(int argc, char** argv)
 	}
 here:
 	vkDeviceWaitIdle(ctx.device);
+	renderer.cleanup();
 	g_garbage_collector->shutdown();
+
 	return 0;
 }
