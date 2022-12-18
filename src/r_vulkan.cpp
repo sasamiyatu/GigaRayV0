@@ -454,7 +454,7 @@ Vk_Allocated_Buffer Vk_Context::allocate_buffer(uint32_t size, VkBufferUsageFlag
 	return buffer;
 }
 
-Vk_Allocated_Image Vk_Context::allocate_image(VkExtent3D extent, VkFormat format, VkImageUsageFlags usage, VkImageTiling tiling)
+Vk_Allocated_Image Vk_Context::allocate_image(VkExtent3D extent, VkFormat format, VkImageUsageFlags usage, VkImageTiling tiling, int mip_levels)
 {
 	VkImageCreateInfo cinfo{ VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
 	cinfo.arrayLayers = 1;
@@ -462,7 +462,7 @@ Vk_Allocated_Image Vk_Context::allocate_image(VkExtent3D extent, VkFormat format
 	cinfo.format = format;
 	cinfo.imageType = extent.depth == 1 ? VK_IMAGE_TYPE_2D : VK_IMAGE_TYPE_3D;
 	cinfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-	cinfo.mipLevels = 1;
+	cinfo.mipLevels = mip_levels;
 	cinfo.samples = VK_SAMPLE_COUNT_1_BIT;
 	cinfo.usage = usage; //VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 	cinfo.tiling = tiling;
@@ -478,7 +478,7 @@ Vk_Allocated_Image Vk_Context::allocate_image(VkExtent3D extent, VkFormat format
 	view_info.image = img.image;
 	view_info.viewType = extent.depth == 1 ? VK_IMAGE_VIEW_TYPE_2D : VK_IMAGE_VIEW_TYPE_3D;
 	view_info.subresourceRange.baseMipLevel = 0;
-	view_info.subresourceRange.levelCount = 1;
+	view_info.subresourceRange.levelCount = mip_levels;
 	view_info.subresourceRange.baseArrayLayer = 0;
 	view_info.subresourceRange.layerCount = 1;
 	view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -722,7 +722,7 @@ Vk_Pipeline Vk_Context::create_compute_pipeline(const char* shaderpath)
 	layout_cinfo.setLayoutCount = 1;
 	VkPushConstantRange push_constants{};
 	push_constants.offset = 0;
-	push_constants.size = 16;
+	push_constants.size = 128;
 	push_constants.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 	layout_cinfo.pushConstantRangeCount = 1;
 	layout_cinfo.pPushConstantRanges = &push_constants;
@@ -791,7 +791,7 @@ VkDescriptorSetLayout Vk_Context::create_layout_from_spirv(u8* bytecode, u32 siz
 	return layout;
 }
 
-Vk_Allocated_Image Vk_Context::load_texture_hdri(const char* filepath)
+Vk_Allocated_Image Vk_Context::load_texture_hdri(const char* filepath, VkImageUsageFlags usage)
 {
 	constexpr int required_n_comps = 4;
 	stbi_set_flip_vertically_on_load(1);
@@ -802,7 +802,7 @@ Vk_Allocated_Image Vk_Context::load_texture_hdri(const char* filepath)
 	Vk_Allocated_Image img = allocate_image(
 		{ (u32)x, (u32)y, 1 }, 
 		VK_FORMAT_R32G32B32A32_SFLOAT, 
-		VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+		usage,
 		VK_IMAGE_TILING_OPTIMAL
 	);
 	Vk_Allocated_Buffer staging_buffer = allocate_buffer(
@@ -1027,6 +1027,10 @@ Raytracing_Pipeline Vk_Context::create_raytracing_pipeline(
 	rt_pp.shader_binding_table = sbt;
 
 	return rt_pp;
+}
+
+void Vk_Context::save_screenshot(Vk_Allocated_Image image, const char* filename)
+{
 }
 
 Vk_Allocated_Image Vk_Context::load_texture(const char* filepath)

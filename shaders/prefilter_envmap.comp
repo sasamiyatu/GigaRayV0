@@ -1,0 +1,68 @@
+#version 460
+#extension GL_GOOGLE_include_directive : enable
+#extension GL_EXT_debug_printf : enable
+
+#include "math.glsl"
+#include "sampling.glsl"
+
+layout(binding = 0, set = 0) uniform sampler2D envmap_in;
+layout(binding = 1, set = 0, rgba32f) uniform image2D envmap_out;
+
+layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout( push_constant ) uniform constants
+{
+    float roughness;
+} control;
+
+void main()
+{
+    ivec3 p = ivec3(gl_GlobalInvocationID);
+
+    ivec2 size_out = imageSize(envmap_out);
+    if (any(greaterThanEqual(p.xy, ivec2(size_out)))) return;
+
+    if (p.xy == ivec2(0, 0))
+        debugPrintfEXT("size: %d %d", size_out.x, size_out.y);
+
+    vec3 prefiltered_color = vec3(0.0f);
+    float total_weight = 0.0;
+    const uint num_samples = 16834;
+
+    vec2 uv = vec2(p.xy) / vec2(size_out);
+    vec3 N = equirectangular_to_vec3(uv);
+    vec3 V = N;
+    mat3 tbn = create_tangent_space(N);
+    vec3 Ve = V * tbn;
+
+    uvec4 seed = uvec4(p.xy, 1337, 1);
+
+    const float roughness = control.roughness;
+    for (uint i = 0; i < num_samples; ++i)
+    {
+        seed = pcg4d(seed);
+        //vec2 Xi = vec2(seed.xy) * ldexp(1.0, -32);
+        vec2 Xi = hammersley2d(i, num_samples);
+#if 0
+        vec3 H = sampleGGXVNDF(Ve, roughness, Xi);
+        vec3 L = reflect(-Ve, H);
+        L = tbn * L;
+#else
+        vec3 H = ImportanceSampleGGX(Xi, roughness, N);
+        vec3 L = 2.0 * dot(V, H) * H - V;
+#endif
+
+        float NoL = saturate(dot(N, L));
+        if (NoL > 0.0)
+        {
+            vec2 uv_ = equirectangular_to_uv(L);
+            prefiltered_color += textureLod(envmap_in, uv_, 0).rgb * NoL;
+            total_weight += NoL;
+        }
+    }
+
+    prefiltered_color /= total_weight;
+
+    //prefiltered_color.rgb = texture(envmap_in, uv).rgb;
+    imageStore(envmap_out, p.xy, vec4(prefiltered_color, 1.0));
+}

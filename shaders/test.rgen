@@ -7,6 +7,7 @@
 
 #define SQUARE_ROUGHNESS
 #define MAX_BOUNCES 4
+#define RAY_TRACING
 
 #include "test.glsl"
 #include "scene.glsl"

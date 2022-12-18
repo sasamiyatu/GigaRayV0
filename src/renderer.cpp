@@ -350,6 +350,7 @@ void Renderer::create_samplers()
 	cinfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
 	cinfo.minFilter = VK_FILTER_LINEAR;
 	cinfo.magFilter = VK_FILTER_LINEAR;
+	cinfo.maxLod = VK_LOD_CLAMP_NONE;
 	vkCreateSampler(context->device, &cinfo, nullptr, &bilinear_sampler);
 
 	g_garbage_collector->push([=]()
@@ -380,6 +381,8 @@ void Renderer::initialize()
 {
 	create_descriptor_pools();
 	create_bindless_descriptor_set_layout();
+
+	create_lookup_textures();
 
 	rt_pipeline = vk_create_rt_pipeline();
 	primary_ray_pipeline = create_gbuffer_rt_pipeline();
@@ -447,7 +450,13 @@ void Renderer::do_frame(ECS* ecs)
 // Loads the meshes from the scene and creates the acceleration structures
 void Renderer::init_scene(ECS* ecs)
 {
-	environment_map = context->load_texture_hdri("data/kloppenheim_06_puresky_4k.hdr");
+	constexpr char* envmap_src = "D:/envmaps/piazza_bologni_4k.hdr";
+	//constexpr char* envmap_src = "data/kloppenheim_06_puresky_4k.hdr";
+	environment_map = context->load_texture_hdri(
+		envmap_src,
+		VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+
+	
 	
 	{
 		// Update bindless textures
@@ -528,6 +537,11 @@ void Renderer::init_scene(ECS* ecs)
 		VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE);
 	VkCommandBuffer cmd = get_current_frame_command_buffer();
 	vk_begin_command_buffer(cmd);
+
+	// Prefilter envmap
+	prefiltered_envmap = prefilter_envmap(cmd, environment_map);
+
+	// Create vertex / index buffers
 	for (auto [mesh] : ecs->filter<Static_Mesh_Component>())
 	{
 		Mesh* m = mesh->manager->get_resource_with_id(mesh->mesh_id);
@@ -621,6 +635,8 @@ void full_barrier(VkCommandBuffer cmd)
 
 void Renderer::pre_frame()
 {
+	g_garbage_collector->collect();
+
 	// Update cameras
 	if (scene.active_camera->dirty)
 	{
@@ -674,14 +690,14 @@ void Renderer::begin_frame()
 
 	vk_transition_layout(cmd, next_image,
 		VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-		VK_ACCESS_HOST_READ_BIT, VK_ACCESS_SHADER_WRITE_BIT,
-		VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR
+		VK_ACCESS_HOST_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+		VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT
 	);
 	
 	vk_transition_layout(cmd, final_output.image,
 		VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
-		VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT, VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
-		VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT
+		VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+		VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
 	);
 }
 
@@ -727,8 +743,8 @@ void Renderer::end_frame()
 	region.dstSubresource = dst_layer;
 	vk_transition_layout(cmd, final_output.image,
 		VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-		VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
-		VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT
+		VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+		VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT
 	);
 	VkImage next_image = context->swapchain_images[swapchain_image_index];
 	vkCmdBlitImage(cmd, 
@@ -736,8 +752,8 @@ void Renderer::end_frame()
 	vk_transition_layout(
 		cmd, next_image,
 		VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-		VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT | VK_ACCESS_HOST_WRITE_BIT,
-		VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT
+		VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT,
+		VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT
 	);
 	
 	vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, query_pools[current_frame_index], 1);
@@ -767,6 +783,8 @@ void Renderer::end_frame()
 	char title[256];
 	sprintf(title, "cpu time: %.2f ms, gpu time: %.2f ms", (cpu_frame_end - cpu_frame_begin) * 1000.0, current_frame_gpu_time * 1e-6);
 	SDL_SetWindowTitle(platform->window.window, title);
+
+	vkQueueWaitIdle(context->graphics_queue);
 
 	frame_counter++;
 	current_frame_index = (current_frame_index + 1) % FRAMES_IN_FLIGHT;
@@ -850,7 +868,10 @@ void Renderer::draw()
 	{
 		Descriptor_Info descriptor_info[] = {
 			Descriptor_Info(0, framebuffer.render_targets[0].image.image_view,  VK_IMAGE_LAYOUT_GENERAL),
-			Descriptor_Info(0, final_output.image_view ,VK_IMAGE_LAYOUT_GENERAL)
+			Descriptor_Info(0, final_output.image_view ,VK_IMAGE_LAYOUT_GENERAL),
+			Descriptor_Info(bilinear_sampler, prefiltered_envmap.image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+			//Descriptor_Info(0, brdf_lut.image_view, VK_IMAGE_LAYOUT_GENERAL)
+			//Descriptor_Info(0, prefiltered_envmap.image_view, VK_IMAGE_LAYOUT_GENERAL)
 		};
 		vkCmdPushDescriptorSetWithTemplateKHR(cmd, compute_pp.update_template, compute_pp.layout, 0, descriptor_info);
 	}
@@ -1307,5 +1328,121 @@ void Renderer::create_top_level_acceleration_structure(ECS* ecs, VkCommandBuffer
 
 	assert(!scene.tlas.has_value());
 	scene.tlas = scene_tlas;
+}
+
+Vk_Allocated_Image Renderer::prefilter_envmap(VkCommandBuffer cmd, Vk_Allocated_Image envmap)
+{
+	constexpr int mip_levels = 5;
+	VkExtent3D image_extent{};
+	image_extent.width = 4096;
+	image_extent.height = 2048;
+	image_extent.depth = 1;
+
+	Vk_Allocated_Image prefiltered = context->allocate_image(image_extent,
+		VK_FORMAT_R32G32B32A32_SFLOAT,
+		VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+		VK_IMAGE_TILING_OPTIMAL, mip_levels
+	);
+
+	Vk_Pipeline prefilter_envmap_pp = context->create_compute_pipeline("shaders/spirv/prefilter_envmap.comp.spv");
+
+	vk_transition_layout(cmd, prefiltered.image,
+		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+		0, VK_ACCESS_SHADER_WRITE_BIT,
+		VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, mip_levels
+	);
+
+	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, prefilter_envmap_pp.pipeline);
+
+	float roughness_step = 1.0f / float(mip_levels - 1);
+	glm::uvec2 size = glm::uvec2(4096, 2048);
+	for (int i = 0; i < mip_levels; ++i)
+	{
+		VkImageViewCreateInfo cinfo = vkinit::image_view_create_info(
+			prefiltered.image, VK_IMAGE_VIEW_TYPE_2D, VK_FORMAT_R32G32B32A32_SFLOAT, i 
+		);
+		VkImageView v;
+		vkCreateImageView(context->device, &cinfo, nullptr, &v);
+
+		g_garbage_collector->push([=]()
+		{
+			vkDestroyImageView(context->device, v, nullptr);
+		}, Garbage_Collector::END_OF_FRAME);
+
+		Descriptor_Info info[] = {
+			Descriptor_Info(bilinear_sampler, environment_map.image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
+			Descriptor_Info(0, v, VK_IMAGE_LAYOUT_GENERAL),
+		};
+
+		vkCmdPushDescriptorSetWithTemplateKHR(cmd, prefilter_envmap_pp.update_template, prefilter_envmap_pp.layout, 0, info);
+		struct
+		{
+			float roughness;
+		} pc;
+
+		pc.roughness = (float)i * roughness_step;
+
+		vkCmdPushConstants(cmd, prefilter_envmap_pp.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+
+		glm::uvec2 group_size = size / 8u;
+		assert(size % 8u == glm::uvec2(0));
+		size /= 2u;
+		vkCmdDispatch(cmd, group_size.x, group_size.y, 1);
+	}
+
+	vk_transition_layout(cmd, prefiltered.image,
+		VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+		VK_ACCESS_SHADER_WRITE_BIT, 0,
+		VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, mip_levels
+	);
+
+	return prefiltered;
+}
+
+void Renderer::create_lookup_textures()
+{
+	Vk_Pipeline pipeline = context->create_compute_pipeline("shaders/spirv/create_brdf_lut.comp.spv");
+	
+	VkExtent3D image_extent{};
+	image_extent.width = 512;
+	image_extent.height = 512;
+	image_extent.depth = 1;
+	brdf_lut = context->allocate_image(image_extent, VK_FORMAT_R16G16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+
+
+	Descriptor_Info info[] = {
+		{0, brdf_lut.image_view, VK_IMAGE_LAYOUT_GENERAL}
+	};
+
+	VkCommandBuffer cmd = get_current_frame_command_buffer();
+	vk_begin_command_buffer(cmd);
+
+	vkinit::vk_transition_layout(
+		cmd, brdf_lut.image,
+		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+		0, VK_ACCESS_SHADER_WRITE_BIT,
+		VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
+	);
+
+	glm::uvec3 group_count = glm::uvec3(512 / 8, 512 / 8, 1);
+
+	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline);
+	vkCmdPushDescriptorSetWithTemplateKHR(cmd, pipeline.update_template, pipeline.layout, 0, info);
+	glm::uvec2 size = glm::uvec2(512, 512);
+	vkCmdPushConstants(cmd, pipeline.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(size), &size);
+	vkCmdDispatch(cmd, group_count.x, group_count.y, group_count.z);
+
+/*	vkinit::vk_transition_layout(
+		cmd, brdf_lut.image,
+		VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+		VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
+		VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
+	);
+*/
+
+	vkEndCommandBuffer(cmd);
+
+	vk_command_buffer_single_submit(cmd);
+	vkQueueWaitIdle(context->graphics_queue);
 }
 

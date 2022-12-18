@@ -1,5 +1,6 @@
 add_executable(GigaRayV0
     main.cpp
+    brdf.h
     common.h 
     common.cpp
     defines.h

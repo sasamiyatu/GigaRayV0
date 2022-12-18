@@ -1,11 +1,13 @@
 #version 460
-
 #extension GL_EXT_debug_printf : enable
+#extension GL_GOOGLE_include_directive : enable
+#include "brdf.h"
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout(binding = 0, set = 0, rgba32f) uniform image2D input_image;
 layout(binding = 1, set = 0, rgba32f) uniform image2D output_image;
+layout(binding = 2, set = 0) uniform sampler2D test_img;
 
 layout( push_constant ) uniform constants
 {
@@ -15,14 +17,21 @@ layout( push_constant ) uniform constants
 void main()
 {
     ivec3 p = ivec3(gl_GlobalInvocationID);
-    if (any(lessThan(p, ivec3(0))) || any(greaterThanEqual(p.xy, control.size)))
+    if (any(greaterThanEqual(p.xy, control.size)))
         return;
     
     const float exposure = 1.0;
     vec4 color = imageLoad(input_image, p.xy);
+    vec2 uv = vec2(p.xy) / vec2(control.size);
+    uv.y = 1.f - uv.y;
+    vec4 v = textureLod(test_img, uv, 4);
+    color.rgb = v.rgb;
     color.rgb = color.rgb / (color.rgb + 1.0);
     color.rgb *= exposure;
     vec3 gamma_corrected = pow(color.rgb, vec3(0.4545));
     imageStore(output_image, p.xy, vec4(gamma_corrected.rgb, 1.0));
+
+    //vec4 v = imageLoad(test_img, p.xy + ivec2(0, 500));
+    //imageStore(output_image, p.xy, v);
     //imageStore(output_image, p.xy, vec4(1.0, 0.0, 1.0, 1.0));
 }

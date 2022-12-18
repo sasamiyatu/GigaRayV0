@@ -119,6 +119,8 @@ struct Renderer
 	Vk_Allocated_Image environment_map;
 	VkSampler bilinear_sampler;
 	VkQueryPool query_pools[FRAMES_IN_FLIGHT];
+	Vk_Allocated_Image brdf_lut;
+	Vk_Allocated_Image prefiltered_envmap;
 
 	double current_frame_gpu_time;
 	double cpu_frame_begin;
@@ -157,6 +159,9 @@ struct Renderer
 	void create_bottom_level_acceleration_structure(Mesh* mesh);
 	void build_bottom_level_acceleration_structure(Mesh* mesh, VkCommandBuffer cmd);
 	void create_top_level_acceleration_structure(ECS* ecs, VkCommandBuffer cmd);
+	Vk_Allocated_Image prefilter_envmap(VkCommandBuffer cmd, Vk_Allocated_Image envmap);
+
+	void create_lookup_textures();
 
 	void do_frame(ECS* ecs);
 	void init_scene(ECS* ecs);

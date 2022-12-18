@@ -2,9 +2,12 @@
 #define MATH_H
 #include "random.glsl"
 
-
+#ifndef M_PI
 #define M_PI 3.14159265359
+#endif
+#ifndef ONE_OVER_PI
 #define ONE_OVER_PI (1.0 / M_PI)
+#endif
 
 struct Ray
 {
@@ -31,6 +34,8 @@ mat3 create_tangent_space(vec3 n)
     return mat3(b1, b2, n);
 }
 
+float saturate(float v) { return clamp(v, 0.0, 1.0); }
+
 // Quaternion stuff
 
 // Calculates rotation quaternion from input vector to the vector (0, 0, 1)
@@ -56,10 +61,10 @@ vec4 invert_rotation(vec4 q)
 	return vec4(-q.x, -q.y, -q.z, q.w);
 }
 
-Ray get_camera_ray(mat4 view, mat4 proj)
+#ifdef RAY_TRACING
+Ray get_camera_ray(mat4 view, mat4 proj, ivec2 pixel, ivec2 size)
 {
-    vec2 pixel = vec2(gl_LaunchIDEXT.xy);
-    const vec2 resolution = vec2(gl_LaunchSizeEXT.xy);
+    const vec2 resolution = vec2(size);
 
     vec2 uv = (((pixel + 0.5f) / resolution) * 2.f - 1.f);
 
@@ -77,6 +82,28 @@ Ray get_camera_ray(mat4 view, mat4 proj)
     r.rd = rd;
 
     return r;
+}
+#endif
+
+vec3 equirectangular_to_vec3(vec2 uv)
+{
+    float phi = uv.x * 2.0 * M_PI;
+    float theta = uv.y * M_PI;
+
+    vec3 dir;
+    dir.x = -cos(phi)*sin(theta);
+    dir.y = -cos(theta);
+    dir.z = sin(phi)*sin(theta);
+
+    return dir;
+}
+
+vec2 equirectangular_to_uv(vec3 dir)
+{
+    float theta = acos(-dir.y);
+    float phi = atan(-dir.z, dir.x) + M_PI;
+    vec2 uv = vec2(phi / (2.0 * M_PI), theta / M_PI);
+    return uv;
 }
 
 #endif

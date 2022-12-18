@@ -400,3 +400,6 @@ FodyWeavers.xsd
 # assets
 data/
 build/
+
+# spirv
+*.spv

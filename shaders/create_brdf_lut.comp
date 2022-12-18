@@ -1,0 +1,87 @@
+#version 460
+
+#extension GL_GOOGLE_include_directive : enable
+
+#define M_PI 3.14159265359
+#include "brdf.h"
+#include "sampling.glsl"
+
+layout(binding = 0, set = 0, rgba32f) uniform image2D output_lut;
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout( push_constant ) uniform constants
+{
+    uvec2 size;
+} control;
+
+vec3 ImportanceSampleGGX( vec2 Xi, float Roughness, vec3 N )
+{
+    float a = Roughness * Roughness;
+    float Phi = 2 * PI * Xi.x;
+    float CosTheta = sqrt( (1 - Xi.y) / ( 1 + (a*a - 1) * Xi.y ) );
+    float SinTheta = sqrt( 1 - CosTheta * CosTheta );
+    vec3 H;
+    H.x = SinTheta * cos( Phi );
+    H.y = SinTheta * sin( Phi );
+    H.z = CosTheta;
+    vec3 UpVector = abs(N.z) < 0.999 ? vec3(0,0,1) : float3(1,0,0);
+    vec3 TangentX = normalize( cross( UpVector, N ) );
+    vec3 TangentY = cross( N, TangentX );
+    // Tangent to world space
+    return TangentX * H.x + TangentY * H.y + N * H.z;
+}
+
+vec2 integrate_brdf(float roughness, float NoV)
+{
+    vec3 V;
+    V.x = sqrt(1.0f - NoV * NoV);  // sin
+    V.y = 0.f;
+    V.z = NoV;                      // cos
+
+    float a = 0.f;
+    float b = 0.f;
+
+    float alpha = roughness * roughness;
+    float alpha2 = alpha * alpha;
+
+    const uint num_samples = 1024;
+    for (uint i = 0; i < num_samples; ++i)
+    {
+        vec2 Xi = hammersley2d(i, num_samples);
+        vec3 H = ImportanceSampleGGX(Xi, roughness, vec3(0.f, 0.f, 1.f));
+
+        vec3 L = 2.0 * dot(V, H) * H - V;
+
+        float NoL = saturate(L.z);
+        float NoH = saturate(H.z);
+        float VoH = saturate(dot(V, H));
+        float HoL = saturate(dot(H, L));
+
+        if (NoL > 0.0f)
+        {
+            float G2 = Smith_G2_Height_Correlated(alpha, NoL, NoV);
+            float G_vis = G2 * VoH / (NoH * NoV);
+            float Fc = pow(1.f - VoH, 5.f);
+
+            a += (1.f - Fc) * G_vis;
+            b += Fc * G_vis;
+        }
+    }
+
+    return vec2(a, b) / float(num_samples);
+}
+
+void main()
+{
+    ivec3 p = ivec3(gl_GlobalInvocationID);
+    if (any(lessThan(p.xy, ivec2(0))) || any(greaterThan(p.xy, ivec2(control.size.xy))))
+        return;
+
+    float roughness = (p.y + 0.5f) / control.size.y;
+    float NoV = (p.x + 0.5f) / control.size.x;
+
+    vec2 lut = integrate_brdf(roughness, NoV);
+    
+    imageStore(output_lut, p.xy, vec4(lut, 0.0, 1.0));
+}

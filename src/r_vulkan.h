@@ -138,7 +138,7 @@ struct Vk_Context
 	VkQueryPool create_query_pool();
 	Vk_Allocated_Buffer allocate_buffer(uint32_t size,
 		VkBufferUsageFlags usage, VmaMemoryUsage memory_usage, VmaAllocationCreateFlags flags, u64 alignment = 0);
-	Vk_Allocated_Image allocate_image(VkExtent3D extent, VkFormat format, VkImageUsageFlags usage, VkImageTiling tiling = VK_IMAGE_TILING_OPTIMAL);
+	Vk_Allocated_Image allocate_image(VkExtent3D extent, VkFormat format, VkImageUsageFlags usage, VkImageTiling tiling = VK_IMAGE_TILING_OPTIMAL, int mip_levels = 1);
 	void free_image(Vk_Allocated_Image img);
 	void free_buffer(Vk_Allocated_Buffer buffer);
 	Vk_Allocated_Buffer create_buffer(VkCommandBuffer cmd, size_t size, void* data, VkBufferUsageFlags usage);
@@ -152,13 +152,15 @@ struct Vk_Context
 	GPU_Buffer create_gpu_buffer(u32 size, VkBufferUsageFlags usage_flags, u32 alignment = 0);
 	Vk_Pipeline create_compute_pipeline(const char* shaderpath);
 	VkDescriptorSetLayout create_layout_from_spirv(u8* bytecode, u32 size);
-	Vk_Allocated_Image load_texture_hdri(const char* filepath);
+	Vk_Allocated_Image load_texture_hdri(const char* filepath, VkImageUsageFlags usage = (VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT));
 	Vk_Allocated_Image load_texture(const char* filepath);
 	Vk_Allocated_Image load_texture_async(const char* filepath, u64* timeline_semaphore_value);
 	VkDescriptorSetLayout create_descriptor_set_layout(struct Shader* shader);
 	Raytracing_Pipeline create_raytracing_pipeline(
 		VkShaderModule rgen, VkShaderModule rmiss, VkShaderModule rchit,
 		VkDescriptorSetLayout* layouts, int num_layouts);
+
+	void save_screenshot(Vk_Allocated_Image image, const char* filename);
 };
 
 

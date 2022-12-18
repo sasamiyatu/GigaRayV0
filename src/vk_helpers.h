@@ -25,7 +25,8 @@ namespace vkinit
 			VkAccessFlags src_access_mask,
 			VkAccessFlags dst_access_mask,
 			VkPipelineStageFlags src_stage_mask,
-			VkPipelineStageFlags dst_stage_mask)
+			VkPipelineStageFlags dst_stage_mask,
+			int mip_levels = 1)
 	{
 		// Transition the fucking image
 		VkImageSubresourceRange range;
@@ -33,7 +34,7 @@ namespace vkinit
 		range.baseArrayLayer = 0;
 		range.baseMipLevel = 0;
 		range.layerCount = 1;
-		range.levelCount = 1;
+		range.levelCount = mip_levels;
 
 		VkImageMemoryBarrier img_barrier{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
 		img_barrier.oldLayout = src_layout;
@@ -93,5 +94,22 @@ namespace vkinit
 		dep_info.memoryBarrierCount = 1;
 		dep_info.pMemoryBarriers = &memory_barrier;
 		vkCmdPipelineBarrier2(cmd, &dep_info);
+	}
+
+	inline VkImageViewCreateInfo image_view_create_info(VkImage image, VkImageViewType type, VkFormat format, int mip_level = 0)
+	{
+		VkImageViewCreateInfo cinfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+		cinfo.image = image;
+		cinfo.viewType = type;
+		cinfo.format = format;
+		VkImageSubresourceRange range{};
+		range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		range.baseMipLevel = mip_level;
+		range.levelCount = 1;
+		range.baseArrayLayer = 0;
+		range.layerCount = 1;
+		cinfo.subresourceRange = range;
+
+		return cinfo;
 	}
 }
