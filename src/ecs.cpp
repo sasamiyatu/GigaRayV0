@@ -12,7 +12,11 @@ void Camera_Component::set_transform(Transform_Component* xform)
 
 glm::mat4 Camera_Component::get_projection_matrix(float aspect_ratio, float znear, float zfar)
 {
-	return glm::perspective(glm::radians(fov), aspect_ratio, znear, zfar);
+	glm::mat4 mat;
+	//mat = glm::perspective(glm::radians(fov), aspect_ratio, znear, zfar);
+	mat = math::make_infinite_reverse_z_proj_rh(glm::radians(fov), aspect_ratio, znear);
+	mat[1][1] *= -1.0f;
+	return mat;
 }
 
 glm::mat4 Camera_Component::get_view_matrix()

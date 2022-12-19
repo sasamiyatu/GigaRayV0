@@ -35,8 +35,8 @@ int main(int argc, char** argv)
 	Renderer renderer(&ctx, &platform, &mesh_manager, &texture_manager, &material_manager, &timer);
 
 
-	Mesh2 gltf = load_gltf_from_file("data/cube/Cube.gltf", &ctx, &texture_manager, &material_manager);
-//	Mesh2 gltf = load_gltf_from_file("data/sponza/Sponza.gltf", &ctx, &texture_manager, &material_manager);
+	//Mesh2 gltf = load_gltf_from_file("data/cube/Cube.gltf", &ctx, &texture_manager, &material_manager);
+	Mesh2 gltf = load_gltf_from_file("data/sponza/Sponza.gltf", &ctx, &texture_manager, &material_manager);
 	std::vector<Mesh> meshes(gltf.meshes.size());
 	create_from_mesh2(&gltf, (u32)gltf.meshes.size(), meshes.data());
 

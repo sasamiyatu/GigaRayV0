@@ -138,7 +138,7 @@ struct Vk_Context
 	VkQueryPool create_query_pool();
 	Vk_Allocated_Buffer allocate_buffer(uint32_t size,
 		VkBufferUsageFlags usage, VmaMemoryUsage memory_usage, VmaAllocationCreateFlags flags, u64 alignment = 0);
-	Vk_Allocated_Image allocate_image(VkExtent3D extent, VkFormat format, VkImageUsageFlags usage, VkImageTiling tiling = VK_IMAGE_TILING_OPTIMAL, int mip_levels = 1);
+	Vk_Allocated_Image allocate_image(VkExtent3D extent, VkFormat format, VkImageUsageFlags usage, VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT, VkImageTiling tiling = VK_IMAGE_TILING_OPTIMAL, int mip_levels = 1);
 	void free_image(Vk_Allocated_Image img);
 	void free_buffer(Vk_Allocated_Buffer buffer);
 	Vk_Allocated_Buffer create_buffer(VkCommandBuffer cmd, size_t size, void* data, VkBufferUsageFlags usage);

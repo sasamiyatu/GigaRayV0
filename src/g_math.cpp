@@ -14,6 +14,16 @@ glm::vec3 forward_vector(glm::quat q)
     return v;
 }
 
+glm::mat4 make_infinite_reverse_z_proj_rh(float fovy, float aspect, float z_near)
+{
+    float f = 1.0f / tanf(fovy / 2.0f);
+    return glm::mat4(
+        f / aspect, 0.0f, 0.0f, 0.0f,
+        0.0f, f, 0.0f, 0.0f,
+        0.0f, 0.0f, 0.0f, -1.0f,
+        0.0f, 0.0f, z_near, 0.0f);
+}
+
 
 }
 

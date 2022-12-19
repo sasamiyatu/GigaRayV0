@@ -944,6 +944,9 @@ void Renderer::rasterize(VkCommandBuffer cmd, ECS* ecs)
 	VkClearValue clear_value{};
 	clear_value.color = { 0.2f, 0.5f, 0.1f };
 
+	VkClearValue depth_clear{};
+	depth_clear.depthStencil.depth = 0.f;
+
 	VkRenderingAttachmentInfo attachment_info{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
 	attachment_info.imageView = framebuffer.render_targets[0].image.image_view;
 	attachment_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
@@ -951,12 +954,19 @@ void Renderer::rasterize(VkCommandBuffer cmd, ECS* ecs)
 	attachment_info.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
 	attachment_info.clearValue = clear_value;
 
+	VkRenderingAttachmentInfo depth_attachment_info{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
+	depth_attachment_info.imageView = framebuffer.render_targets[1].image.image_view;
+	depth_attachment_info.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+	depth_attachment_info.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+	depth_attachment_info.clearValue = depth_clear;
+
 	VkRect2D render_area = { {0, 0}, {(u32)window_width, (u32)window_height} };
 	VkRenderingInfo rendering_info{VK_STRUCTURE_TYPE_RENDERING_INFO};
 	rendering_info.renderArea = render_area;
 	rendering_info.layerCount = 1;
 	rendering_info.colorAttachmentCount = 1;
 	rendering_info.pColorAttachments = &attachment_info;
+	rendering_info.pDepthAttachment = &depth_attachment_info;
 	vkCmdBeginRendering(cmd, &rendering_info);
 
 	VkViewport viewport{};
@@ -1048,7 +1058,6 @@ static void vk_begin_command_buffer(VkCommandBuffer cmd)
 
 void Renderer::vk_create_render_targets(VkCommandBuffer cmd)
 {
-	framebuffer.render_targets.resize(1);
 	i32 w, h;
 	platform->get_window_size(&w, &h);
 	Render_Target color_attachment;
@@ -1057,6 +1066,15 @@ void Renderer::vk_create_render_targets(VkCommandBuffer cmd)
 		{ (uint32_t)w, (uint32_t)h, 1 },
 		color_attachment.format,
 		VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT
+	);
+
+	Render_Target depth_attachment;
+	depth_attachment.format = VK_FORMAT_D32_SFLOAT;
+	depth_attachment.image = context->allocate_image(
+		{ (u32)w, (u32)h, 1 },
+		depth_attachment.format,
+		VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+		VK_IMAGE_ASPECT_DEPTH_BIT
 	);
 
 	final_output = context->allocate_image(
@@ -1124,6 +1142,12 @@ void Renderer::vk_create_render_targets(VkCommandBuffer cmd)
 		0, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
 		VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
 
+	vk_transition_layout(cmd, depth_attachment.image.image,
+		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+		0, 0,
+		VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+		1, VK_IMAGE_ASPECT_DEPTH_BIT);
+
 	vk_transition_layout(cmd, final_output.image,
 		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
 		0, VK_ACCESS_SHADER_WRITE_BIT,
@@ -1154,7 +1178,8 @@ void Renderer::vk_create_render_targets(VkCommandBuffer cmd)
 	vkQueueWaitIdle(context->graphics_queue);
 	color_attachment.layout = VK_IMAGE_LAYOUT_GENERAL;
 	color_attachment.name = "Color";
-	framebuffer.render_targets[0] = color_attachment;
+	framebuffer.render_targets.push_back(color_attachment);
+	framebuffer.render_targets.push_back(depth_attachment);
 }
 
 static bool check_extensions(const std::vector<const char*>& device_exts, const std::vector<VkExtensionProperties>& props)
@@ -1466,6 +1491,7 @@ Vk_Allocated_Image Renderer::prefilter_envmap(VkCommandBuffer cmd, Vk_Allocated_
 	Vk_Allocated_Image prefiltered = context->allocate_image(image_extent,
 		VK_FORMAT_R32G32B32A32_SFLOAT,
 		VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+		VK_IMAGE_ASPECT_COLOR_BIT,
 		VK_IMAGE_TILING_OPTIMAL, mip_levels
 	);
 

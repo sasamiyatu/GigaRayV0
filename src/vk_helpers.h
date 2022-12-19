@@ -18,19 +18,20 @@ namespace vkinit
 
 	// Inserts a barrier into the command buffer to perform a specific layout transition
 	inline void vk_transition_layout(
-			VkCommandBuffer cmd,
-			VkImage img,
-			VkImageLayout src_layout,
-			VkImageLayout dst_layout,
-			VkAccessFlags src_access_mask,
-			VkAccessFlags dst_access_mask,
-			VkPipelineStageFlags src_stage_mask,
-			VkPipelineStageFlags dst_stage_mask,
-			int mip_levels = 1)
+		VkCommandBuffer cmd,
+		VkImage img,
+		VkImageLayout src_layout,
+		VkImageLayout dst_layout,
+		VkAccessFlags src_access_mask,
+		VkAccessFlags dst_access_mask,
+		VkPipelineStageFlags src_stage_mask,
+		VkPipelineStageFlags dst_stage_mask,
+		int mip_levels = 1,
+		VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT)
 	{
 		// Transition the fucking image
 		VkImageSubresourceRange range;
-		range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		range.aspectMask = aspect;
 		range.baseArrayLayer = 0;
 		range.baseMipLevel = 0;
 		range.layerCount = 1;

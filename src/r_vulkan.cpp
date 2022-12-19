@@ -14,6 +14,7 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debug_callback(
 	void* pUserData) {
 
 	printf("validation layer: %s\n", pCallbackData->pMessage);
+	assert(false);
 	return VK_FALSE;
 }
 
@@ -82,7 +83,7 @@ void Vk_Context::create_instance(Platform_Window* window)
 	if constexpr (USE_VALIDATION_LAYERS)
 	{
 		VkDebugUtilsMessengerCreateInfoEXT ci{ VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT };
-		ci.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT;
+		ci.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT; // VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT;
 		ci.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
 		ci.pfnUserCallback = debug_callback;
 		VK_CHECK(vkCreateDebugUtilsMessengerEXT(instance, &ci, nullptr, &debug_messenger));
@@ -454,7 +455,7 @@ Vk_Allocated_Buffer Vk_Context::allocate_buffer(uint32_t size, VkBufferUsageFlag
 	return buffer;
 }
 
-Vk_Allocated_Image Vk_Context::allocate_image(VkExtent3D extent, VkFormat format, VkImageUsageFlags usage, VkImageTiling tiling, int mip_levels)
+Vk_Allocated_Image Vk_Context::allocate_image(VkExtent3D extent, VkFormat format, VkImageUsageFlags usage, VkImageAspectFlags aspect, VkImageTiling tiling, int mip_levels)
 {
 	VkImageCreateInfo cinfo{ VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
 	cinfo.arrayLayers = 1;
@@ -481,7 +482,7 @@ Vk_Allocated_Image Vk_Context::allocate_image(VkExtent3D extent, VkFormat format
 	view_info.subresourceRange.levelCount = mip_levels;
 	view_info.subresourceRange.baseArrayLayer = 0;
 	view_info.subresourceRange.layerCount = 1;
-	view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+	view_info.subresourceRange.aspectMask = aspect;
 	vkCreateImageView(device, &view_info, nullptr, &img.image_view);
 
 	g_garbage_collector->push([=]()
@@ -812,6 +813,7 @@ Vk_Allocated_Image Vk_Context::load_texture_hdri(const char* filepath, VkImageUs
 		{ (u32)x, (u32)y, 1 }, 
 		VK_FORMAT_R32G32B32A32_SFLOAT, 
 		usage,
+		VK_IMAGE_ASPECT_COLOR_BIT,
 		VK_IMAGE_TILING_OPTIMAL
 	);
 	Vk_Allocated_Buffer staging_buffer = allocate_buffer(
@@ -1070,7 +1072,12 @@ Vk_Pipeline Vk_Context::create_raster_pipeline(VkShaderModule vertex_shader, VkS
 
 	VkPipelineMultisampleStateCreateInfo multisample_state = vkinit::pipeline_multisample_state_create_info(VK_SAMPLE_COUNT_1_BIT);
 
-	// TODO: Fill depth state
+	VkPipelineDepthStencilStateCreateInfo depth_stencil_state{ VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO };
+	depth_stencil_state.depthTestEnable = VK_TRUE;
+	depth_stencil_state.depthWriteEnable = VK_TRUE;
+	depth_stencil_state.depthCompareOp = VK_COMPARE_OP_GREATER;
+	depth_stencil_state.minDepthBounds = 0.f;
+	depth_stencil_state.maxDepthBounds = 1.f;
 
 	VkPipelineColorBlendAttachmentState attachment = vkinit::pipeline_color_blend_attachment_state();
 	VkPipelineColorBlendStateCreateInfo blend_state = vkinit::pipeline_color_blend_state_create_info(1, &attachment);
@@ -1078,12 +1085,21 @@ Vk_Pipeline Vk_Context::create_raster_pipeline(VkShaderModule vertex_shader, VkS
 	VkDynamicState dynamic_states[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
 	VkPipelineDynamicStateCreateInfo dynamic_state = vkinit::pipeline_dynamic_state_create_info((u32)std::size(dynamic_states), dynamic_states);
 
+	VkPipelineRenderingCreateInfo rendering_create_info{ VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO };
+	rendering_create_info.viewMask = 0;
+	rendering_create_info.colorAttachmentCount = 1;
+	VkFormat color_format = VK_FORMAT_R32G32B32A32_SFLOAT;
+	rendering_create_info.pColorAttachmentFormats = &color_format;
+	rendering_create_info.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
+
 	VkGraphicsPipelineCreateInfo pipeline_create_info = { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
+	pipeline_create_info.pNext = &rendering_create_info;
 	pipeline_create_info.stageCount = (u32)std::size(stages);
 	pipeline_create_info.pStages = stages;
 	pipeline_create_info.pVertexInputState = &vertex_input;
 	pipeline_create_info.pInputAssemblyState = &input_assembly;
 	pipeline_create_info.pViewportState = &viewport_state;
+	pipeline_create_info.pDepthStencilState = &depth_stencil_state;
 	pipeline_create_info.pRasterizationState = &raster_state;
 	pipeline_create_info.pMultisampleState = &multisample_state;
 	pipeline_create_info.pColorBlendState = &blend_state;
@@ -1112,6 +1128,7 @@ Vk_Allocated_Image Vk_Context::load_texture(const char* filepath)
 		{ (u32)x, (u32)y, 1 },
 		VK_FORMAT_R8G8B8A8_UNORM,
 		VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+		VK_IMAGE_ASPECT_COLOR_BIT,
 		VK_IMAGE_TILING_OPTIMAL
 	);
 	Vk_Allocated_Buffer staging_buffer = allocate_buffer(
