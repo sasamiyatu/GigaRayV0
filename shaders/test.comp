@@ -24,8 +24,8 @@ void main()
     vec4 color = imageLoad(input_image, p.xy);
     vec2 uv = vec2(p.xy) / vec2(control.size);
     uv.y = 1.f - uv.y;
-    vec4 v = textureLod(test_img, uv, 4);
-    color.rgb = v.rgb;
+    vec4 v = textureLod(test_img, uv, 0);
+    //color.rgb = v.rgb;
     color.rgb = color.rgb / (color.rgb + 1.0);
     color.rgb *= exposure;
     vec3 gamma_corrected = pow(color.rgb, vec3(0.4545));

@@ -22,27 +22,28 @@ constexpr int MAX_BINDLESS_RESOURCES = 16536;
 // FIXME: We're gonna need more stuff than this 
 void Renderer::create_bindless_descriptor_set_layout()
 {
+	VkShaderStageFlags flags = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
 	// Bindless stuff
 	std::array<VkDescriptorSetLayoutBinding, 4> bindless_bindings{};
 	bindless_bindings[0].binding = 0;
 	bindless_bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 	bindless_bindings[0].descriptorCount = MAX_BINDLESS_RESOURCES;
-	bindless_bindings[0].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+	bindless_bindings[0].stageFlags = flags;
 
 	bindless_bindings[1].binding = 1;
 	bindless_bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 	bindless_bindings[1].descriptorCount = MAX_BINDLESS_RESOURCES;
-	bindless_bindings[1].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+	bindless_bindings[1].stageFlags = flags;
 
 	bindless_bindings[2].binding = 2;
 	bindless_bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 	bindless_bindings[2].descriptorCount = MAX_BINDLESS_RESOURCES;
-	bindless_bindings[2].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+	bindless_bindings[2].stageFlags = flags;
 
 	bindless_bindings[3].binding = 3;
 	bindless_bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 	bindless_bindings[3].descriptorCount = 1;
-	bindless_bindings[3].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+	bindless_bindings[3].stageFlags = flags;
 
 	VkDescriptorSetLayoutCreateInfo layout_info = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
 	layout_info.bindingCount = uint32_t(bindless_bindings.size());
@@ -53,11 +54,11 @@ void Renderer::create_bindless_descriptor_set_layout()
 		VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT_EXT 
 		| VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT_EXT;
 
-	VkDescriptorBindingFlags flags[4] = { bindless_flags, bindless_flags, bindless_flags, 0 };
+	VkDescriptorBindingFlags flags2[4] = { bindless_flags, bindless_flags, bindless_flags, 0 };
 
 	VkDescriptorSetLayoutBindingFlagsCreateInfoEXT extended_info{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO_EXT, nullptr };
 	extended_info.bindingCount = (u32)bindless_bindings.size();
-	extended_info.pBindingFlags = flags;
+	extended_info.pBindingFlags = flags2;
 	layout_info.pNext = &extended_info;
 
 	VK_CHECK(vkCreateDescriptorSetLayout(context->device, &layout_info, nullptr, &bindless_set_layout));
@@ -260,7 +261,7 @@ Vk_Pipeline Renderer::vk_create_rt_pipeline()
 	vkDestroyShaderModule(context->device, rmiss_shader.shader, nullptr);
 	vkDestroyShaderModule(context->device, rchit_shader.shader, nullptr);
 
-	descriptor_update_template = context->create_descriptor_update_template(&rgen_shader, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, pl.layout);
+	descriptor_update_template = context->create_descriptor_update_template(1, &rgen_shader, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, pl.layout);
 
 	return pl;
 }
@@ -342,6 +343,39 @@ Raytracing_Pipeline Renderer::create_gbuffer_rt_pipeline()
 	return rt_pp;
 }
 
+Vk_Pipeline Renderer::create_raster_pipeline()
+{
+	Shader vertex_shader, fragment_shader;
+	bool success = load_shader_from_file(&vertex_shader, context->device, "shaders/spirv/basic.vert.spv");
+	assert(success);
+	success = load_shader_from_file(&fragment_shader, context->device, "shaders/spirv/basic.frag.spv");
+	assert(success);
+
+	Shader shaders[] = { vertex_shader, fragment_shader };
+
+	VkDescriptorSetLayout desc_0 = context->create_descriptor_set_layout((u32)std::size(shaders), shaders);
+
+	VkDescriptorSetLayout descriptor_set_layouts[] = { desc_0, bindless_set_layout };
+
+	Vk_Pipeline pp = context->create_raster_pipeline(vertex_shader.shader, fragment_shader.shader, (u32)std::size(descriptor_set_layouts), descriptor_set_layouts);
+
+	VkDescriptorUpdateTemplate update_template = context->create_descriptor_update_template((u32)std::size(shaders), shaders, VK_PIPELINE_BIND_POINT_GRAPHICS, pp.layout);
+	pp.update_template = update_template;
+
+	vkDestroyShaderModule(context->device, vertex_shader.shader, nullptr);
+	vkDestroyShaderModule(context->device, fragment_shader.shader, nullptr);
+
+	g_garbage_collector->push([=]()
+		{
+			vkDestroyPipeline(context->device, pp.pipeline, nullptr);
+			vkDestroyPipelineLayout(context->device, pp.layout, nullptr);
+			vkDestroyDescriptorSetLayout(context->device, desc_0, nullptr);
+			vkDestroyDescriptorUpdateTemplate(context->device, update_template, nullptr);
+		}, Garbage_Collector::SHUTDOWN);
+
+	return pp;
+}
+
 void Renderer::create_samplers()
 {
 	VkSamplerCreateInfo cinfo{ VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
@@ -386,6 +420,7 @@ void Renderer::initialize()
 
 	rt_pipeline = vk_create_rt_pipeline();
 	primary_ray_pipeline = create_gbuffer_rt_pipeline();
+	raster_pipeline = create_raster_pipeline();
 
 	transition_swapchain_images(get_current_frame_command_buffer());
 	vk_create_render_targets(get_current_frame_command_buffer());
@@ -443,7 +478,7 @@ void Renderer::do_frame(ECS* ecs)
 {
 	pre_frame();
 	begin_frame();
-	draw();
+	draw(ecs);
 	end_frame();
 }
 
@@ -784,16 +819,28 @@ void Renderer::end_frame()
 	sprintf(title, "cpu time: %.2f ms, gpu time: %.2f ms", (cpu_frame_end - cpu_frame_begin) * 1000.0, current_frame_gpu_time * 1e-6);
 	SDL_SetWindowTitle(platform->window.window, title);
 
-	vkQueueWaitIdle(context->graphics_queue);
 
 	frame_counter++;
 	current_frame_index = (current_frame_index + 1) % FRAMES_IN_FLIGHT;
 }
 
-void Renderer::draw()
+void Renderer::draw(ECS* ecs)
 {
 	VkCommandBuffer cmd = get_current_frame_command_buffer();
 
+#if 0
+	trace_rays(cmd);
+#else
+	rasterize(cmd, ecs);
+#endif
+
+	tonemap(cmd);
+	
+	frames_accumulated++;
+}
+
+void Renderer::trace_rays(VkCommandBuffer cmd)
+{
 	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, rt_pipeline.pipeline);
 
 	// Update descriptor set
@@ -835,7 +882,7 @@ void Renderer::draw()
 	hit_region.size = 32;
 
 	VkStridedDeviceAddressRegionKHR callable_region{};
-	
+
 	//printf("Trace rays cmd at: %f\n", timer->get_current_time());
 	vkCmdTraceRaysKHR(
 		cmd,
@@ -845,7 +892,7 @@ void Renderer::draw()
 		&callable_region,
 		window_width, window_height, 1
 	);
-	
+
 	VkMemoryBarrier memory_barrier{ VK_STRUCTURE_TYPE_MEMORY_BARRIER };
 	memory_barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
 	memory_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
@@ -857,7 +904,10 @@ void Renderer::draw()
 		0, nullptr,
 		0, nullptr
 	);
+}
 
+void Renderer::tonemap(VkCommandBuffer cmd)
+{
 	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, compute_pp.pipeline);
 	// Go for groupsize 8x8?
 	constexpr u32 group_size = 8;
@@ -886,8 +936,83 @@ void Renderer::draw()
 		0, nullptr,
 		0, nullptr,
 		0, nullptr);
+}
 
-	frames_accumulated++;
+void Renderer::rasterize(VkCommandBuffer cmd, ECS* ecs)
+{
+
+	VkClearValue clear_value{};
+	clear_value.color = { 0.2f, 0.5f, 0.1f };
+
+	VkRenderingAttachmentInfo attachment_info{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
+	attachment_info.imageView = framebuffer.render_targets[0].image.image_view;
+	attachment_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+	attachment_info.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+	attachment_info.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+	attachment_info.clearValue = clear_value;
+
+	VkRect2D render_area = { {0, 0}, {(u32)window_width, (u32)window_height} };
+	VkRenderingInfo rendering_info{VK_STRUCTURE_TYPE_RENDERING_INFO};
+	rendering_info.renderArea = render_area;
+	rendering_info.layerCount = 1;
+	rendering_info.colorAttachmentCount = 1;
+	rendering_info.pColorAttachments = &attachment_info;
+	vkCmdBeginRendering(cmd, &rendering_info);
+
+	VkViewport viewport{};
+	viewport.height = (float)window_height;
+	viewport.width = (float)window_width;
+	viewport.minDepth = 0.0f; 
+	viewport.maxDepth = 1.0f;
+	viewport.x = viewport.y = 0.0f;
+	vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+	vkCmdSetScissor(cmd, 0, 1, &render_area);
+
+	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, raster_pipeline.pipeline);
+	u32 aligned_size = vkinit::aligned_size(
+		sizeof(Camera_Component),
+		(u32)context->physical_device_properties.properties.limits.minUniformBufferOffsetAlignment
+	);
+	{
+		Descriptor_Info descriptor_info[] =
+		{
+			Descriptor_Info(bilinear_sampler, environment_map.image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
+			Descriptor_Info(bilinear_sampler, environment_map.image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
+			Descriptor_Info(gpu_camera_data.gpu_buffer.buffer, 0, aligned_size),
+			Descriptor_Info(bilinear_sampler, environment_map.image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+		};
+		vkCmdPushDescriptorSetWithTemplateKHR(cmd, raster_pipeline.update_template, raster_pipeline.layout, 0, descriptor_info);
+	}
+	vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, raster_pipeline.layout, 1, 1, &bindless_descriptor_set, 0, nullptr);
+	
+	//vkCmdDraw(cmd, 36, 1, 0, 0);
+
+	for (auto [a] : ecs->filter<Static_Mesh_Component>())
+	{
+		Mesh* mesh = a->manager->get_resource_with_id(a->mesh_id);
+		i32 mat_id = mesh->material_id;
+		i32 mesh_id = a->mesh_id;
+
+		u32 index = ((mat_id & 0x3FF) << 14) | (mesh_id & 0x3FFF);
+
+		vkCmdBindIndexBuffer(cmd, mesh->index_buffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+		vkCmdDrawIndexed(cmd, (u32)mesh->indices.size(), 1, 0, 0, index);
+	}
+
+	vkCmdEndRendering(cmd);
+
+	VkMemoryBarrier memory_barrier{ VK_STRUCTURE_TYPE_MEMORY_BARRIER };
+	memory_barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+	memory_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+	vkCmdPipelineBarrier(cmd,
+		VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+		VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+		0,
+		1, &memory_barrier,
+		0, nullptr,
+		0, nullptr
+	);
 }
 
 void Renderer::cleanup()

@@ -6,10 +6,12 @@
 layout(set = 0, binding = 2, scalar) uniform camera_buffer{
 	mat4 view;
 	mat4 proj;
-    uint frame_index;
+    uvec4 frame_index;
 } camera_data;
 
+#ifdef RAY_TRACING
 layout(binding = 1, set = 0) uniform accelerationStructureEXT scene;
+#endif
 layout(binding = 3, set = 0) uniform sampler2D environment_map;
 
 layout (set = 1, binding = 0) uniform sampler2D textures[];

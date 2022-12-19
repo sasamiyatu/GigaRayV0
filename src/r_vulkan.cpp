@@ -557,34 +557,37 @@ VkShaderModule Vk_Context::create_shader_module_from_bytes(u32* bytes, size_t si
 	return sm;
 }
 
-VkDescriptorUpdateTemplate Vk_Context::create_descriptor_update_template(Shader* shader, VkPipelineBindPoint bind_point, VkPipelineLayout pipeline_layout)
+VkDescriptorUpdateTemplate Vk_Context::create_descriptor_update_template(u32 shader_count, Shader* shaders, VkPipelineBindPoint bind_point, VkPipelineLayout pipeline_layout)
 {
 	VkDescriptorUpdateTemplate update_template;
 
+	u32 resource_mask = 0;
+	for (u32 i = 0; i < shader_count; ++i)
+		resource_mask |= shaders[i].resource_mask;
 	// Find highest set bit
-	int n = shader->resource_mask;
-	int msb_pos = 0;
+	u32 n = resource_mask;
+	u32 msb_pos = 0;
 	while (n >>= 1)
 		msb_pos++;
 
 	int count = msb_pos + 1;
 
-	std::vector<VkDescriptorUpdateTemplateEntry> entries(count);
+	std::vector<VkDescriptorUpdateTemplateEntry> entries(count, VkDescriptorUpdateTemplateEntry());
 	
 	for (int i = 0; i < count; ++i)
 	{
-		if (shader->resource_mask & (1 << i))
+		for (u32 j = 0; j < shader_count; ++j)
 		{
-			entries[i].descriptorCount = 1;
-			entries[i].descriptorType = shader->descriptor_types[i];
-			entries[i].dstArrayElement = 0;
-			entries[i].dstBinding = i;
-			entries[i].offset = sizeof(Descriptor_Info) * i;
-			entries[i].stride = sizeof(Descriptor_Info);
-		}
-		else
-		{
-			entries[i] = {};
+			Shader* shader = &shaders[j];
+			if (shader->resource_mask & (1 << i))
+			{
+				entries[i].descriptorCount = 1;
+				entries[i].descriptorType = shader->descriptor_types[i];
+				entries[i].dstArrayElement = 0;
+				entries[i].dstBinding = i;
+				entries[i].offset = sizeof(Descriptor_Info) * i;
+				entries[i].stride = sizeof(Descriptor_Info);
+			}
 		}
 	}
 
@@ -672,24 +675,30 @@ void Vk_Context::free_buffer(Vk_Allocated_Buffer buffer)
 	vmaFreeMemory(allocator, buffer.allocation);
 }
 
-VkDescriptorSetLayout Vk_Context::create_descriptor_set_layout(Shader* shader)
+VkDescriptorSetLayout Vk_Context::create_descriptor_set_layout(u32 num_shaders, Shader* shaders)
 {
 	VkDescriptorSetLayoutCreateInfo cinfo{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
-	assert(shader->resource_mask != 0);
 	u32 binding_count = 0;
-	for (int n = shader->resource_mask; n != 0; n >>= 1)
+	u32 resource_mask = 0;
+	for (u32 i = 0; i < num_shaders; ++i)
+		resource_mask |= shaders[i].resource_mask;
+	for (int n = resource_mask; n != 0; n >>= 1)
 		binding_count++;
 
 	std::vector<VkDescriptorSetLayoutBinding> bindings(binding_count);
 
 	for (u32 i = 0; i < binding_count; ++i)
 	{
-		if ((shader->resource_mask >> i) & 1)
+		for (u32 j = 0; j < num_shaders; ++j)
 		{
-			bindings[i].binding = i;
-			bindings[i].descriptorCount = 1;
-			bindings[i].descriptorType = shader->descriptor_types[i];
-			bindings[i].stageFlags = shader->shader_stage;
+			Shader* shader = &shaders[j];
+			if ((shader->resource_mask >> i) & 1)
+			{
+				bindings[i].binding = i;
+				bindings[i].descriptorCount = 1;
+				bindings[i].descriptorType = shader->descriptor_types[i];
+				bindings[i].stageFlags = shader->shader_stage;
+			}
 		}
 	}
 
@@ -715,7 +724,7 @@ Vk_Pipeline Vk_Context::create_compute_pipeline(const char* shaderpath)
 	shader_stage_cinfo.pName = "main";
 	shader_stage_cinfo.stage = VK_SHADER_STAGE_COMPUTE_BIT;
 
-	VkDescriptorSetLayout set_layout = create_descriptor_set_layout(&shader);
+	VkDescriptorSetLayout set_layout = create_descriptor_set_layout(1, &shader);
 
 	VkPipelineLayoutCreateInfo layout_cinfo{ VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
 	layout_cinfo.pSetLayouts = &set_layout;
@@ -739,7 +748,7 @@ Vk_Pipeline Vk_Context::create_compute_pipeline(const char* shaderpath)
 	pp.desc_sets = { set_layout };
 	pp.layout = pipeline_layout;
 	pp.pipeline = pipeline;
-	pp.update_template = create_descriptor_update_template(&shader, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_layout);
+	pp.update_template = create_descriptor_update_template(1, &shader, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_layout);
 
 	vkDestroyShaderModule(device, shader.shader, nullptr);
 	g_garbage_collector->push([=]()
@@ -1027,6 +1036,63 @@ Raytracing_Pipeline Vk_Context::create_raytracing_pipeline(
 	rt_pp.shader_binding_table = sbt;
 
 	return rt_pp;
+}
+
+Vk_Pipeline Vk_Context::create_raster_pipeline(VkShaderModule vertex_shader, VkShaderModule fragment_shader, u32 num_layouts, VkDescriptorSetLayout* layouts)
+{
+	Vk_Pipeline pp{};
+
+	VkPushConstantRange pc_range{};
+	pc_range.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+	pc_range.size = 128; // MAX 
+	pc_range.offset = 0;
+	VkPipelineLayoutCreateInfo layout_create_info = vkinit::pipeline_layout_create_info(num_layouts, layouts, 1, &pc_range);
+	VkPipelineLayout layout;
+	vkCreatePipelineLayout(device, &layout_create_info, nullptr, &layout);
+
+	pp.layout = layout;
+	
+	VkPipelineShaderStageCreateInfo stages[2] = {};
+	stages[0] = vkinit::pipeline_shader_stage_create_info(vertex_shader, VK_SHADER_STAGE_VERTEX_BIT, "main");
+	stages[1] = vkinit::pipeline_shader_stage_create_info(fragment_shader, VK_SHADER_STAGE_FRAGMENT_BIT, "main");
+
+	VkPipelineVertexInputStateCreateInfo vertex_input = vkinit::pipeline_vertex_input_state_create_info(0, nullptr, 0, nullptr);
+
+	VkPipelineInputAssemblyStateCreateInfo input_assembly = vkinit::pipeline_input_assembly_state_create_info(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, VK_FALSE);
+
+	// Dynamic scissor and viewport
+	VkPipelineViewportStateCreateInfo viewport_state = vkinit::pipeline_viewport_state_create_info(1, nullptr, 1, nullptr, true);
+
+	VkPipelineRasterizationStateCreateInfo raster_state{ VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO };
+	raster_state.polygonMode = VK_POLYGON_MODE_FILL;
+	raster_state.cullMode = VK_CULL_MODE_NONE;
+	raster_state.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+
+	VkPipelineMultisampleStateCreateInfo multisample_state = vkinit::pipeline_multisample_state_create_info(VK_SAMPLE_COUNT_1_BIT);
+
+	// TODO: Fill depth state
+
+	VkPipelineColorBlendAttachmentState attachment = vkinit::pipeline_color_blend_attachment_state();
+	VkPipelineColorBlendStateCreateInfo blend_state = vkinit::pipeline_color_blend_state_create_info(1, &attachment);
+
+	VkDynamicState dynamic_states[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+	VkPipelineDynamicStateCreateInfo dynamic_state = vkinit::pipeline_dynamic_state_create_info((u32)std::size(dynamic_states), dynamic_states);
+
+	VkGraphicsPipelineCreateInfo pipeline_create_info = { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
+	pipeline_create_info.stageCount = (u32)std::size(stages);
+	pipeline_create_info.pStages = stages;
+	pipeline_create_info.pVertexInputState = &vertex_input;
+	pipeline_create_info.pInputAssemblyState = &input_assembly;
+	pipeline_create_info.pViewportState = &viewport_state;
+	pipeline_create_info.pRasterizationState = &raster_state;
+	pipeline_create_info.pMultisampleState = &multisample_state;
+	pipeline_create_info.pColorBlendState = &blend_state;
+	pipeline_create_info.pDynamicState = &dynamic_state;
+	pipeline_create_info.layout = layout;
+
+	vkCreateGraphicsPipelines(device, 0, 1, &pipeline_create_info, nullptr, &pp.pipeline);
+
+	return pp;
 }
 
 void Vk_Context::save_screenshot(Vk_Allocated_Image image, const char* filename)

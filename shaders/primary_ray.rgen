@@ -21,7 +21,7 @@ layout(binding = DEPTH_BINDING, set = 0, rgba32f) uniform image2D depth_output;
 
 void main()
 {
-    Ray r = get_camera_ray(camera_data.view, camera_data.proj);
+    /*Ray r = get_camera_ray(camera_data.view, camera_data.proj);
     ivec2 p = ivec2(gl_LaunchIDEXT.xy);
 
     traceRayEXT(
@@ -45,5 +45,5 @@ void main()
         imageStore(world_pos_output, p, vec4(v.pos, 1.0));
         imageStore(albedo_output, p, vec4(v.material.base_color, 1.0));
         imageStore(depth_output, p, vec4(pay.t, 0.0, 0.0, 1.0));
-    }
+    }*/
 }

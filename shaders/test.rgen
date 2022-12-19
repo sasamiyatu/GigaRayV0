@@ -30,11 +30,7 @@ layout(binding = 0, set = 0, rgba32f) uniform image2D output_image;
 
 vec3 sample_environment_map(vec3 dir, sampler2D s)
 {
-    // y = -cos(theta) -> theta = -arccos(y)
-    float theta = acos(-dir.y);
-    float phi = atan(dir.z, -dir.x) + M_PI;
-    vec2 uv = vec2(phi / (2.0 * M_PI), theta / M_PI);
-
+    vec2 uv = equirectangular_to_uv(dir);
     return texture(s, uv).rgb;
 }
 

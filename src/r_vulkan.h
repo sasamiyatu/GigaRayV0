@@ -145,7 +145,7 @@ struct Vk_Context
 	VkDeviceAddress get_buffer_device_address(const Vk_Allocated_Buffer& buf);
 	VkShaderModule create_shader_module_from_file(const char* filepath);
 	VkShaderModule create_shader_module_from_bytes(u32* bytes, size_t size);
-	VkDescriptorUpdateTemplate Vk_Context::create_descriptor_update_template(struct Shader* shader, VkPipelineBindPoint bind_point, VkPipelineLayout pipeline_layout);
+	VkDescriptorUpdateTemplate create_descriptor_update_template(u32 shader_count, struct Shader* shaders, VkPipelineBindPoint bind_point, VkPipelineLayout pipeline_layout);
 	VkFence create_fence();
 	VkDeviceAddress get_acceleration_structure_device_address(VkAccelerationStructureKHR as);
 	VkSemaphore create_semaphore(bool timeline = false);
@@ -155,10 +155,13 @@ struct Vk_Context
 	Vk_Allocated_Image load_texture_hdri(const char* filepath, VkImageUsageFlags usage = (VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT));
 	Vk_Allocated_Image load_texture(const char* filepath);
 	Vk_Allocated_Image load_texture_async(const char* filepath, u64* timeline_semaphore_value);
-	VkDescriptorSetLayout create_descriptor_set_layout(struct Shader* shader);
+	VkDescriptorSetLayout create_descriptor_set_layout(u32 num_shaders, struct Shader* shaders);
 	Raytracing_Pipeline create_raytracing_pipeline(
 		VkShaderModule rgen, VkShaderModule rmiss, VkShaderModule rchit,
 		VkDescriptorSetLayout* layouts, int num_layouts);
+
+	Vk_Pipeline create_raster_pipeline(VkShaderModule vertex_shader, VkShaderModule fragment_shader,
+		u32 num_layouts, VkDescriptorSetLayout* layouts);
 
 	void save_screenshot(Vk_Allocated_Image image, const char* filename);
 };

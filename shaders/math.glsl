@@ -91,9 +91,9 @@ vec3 equirectangular_to_vec3(vec2 uv)
     float theta = uv.y * M_PI;
 
     vec3 dir;
-    dir.x = -cos(phi)*sin(theta);
+    dir.z = -cos(phi)*sin(theta);
     dir.y = -cos(theta);
-    dir.z = sin(phi)*sin(theta);
+    dir.x = sin(phi)*sin(theta);
 
     return dir;
 }
@@ -101,7 +101,7 @@ vec3 equirectangular_to_vec3(vec2 uv)
 vec2 equirectangular_to_uv(vec3 dir)
 {
     float theta = acos(-dir.y);
-    float phi = atan(-dir.z, dir.x) + M_PI;
+    float phi = atan(-dir.x, dir.z) + M_PI;
     vec2 uv = vec2(phi / (2.0 * M_PI), theta / M_PI);
     return uv;
 }

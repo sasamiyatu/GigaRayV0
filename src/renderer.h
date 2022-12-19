@@ -101,6 +101,7 @@ struct Renderer
 
 	Vk_Pipeline rt_pipeline;
 	Raytracing_Pipeline primary_ray_pipeline;
+	Vk_Pipeline raster_pipeline;
 
 	Framebuffer framebuffer;
 	Vk_Allocated_Image final_output; // This is what gets blitted into the swapchain at the end
@@ -153,6 +154,7 @@ struct Renderer
 	void vk_command_buffer_single_submit(VkCommandBuffer cmd);
 	Vk_Pipeline vk_create_rt_pipeline();
 	Raytracing_Pipeline create_gbuffer_rt_pipeline();
+	Vk_Pipeline create_raster_pipeline();
 
 	void create_vertex_buffer(Mesh* mesh, VkCommandBuffer cmd);
 	void create_index_buffer(Mesh* mesh, VkCommandBuffer cmd);
@@ -170,7 +172,10 @@ struct Renderer
 	void render_gbuffer();
 	void trace_primary_rays();
 	void end_frame();
-	void draw();
+	void draw(ECS* ecs);
+	void trace_rays(VkCommandBuffer cmd);
+	void tonemap(VkCommandBuffer cmd);
+	void rasterize(VkCommandBuffer cmd, ECS* ecs);
 	void cleanup();
 };
 
