@@ -16,7 +16,7 @@ constexpr bool USE_VALIDATION_LAYERS = false;
 
 struct Vk_Allocated_Buffer
 {
-	VkBuffer buffer;
+	VkBuffer buffer = VK_NULL_HANDLE;
 	VmaAllocation allocation;
 };
 

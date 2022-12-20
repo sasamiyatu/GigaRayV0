@@ -10,11 +10,18 @@ struct Vertex
 	glm::vec4 tangent;
 };
 
+struct Mesh_Primitive
+{
+	u32 vertex_offset;
+	u32 vertex_count;
+	u32 material_id;
+};
+
 struct Mesh
 {
 	std::vector<Vertex> vertices;
 	std::vector<uint32_t> indices;
-	i32 material_id = -1;
+	std::vector<Mesh_Primitive> primitives;
 
 	std::optional<Acceleration_Structure> blas;
 	
@@ -36,4 +43,23 @@ struct Mesh
 		VkAccelerationStructureBuildRangeInfoKHR* range_info);
 };
 
+
+struct Geometry
+{
+	std::vector<Vertex> vertices;
+	std::vector<uint32_t> indices;
+	std::vector<Mesh_Primitive> meshes;
+};
+
+struct Indirect_Draw_Data
+{
+	u32 index_offset;
+	u32 index_count;
+	u32 material_id;
+};
+
+std::vector<Indirect_Draw_Data> merge_meshes(u32 num_meshes, Mesh* meshes, Mesh* out);
+
 Mesh* get_mesh(ECS* ecs, uint32_t entity_id);
+
+Mesh create_sphere(u32 subdivision);

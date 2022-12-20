@@ -39,6 +39,16 @@ int main(int argc, char** argv)
 	Mesh2 gltf = load_gltf_from_file("data/sponza/Sponza.gltf", &ctx, &texture_manager, &material_manager);
 	std::vector<Mesh> meshes(gltf.meshes.size());
 	create_from_mesh2(&gltf, (u32)gltf.meshes.size(), meshes.data());
+	Mesh combined_mesh{};
+	std::vector<Indirect_Draw_Data> draw_data = merge_meshes((u32)meshes.size(), meshes.data(), &combined_mesh);
+	//std::vector<Mesh> meshes;
+	Material test_mat;
+	test_mat.base_color_factor = glm::vec4(0.95, 0.93, 0.88, 1.0);
+	test_mat.metallic_factor = 1.0f;
+	test_mat.roughness_factor = 0.25f;
+	i32 material_id = material_manager.register_resource(test_mat, "test");
+	//meshes.push_back(create_sphere(16));
+	//meshes[0].material_id = material_id;
 
 	ECS ecs{};
 	Transform_Component c{};
@@ -50,12 +60,20 @@ int main(int argc, char** argv)
 	Game_State game_state;
 	game_state.ecs = &ecs;
 
+#if 1
 	for (size_t i = 0; i < meshes.size(); ++i)
 	{
 		i32 mesh_id = mesh_manager.register_resource(meshes[i], std::to_string(i));
 		Static_Mesh_Component meshcomp = { &mesh_manager, mesh_id };
 		ecs.add_entity(Transform_Component(), meshcomp);
 	}
+#else
+	{
+		i32 mesh_id = mesh_manager.register_resource(combined_mesh, "combined");
+		Static_Mesh_Component meshcomp = { &mesh_manager, mesh_id };
+		ecs.add_entity(Transform_Component(), meshcomp);
+	}
+#endif
 	//ecs.add_entity(Transform_Component(), m, r);
 	//ecs.add_entity(c, m, r);
 	{
@@ -81,6 +99,17 @@ int main(int argc, char** argv)
 			{
 				if (event.key.keysym.scancode == SDL_SCANCODE_ESCAPE)
 					goto here;
+				if (event.key.keysym.scancode == SDL_SCANCODE_F1 && !event.key.repeat && event.type == SDL_KEYDOWN)
+				{
+					if (renderer.render_mode == Renderer::PATH_TRACER)
+						renderer.render_mode = Renderer::RASTER;
+					else
+						renderer.render_mode = Renderer::PATH_TRACER;
+
+					renderer.frames_accumulated = 0;
+				}
+				if (event.key.keysym.scancode == SDL_SCANCODE_F2 && !event.key.repeat && event.type == SDL_KEYDOWN)
+					renderer.render_mode = Renderer::SIDE_BY_SIDE;
 				if (!event.key.repeat)
 					handle_key_event(event);
 			}

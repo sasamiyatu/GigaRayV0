@@ -1,6 +1,27 @@
 #include "r_mesh.h"
 #include "resource_manager.h"
 
+std::vector<Indirect_Draw_Data> merge_meshes(u32 num_meshes, Mesh* meshes, Mesh* out)
+{
+	assert(out->vertices.empty());
+	assert(out->indices.empty());
+	std::vector<Indirect_Draw_Data> draw_data;
+	for (u32 i = 0; i < num_meshes; ++i)
+	{
+		u32 start_index = out->vertices.size();
+		u32 index_count = (u32)meshes[i].indices.size();
+		out->vertices.insert(out->vertices.end(), meshes[i].vertices.begin(), meshes[i].vertices.end());
+		for (u32 j = 0; j < index_count; ++j)
+			out->indices.push_back(start_index + meshes[i].indices[j]);
+		Indirect_Draw_Data prim{};
+		prim.index_offset = start_index;
+		prim.index_count = index_count;
+		prim.material_id = meshes[i].primitives[0].material_id;
+		draw_data.push_back(prim);
+	}
+	return draw_data;
+}
+
 Mesh* get_mesh(ECS* ecs, uint32_t entity_id)
 {
 	Static_Mesh_Component* mesh = ecs->get_component<Static_Mesh_Component>(entity_id);
@@ -10,6 +31,82 @@ Mesh* get_mesh(ECS* ecs, uint32_t entity_id)
 	if (!m) return nullptr;
 
 	return m;
+}
+
+Mesh create_sphere(u32 subdivision)
+{
+	Mesh mesh;
+
+	float step_size = 2.f / subdivision;
+	u32 w = subdivision + 1;
+	u32 verts_per_face = w * w;
+	u32 start_face = 0;
+	u32 end_face = 6;
+	for (u32 face = start_face; face < end_face; ++face)
+	{
+		for (u32 i = 0; i <= subdivision; ++i)
+		{
+			for (u32 j = 0; j <= subdivision; ++j)
+			{
+				float x = -1.f + step_size * j;
+				float y = -1.f + step_size * i;
+				float z = 1.f;
+				Vertex v{};
+				glm::vec3 pos;
+				switch (face)
+				{
+				case 0:
+					pos = normalize(glm::vec3(-x, y, z));
+					break;
+				case 1:
+					pos = normalize(glm::vec3(x, y, -z));
+					break;
+				case 2:
+					pos = normalize(glm::vec3(z, -x, y));
+					break;
+				case 3:
+					pos = normalize(glm::vec3(-z, x, y));
+					break;
+				case 4:
+					pos = normalize(glm::vec3(x, z, y));
+					break;
+				case 5:
+					pos = normalize(glm::vec3(-x, -z, y));
+					break;
+				default:
+					assert(false);
+					break;
+				}
+				v.pos = pos * 10.f;
+				float theta = acosf(-pos.y);
+				float phi = atan2f(-pos.z, pos.x) + M_PI;
+				glm::vec2 uv = glm::vec2(phi / (2.0f * M_PI), theta / M_PI);
+				v.texcoord = uv;
+				v.normal = pos;
+				mesh.vertices.push_back(v);
+			}
+		}
+	}
+
+	u32 start_index = 0;
+	for (u32 face = start_face; face < end_face; ++face)
+	{
+		for (u32 i = 0; i < subdivision; ++i)
+		{
+			for (u32 j = 0; j < subdivision; ++j)
+			{
+				glm::ivec3 first_triangle = glm::ivec3(j * w + i, (j + 1) * w + i, (j + 1) * w + i + 1) + glm::ivec3(start_index);
+				glm::ivec3 second_triangle = glm::ivec3(j * w + i, (j + 1) * w + i + 1, j * w + i + 1) + glm::ivec3(start_index);
+				for (int ii = 0; ii < 3; ++ii)
+					mesh.indices.push_back(first_triangle[ii]);
+				for (int ii = 0; ii < 3; ++ii)
+					mesh.indices.push_back(second_triangle[ii]);
+			}
+		}
+		start_index += verts_per_face;
+	}
+
+	return mesh;
 }
 
 uint32_t Mesh::get_vertex_buffer_size()

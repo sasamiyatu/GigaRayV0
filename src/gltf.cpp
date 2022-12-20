@@ -109,7 +109,7 @@ Mesh2 load_gltf_from_file(const char* filepath, Vk_Context* ctx, Resource_Manage
 
     free(stripped);
 
-
+    // One mesh = one draw call?
     for (int i = 0; i < data->meshes_count; ++i)
     {
         for (int j = 0; j < data->meshes[i].primitives_count; ++j)
@@ -224,7 +224,11 @@ void create_from_mesh2(Mesh2* m, u32 mesh_count, Mesh* out_meshes)
     for (u32 i = 0; i < mesh_count; ++i)
     {
         Mesh* mesh = &out_meshes[i];
-        mesh->material_id = m->materials[i];
+        Mesh_Primitive prim{};
+        prim.material_id = m->materials[i];
+        prim.vertex_count = (u32)m->meshes[i].indices.size();
+        prim.vertex_offset = 0;
+        mesh->primitives.push_back(prim);
         mesh->indices = m->meshes[i].indices;
         assert(m->meshes[i].pos.size() == m->meshes[i].normal.size()
             && m->meshes[i].pos.size() == m->meshes[i].texcoord.size());

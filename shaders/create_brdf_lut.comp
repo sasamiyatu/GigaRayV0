@@ -15,6 +15,27 @@ layout( push_constant ) uniform constants
     uvec2 size;
 } control;
 
+float GeometrySchlickGGX(float NdotV, float roughness)
+{
+	float a = roughness;
+	float k = (a * a) / 2.0;
+
+	float nom = NdotV;
+	float denom = NdotV * (1.0 - k) + k;
+
+	return nom / denom;
+}
+// ----------------------------------------------------------------------------
+float GeometrySmith(vec3 N, vec3 V, vec3 L, float roughness)
+{
+	float NdotV = max(dot(N, V), 0.0f);
+	float NdotL = max(dot(N, L), 0.0f);
+	float ggx2 = GeometrySchlickGGX(NdotV, roughness);
+	float ggx1 = GeometrySchlickGGX(NdotL, roughness);
+
+	return ggx1 * ggx2;
+}
+
 vec2 integrate_brdf(float roughness, float NoV)
 {
     vec3 V;
@@ -44,6 +65,7 @@ vec2 integrate_brdf(float roughness, float NoV)
         if (NoL > 0.0f)
         {
             float G2 = Smith_G2_Height_Correlated(alpha, NoL, NoV);
+            //float G2 = GeometrySmith(vec3(0.0, 0.0, 1.0), V, L, roughness);
             float G_vis = G2 * VoH / (NoH * NoV);
             float Fc = pow(1.f - VoH, 5.f);
 

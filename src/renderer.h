@@ -91,8 +91,22 @@ struct Gbuffer
 	Render_Target depth;
 };
 
+enum Render_Targets
+{
+	PATH_TRACER_COLOR = 0,
+	RASTER_COLOR,
+	DEPTH,
+	MAX
+};
+
 struct Renderer
 {
+	enum Render_Mode {
+		PATH_TRACER = 0,
+		RASTER,
+		SIDE_BY_SIDE
+	};
+	
 	i32 window_width, window_height;
 	float aspect_ratio;
 	Vk_Context* context;
@@ -119,9 +133,12 @@ struct Renderer
 	GPU_Buffer gpu_camera_data;
 	Vk_Allocated_Image environment_map;
 	VkSampler bilinear_sampler;
+	VkSampler bilinear_sampler_clamp;
 	VkQueryPool query_pools[FRAMES_IN_FLIGHT];
 	Vk_Allocated_Image brdf_lut;
 	Vk_Allocated_Image prefiltered_envmap;
+
+	Render_Mode render_mode = PATH_TRACER;
 
 	double current_frame_gpu_time;
 	double cpu_frame_begin;

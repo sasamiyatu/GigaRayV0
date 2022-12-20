@@ -386,10 +386,13 @@ void Renderer::create_samplers()
 	cinfo.magFilter = VK_FILTER_LINEAR;
 	cinfo.maxLod = VK_LOD_CLAMP_NONE;
 	vkCreateSampler(context->device, &cinfo, nullptr, &bilinear_sampler);
+	cinfo.addressModeU = cinfo.addressModeV = cinfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+	vkCreateSampler(context->device, &cinfo, nullptr, &bilinear_sampler_clamp);
 
 	g_garbage_collector->push([=]()
 		{
 			vkDestroySampler(context->device, bilinear_sampler, nullptr);
+			vkDestroySampler(context->device, bilinear_sampler_clamp, nullptr);
 		}, Garbage_Collector::SHUTDOWN);
 }
 
@@ -529,7 +532,7 @@ void Renderer::init_scene(ECS* ecs)
 			for (size_t i = 0; i < material_count; ++i)
 			{
 				writeaddr[i] = material_manager->resources[i].resource;
-				assert(material_manager->resources[i].resource.base_color != -1);
+				//assert(material_manager->resources[i].resource.base_color != -1);
 			}
 			vmaUnmapMemory(context->allocator, scene.material_buffer.allocation);
 
@@ -816,7 +819,7 @@ void Renderer::end_frame()
 	cpu_frame_end = timer->get_current_time();
 
 	char title[256];
-	sprintf(title, "cpu time: %.2f ms, gpu time: %.2f ms", (cpu_frame_end - cpu_frame_begin) * 1000.0, current_frame_gpu_time * 1e-6);
+	sprintf(title, "cpu time: %.2f ms, gpu time: %.2f ms, mode: %s", (cpu_frame_end - cpu_frame_begin) * 1000.0, current_frame_gpu_time * 1e-6, render_mode == PATH_TRACER ? "path tracing" : "raster");
 	SDL_SetWindowTitle(platform->window.window, title);
 
 
@@ -828,11 +831,17 @@ void Renderer::draw(ECS* ecs)
 {
 	VkCommandBuffer cmd = get_current_frame_command_buffer();
 
-#if 0
-	trace_rays(cmd);
-#else
-	rasterize(cmd, ecs);
-#endif
+
+	if(render_mode == PATH_TRACER)
+		trace_rays(cmd);
+	else if (render_mode == RASTER)
+		rasterize(cmd, ecs);
+	else if (render_mode == SIDE_BY_SIDE)
+	{
+		trace_rays(cmd);
+		full_barrier(cmd);
+		rasterize(cmd, ecs);
+	}
 
 	tonemap(cmd);
 	
@@ -853,7 +862,7 @@ void Renderer::trace_rays(VkCommandBuffer cmd)
 	{
 		Descriptor_Info descriptor_info[] =
 		{
-			Descriptor_Info(0, framebuffer.render_targets[0].image.image_view, VK_IMAGE_LAYOUT_GENERAL),
+			Descriptor_Info(0, framebuffer.render_targets[PATH_TRACER_COLOR].image.image_view, VK_IMAGE_LAYOUT_GENERAL),
 			Descriptor_Info(scene.tlas.value().acceleration_structure),
 			Descriptor_Info(gpu_camera_data.gpu_buffer.buffer, 0, aligned_size),
 			Descriptor_Info(bilinear_sampler, environment_map.image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
@@ -917,17 +926,24 @@ void Renderer::tonemap(VkCommandBuffer cmd)
 	
 	{
 		Descriptor_Info descriptor_info[] = {
-			Descriptor_Info(0, framebuffer.render_targets[0].image.image_view,  VK_IMAGE_LAYOUT_GENERAL),
+			Descriptor_Info(0, framebuffer.render_targets[PATH_TRACER_COLOR].image.image_view,  VK_IMAGE_LAYOUT_GENERAL),
+			Descriptor_Info(0, framebuffer.render_targets[RASTER_COLOR].image.image_view,  VK_IMAGE_LAYOUT_GENERAL),
 			Descriptor_Info(0, final_output.image_view ,VK_IMAGE_LAYOUT_GENERAL),
-			Descriptor_Info(bilinear_sampler, prefiltered_envmap.image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+			Descriptor_Info(bilinear_sampler_clamp, brdf_lut.image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
 			//Descriptor_Info(0, brdf_lut.image_view, VK_IMAGE_LAYOUT_GENERAL)
 			//Descriptor_Info(0, prefiltered_envmap.image_view, VK_IMAGE_LAYOUT_GENERAL)
 		};
 		vkCmdPushDescriptorSetWithTemplateKHR(cmd, compute_pp.update_template, compute_pp.layout, 0, descriptor_info);
 	}
-
-	glm::ivec2 p = glm::ivec2(size.x, size.y);
-	vkCmdPushConstants(cmd, compute_pp.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(p), &p);
+	
+	struct
+	{
+		glm::ivec2 size;
+		float split_pos;
+	} pc;
+	pc.size = glm::ivec2(size.x, size.y);
+	pc.split_pos = render_mode == PATH_TRACER ? 1.0f : render_mode == SIDE_BY_SIDE ? 0.5f : 0.0f;
+	vkCmdPushConstants(cmd, compute_pp.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
 	vkCmdDispatch(cmd, group_count.x, group_count.y, group_count.z);
 	vkCmdPipelineBarrier(cmd,
 		VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
@@ -948,14 +964,14 @@ void Renderer::rasterize(VkCommandBuffer cmd, ECS* ecs)
 	depth_clear.depthStencil.depth = 0.f;
 
 	VkRenderingAttachmentInfo attachment_info{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
-	attachment_info.imageView = framebuffer.render_targets[0].image.image_view;
+	attachment_info.imageView = framebuffer.render_targets[RASTER_COLOR].image.image_view;
 	attachment_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 	attachment_info.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
 	attachment_info.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
 	attachment_info.clearValue = clear_value;
 
 	VkRenderingAttachmentInfo depth_attachment_info{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
-	depth_attachment_info.imageView = framebuffer.render_targets[1].image.image_view;
+	depth_attachment_info.imageView = framebuffer.render_targets[DEPTH].image.image_view;
 	depth_attachment_info.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
 	depth_attachment_info.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
 	depth_attachment_info.clearValue = depth_clear;
@@ -970,11 +986,12 @@ void Renderer::rasterize(VkCommandBuffer cmd, ECS* ecs)
 	vkCmdBeginRendering(cmd, &rendering_info);
 
 	VkViewport viewport{};
-	viewport.height = (float)window_height;
+	viewport.height = -(float)window_height;
 	viewport.width = (float)window_width;
 	viewport.minDepth = 0.0f; 
 	viewport.maxDepth = 1.0f;
-	viewport.x = viewport.y = 0.0f;
+	viewport.x = 0.f;
+	viewport.y = (float)window_height;
 	vkCmdSetViewport(cmd, 0, 1, &viewport);
 
 	vkCmdSetScissor(cmd, 0, 1, &render_area);
@@ -987,8 +1004,8 @@ void Renderer::rasterize(VkCommandBuffer cmd, ECS* ecs)
 	{
 		Descriptor_Info descriptor_info[] =
 		{
-			Descriptor_Info(bilinear_sampler, environment_map.image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
-			Descriptor_Info(bilinear_sampler, environment_map.image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
+			Descriptor_Info(bilinear_sampler_clamp, brdf_lut.image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
+			Descriptor_Info(bilinear_sampler, prefiltered_envmap.image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
 			Descriptor_Info(gpu_camera_data.gpu_buffer.buffer, 0, aligned_size),
 			Descriptor_Info(bilinear_sampler, environment_map.image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
 		};
@@ -1001,7 +1018,7 @@ void Renderer::rasterize(VkCommandBuffer cmd, ECS* ecs)
 	for (auto [a] : ecs->filter<Static_Mesh_Component>())
 	{
 		Mesh* mesh = a->manager->get_resource_with_id(a->mesh_id);
-		i32 mat_id = mesh->material_id;
+		i32 mat_id = mesh->primitives[0].material_id;
 		i32 mesh_id = a->mesh_id;
 
 		u32 index = ((mat_id & 0x3FF) << 14) | (mesh_id & 0x3FFF);
@@ -1058,16 +1075,19 @@ static void vk_begin_command_buffer(VkCommandBuffer cmd)
 
 void Renderer::vk_create_render_targets(VkCommandBuffer cmd)
 {
+	framebuffer.render_targets.resize(MAX);
 	i32 w, h;
 	platform->get_window_size(&w, &h);
-	Render_Target color_attachment;
-	color_attachment.format = VK_FORMAT_R32G32B32A32_SFLOAT;
-	color_attachment.image = context->allocate_image(
-		{ (uint32_t)w, (uint32_t)h, 1 },
-		color_attachment.format,
-		VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT
-	);
-
+	Render_Target color_attachments[2];
+	for (size_t i = 0; i < std::size(color_attachments); ++i)
+	{
+		color_attachments[i].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+		color_attachments[i].image = context->allocate_image(
+			{ (uint32_t)w, (uint32_t)h, 1 },
+			color_attachments[i].format,
+			VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT
+		);
+	}
 	Render_Target depth_attachment;
 	depth_attachment.format = VK_FORMAT_D32_SFLOAT;
 	depth_attachment.image = context->allocate_image(
@@ -1137,10 +1157,13 @@ void Renderer::vk_create_render_targets(VkCommandBuffer cmd)
 
 	vk_begin_command_buffer(cmd);
 
-	vk_transition_layout(cmd, color_attachment.image.image,
-		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-		0, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
-		VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
+	for (size_t i = 0; i < std::size(color_attachments); ++i)
+	{
+		vk_transition_layout(cmd, color_attachments[i].image.image,
+			VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+			0, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+			VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
+	}
 
 	vk_transition_layout(cmd, depth_attachment.image.image,
 		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
@@ -1176,10 +1199,11 @@ void Renderer::vk_create_render_targets(VkCommandBuffer cmd)
 	vkEndCommandBuffer(cmd);
 	vk_command_buffer_single_submit(cmd);
 	vkQueueWaitIdle(context->graphics_queue);
-	color_attachment.layout = VK_IMAGE_LAYOUT_GENERAL;
-	color_attachment.name = "Color";
-	framebuffer.render_targets.push_back(color_attachment);
-	framebuffer.render_targets.push_back(depth_attachment);
+	color_attachments[0].layout = VK_IMAGE_LAYOUT_GENERAL;
+	color_attachments[0].name = "Color";
+	framebuffer.render_targets[PATH_TRACER_COLOR] = color_attachments[0];
+	framebuffer.render_targets[RASTER_COLOR] = color_attachments[1];
+	framebuffer.render_targets[DEPTH] = depth_attachment;
 }
 
 static bool check_extensions(const std::vector<const char*>& device_exts, const std::vector<VkExtensionProperties>& props)
@@ -1353,7 +1377,7 @@ void Renderer::create_top_level_acceleration_structure(ECS* ecs, VkCommandBuffer
 				instance.transform.matrix[j][i] = transform[i][j];
 			}
 
-		i32 mat_id = m->material_id;
+		i32 mat_id = m->primitives[0].material_id;
 		i32 mesh_id = mesh->mesh_id;
 
 		instance.instanceCustomIndex = ((mat_id & 0x3FF) << 14) | (mesh_id & 0x3FFF);
@@ -1495,14 +1519,14 @@ Vk_Allocated_Image Renderer::prefilter_envmap(VkCommandBuffer cmd, Vk_Allocated_
 		VK_IMAGE_TILING_OPTIMAL, mip_levels
 	);
 
-	Vk_Pipeline prefilter_envmap_pp = context->create_compute_pipeline("shaders/spirv/prefilter_envmap.comp.spv");
 
 	vk_transition_layout(cmd, prefiltered.image,
 		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
 		0, VK_ACCESS_SHADER_WRITE_BIT,
 		VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, mip_levels
 	);
-
+#if PREFILTER_ENVMAP
+	Vk_Pipeline prefilter_envmap_pp = context->create_compute_pipeline("shaders/spirv/prefilter_envmap.comp.spv");
 	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, prefilter_envmap_pp.pipeline);
 
 	float roughness_step = 1.0f / float(mip_levels - 1);
@@ -1540,12 +1564,13 @@ Vk_Allocated_Image Renderer::prefilter_envmap(VkCommandBuffer cmd, Vk_Allocated_
 		size /= 2u;
 		vkCmdDispatch(cmd, group_size.x, group_size.y, 1);
 	}
-
+#endif
 	vk_transition_layout(cmd, prefiltered.image,
 		VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
 		VK_ACCESS_SHADER_WRITE_BIT, 0,
 		VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, mip_levels
 	);
+
 
 	return prefiltered;
 }
@@ -1559,7 +1584,6 @@ void Renderer::create_lookup_textures()
 	image_extent.height = 512;
 	image_extent.depth = 1;
 	brdf_lut = context->allocate_image(image_extent, VK_FORMAT_R16G16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
-
 
 	Descriptor_Info info[] = {
 		{0, brdf_lut.image_view, VK_IMAGE_LAYOUT_GENERAL}
@@ -1575,6 +1599,8 @@ void Renderer::create_lookup_textures()
 		VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
 	);
 
+#if CREATE_BRDF_LUT
+
 	glm::uvec3 group_count = glm::uvec3(512 / 8, 512 / 8, 1);
 
 	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline);
@@ -1582,15 +1608,15 @@ void Renderer::create_lookup_textures()
 	glm::uvec2 size = glm::uvec2(512, 512);
 	vkCmdPushConstants(cmd, pipeline.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(size), &size);
 	vkCmdDispatch(cmd, group_count.x, group_count.y, group_count.z);
-
-/*	vkinit::vk_transition_layout(
+#endif
+	vkinit::vk_transition_layout(
 		cmd, brdf_lut.image,
 		VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
 		VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
 		VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
 	);
-*/
 
+#
 	vkEndCommandBuffer(cmd);
 
 	vk_command_buffer_single_submit(cmd);

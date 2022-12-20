@@ -1067,7 +1067,9 @@ Vk_Pipeline Vk_Context::create_raster_pipeline(VkShaderModule vertex_shader, VkS
 
 	VkPipelineRasterizationStateCreateInfo raster_state{ VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO };
 	raster_state.polygonMode = VK_POLYGON_MODE_FILL;
-	raster_state.cullMode = VK_CULL_MODE_NONE;
+	//raster_state.polygonMode = VK_POLYGON_MODE_LINE;
+	//raster_state.cullMode = VK_CULL_MODE_NONE;
+	raster_state.cullMode = VK_CULL_MODE_BACK_BIT;
 	raster_state.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
 
 	VkPipelineMultisampleStateCreateInfo multisample_state = vkinit::pipeline_multisample_state_create_info(VK_SAMPLE_COUNT_1_BIT);
