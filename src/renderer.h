@@ -137,6 +137,7 @@ struct Renderer
 	VkQueryPool query_pools[FRAMES_IN_FLIGHT];
 	Vk_Allocated_Image brdf_lut;
 	Vk_Allocated_Image prefiltered_envmap;
+	GPU_Buffer indirect_draw_buffer;
 
 	Render_Mode render_mode = PATH_TRACER;
 

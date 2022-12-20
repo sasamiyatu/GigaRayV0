@@ -40,7 +40,7 @@ int main(int argc, char** argv)
 	std::vector<Mesh> meshes(gltf.meshes.size());
 	create_from_mesh2(&gltf, (u32)gltf.meshes.size(), meshes.data());
 	Mesh combined_mesh{};
-	std::vector<Indirect_Draw_Data> draw_data = merge_meshes((u32)meshes.size(), meshes.data(), &combined_mesh);
+	merge_meshes((u32)meshes.size(), meshes.data(), &combined_mesh);
 	//std::vector<Mesh> meshes;
 	Material test_mat;
 	test_mat.base_color_factor = glm::vec4(0.95, 0.93, 0.88, 1.0);
@@ -60,7 +60,7 @@ int main(int argc, char** argv)
 	Game_State game_state;
 	game_state.ecs = &ecs;
 
-#if 1
+#if 0
 	for (size_t i = 0; i < meshes.size(); ++i)
 	{
 		i32 mesh_id = mesh_manager.register_resource(meshes[i], std::to_string(i));

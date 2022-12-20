@@ -698,7 +698,7 @@ VkDescriptorSetLayout Vk_Context::create_descriptor_set_layout(u32 num_shaders, 
 				bindings[i].binding = i;
 				bindings[i].descriptorCount = 1;
 				bindings[i].descriptorType = shader->descriptor_types[i];
-				bindings[i].stageFlags = shader->shader_stage;
+				bindings[i].stageFlags |= shader->shader_stage;
 			}
 		}
 	}

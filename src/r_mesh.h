@@ -51,14 +51,7 @@ struct Geometry
 	std::vector<Mesh_Primitive> meshes;
 };
 
-struct Indirect_Draw_Data
-{
-	u32 index_offset;
-	u32 index_count;
-	u32 material_id;
-};
-
-std::vector<Indirect_Draw_Data> merge_meshes(u32 num_meshes, Mesh* meshes, Mesh* out);
+void merge_meshes(u32 num_meshes, Mesh* meshes, Mesh* out);
 
 Mesh* get_mesh(ECS* ecs, uint32_t entity_id);
 

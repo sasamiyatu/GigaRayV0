@@ -18,6 +18,7 @@ static constexpr int MAX_MATERIAL_COUNT = 256;
 
 static void vk_begin_command_buffer(VkCommandBuffer cmd);
 
+constexpr u32 MAX_INDIRECT_DRAWS = 1'000'000;
 constexpr int MAX_BINDLESS_RESOURCES = 16536;
 // FIXME: We're gonna need more stuff than this 
 void Renderer::create_bindless_descriptor_set_layout()
@@ -425,6 +426,9 @@ void Renderer::initialize()
 	primary_ray_pipeline = create_gbuffer_rt_pipeline();
 	raster_pipeline = create_raster_pipeline();
 
+	u32 indirect_buffer_size = MAX_INDIRECT_DRAWS * sizeof(VkDrawIndexedIndirectCommand);
+	indirect_draw_buffer = context->create_gpu_buffer(indirect_buffer_size, VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+
 	transition_swapchain_images(get_current_frame_command_buffer());
 	vk_create_render_targets(get_current_frame_command_buffer());
 	
@@ -587,6 +591,22 @@ void Renderer::init_scene(ECS* ecs)
 			continue;
 		create_vertex_buffer(m, cmd);
 		create_index_buffer(m, cmd);
+		
+		std::vector<VkDrawIndexedIndirectCommand> indirect_draw_commands(m->primitives.size());
+		u32 count = (u32)m->primitives.size();
+		for (u32 i = 0; i < count; ++i)
+		{
+			u32 mesh_id = mesh->mesh_id;
+			u32 index = ((m->primitives[i].material_id & 0x3FF) << 14) | (mesh_id & 0x3FFF);
+
+			indirect_draw_commands[i].indexCount = m->primitives[i].vertex_count;
+			indirect_draw_commands[i].instanceCount = 1;
+			indirect_draw_commands[i].firstIndex = m->primitives[i].vertex_offset;
+			indirect_draw_commands[i].vertexOffset = 0;
+			indirect_draw_commands[i].firstInstance = index;
+		}
+		indirect_draw_buffer.update_staging_buffer(context->allocator, current_frame_index, indirect_draw_commands.data(), indirect_draw_commands.size() * sizeof(indirect_draw_commands[0]));
+		indirect_draw_buffer.upload(cmd, current_frame_index);
 	}
 
 	memory_barrier(cmd,
@@ -1024,7 +1044,8 @@ void Renderer::rasterize(VkCommandBuffer cmd, ECS* ecs)
 		u32 index = ((mat_id & 0x3FF) << 14) | (mesh_id & 0x3FFF);
 
 		vkCmdBindIndexBuffer(cmd, mesh->index_buffer.buffer, 0, VK_INDEX_TYPE_UINT32);
-		vkCmdDrawIndexed(cmd, (u32)mesh->indices.size(), 1, 0, 0, index);
+		//vkCmdDrawIndexed(cmd, (u32)mesh->indices.size(), 1, 0, 0, index);
+		vkCmdDrawIndexedIndirect(cmd, indirect_draw_buffer.gpu_buffer.buffer, 0, (u32)mesh->primitives.size(), sizeof(VkDrawIndexedIndirectCommand));
 	}
 
 	vkCmdEndRendering(cmd);

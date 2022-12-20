@@ -1,6 +1,9 @@
 #version 460
 #extension GL_GOOGLE_include_directive : enable
+#extension GL_EXT_scalar_block_layout : enable
+#extension GL_EXT_nonuniform_qualifier : enable
 #include "math.glsl"
+#include "scene.glsl"
 
 layout(set = 0, binding = 0) uniform sampler2D brdf_lut;
 layout(set = 0, binding = 1) uniform sampler2D prefiltered_envmap;
@@ -11,6 +14,7 @@ layout(location = 2) in vec2 texcoord;
 layout(location = 3) in vec3 frag_pos;
 layout(location = 4) in vec3 camera_pos;
 layout(location = 5) flat in float roughness;
+layout (location = 6) flat in Material mat;
 
 const vec3 SILVER = vec3(0.95, 0.93, 0.88);
 
@@ -34,7 +38,11 @@ void main()
     vec4 t = texture(brdf_lut, vec2(NdotV, roughness));
     vec4 t3 = texture(brdf_lut, texcoord);
     vec2 t2 = texture(brdf_lut, vec2(NdotV, 0.01)).rg;
+
+    vec3 albedo = texture(textures[mat.base_color_tex], texcoord).rgb;
+    albedo = pow(albedo, vec3(2.2));
+
     vec3 specular_color = fresnelSchlickRoughness(NdotV, SILVER, roughness);
     vec3 specular = env * (specular_color * t.x + t.y);
-    color = vec4(normal * 0.5 + 0.5, 1.0);
+    color = vec4(albedo, 1.0);
 }

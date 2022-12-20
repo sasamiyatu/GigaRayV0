@@ -18,12 +18,15 @@ layout (location = 2) out vec2 texcoord;
 layout (location = 3) out vec3 frag_pos;
 layout (location = 4) flat out vec3 camera_pos;
 layout (location = 5) flat out float roughness;
+layout (location = 6) flat out Material mat;
 
 void main()
 {
     int geom_id = int((gl_InstanceIndex) & 0x3FFF);
     int material_id = int((gl_InstanceIndex >> 14) & 0x3FF);
-    
+
+    mat = material_array.materials[material_id];
+
     Material mat = material_array.materials[material_id];
     base_color = mat.base_color_factor.rgb;
     mat4 xform = camera_data.proj * camera_data.view;

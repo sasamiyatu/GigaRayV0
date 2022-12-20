@@ -1,25 +1,25 @@
 #include "r_mesh.h"
 #include "resource_manager.h"
 
-std::vector<Indirect_Draw_Data> merge_meshes(u32 num_meshes, Mesh* meshes, Mesh* out)
+void merge_meshes(u32 num_meshes, Mesh* meshes, Mesh* out)
 {
 	assert(out->vertices.empty());
 	assert(out->indices.empty());
-	std::vector<Indirect_Draw_Data> draw_data;
 	for (u32 i = 0; i < num_meshes; ++i)
 	{
-		u32 start_index = out->vertices.size();
+		u32 start_index = (u32)out->vertices.size();
+		u32 index_offset = (u32)out->indices.size();
 		u32 index_count = (u32)meshes[i].indices.size();
 		out->vertices.insert(out->vertices.end(), meshes[i].vertices.begin(), meshes[i].vertices.end());
 		for (u32 j = 0; j < index_count; ++j)
 			out->indices.push_back(start_index + meshes[i].indices[j]);
-		Indirect_Draw_Data prim{};
-		prim.index_offset = start_index;
-		prim.index_count = index_count;
+		Mesh_Primitive prim{};
+		prim.vertex_offset = index_offset;
+		prim.vertex_count = index_count;
+		assert(meshes[i].primitives.size() == 1);
 		prim.material_id = meshes[i].primitives[0].material_id;
-		draw_data.push_back(prim);
+		out->primitives.push_back(prim);
 	}
-	return draw_data;
 }
 
 Mesh* get_mesh(ECS* ecs, uint32_t entity_id)
