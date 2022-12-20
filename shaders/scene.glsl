@@ -28,12 +28,21 @@ layout (set = 1, binding = 3, scalar) readonly buffer material_array_t
     Material materials[];
 } material_array;
 
+layout(set = 1, binding = 4, scalar) readonly buffer primitive_info_t
+{
+    Primitive_Info primitives[];
+} primitive_info_array[];
+
 Vertex get_interpolated_vertex(int custom_instance_id, int primitive_id, vec2 barycentrics)
 {
     int geom_id = int((custom_instance_id) & 0x3FFF);
-    int material_id = int((custom_instance_id >> 14) & 0x3FF);
+    int prim_id = int((custom_instance_id >> 14) & 0x3FF);
 
-    uvec3 inds = index_buffer_array[geom_id].indices[primitive_id].index;
+    Primitive_Info prim_info = primitive_info_array[geom_id].primitives[prim_id];
+
+    uint material_id = prim_info.material_index;
+
+    uvec3 inds = index_buffer_array[geom_id].indices[primitive_id + prim_info.vertex_offset / 3].index;
     vec3 v0 = vertex_buffer_array[geom_id].verts[inds.x].pos;
     vec3 v1 = vertex_buffer_array[geom_id].verts[inds.y].pos;
     vec3 v2 = vertex_buffer_array[geom_id].verts[inds.z].pos;

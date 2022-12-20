@@ -141,6 +141,7 @@ void Vk_Context::find_physical_device()
 		VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR
 	};
 	phys_dev_props.pNext = &rt_pipeline_props;
+	rt_pipeline_props.pNext = &acceleration_structure_properties;
 	vkGetPhysicalDeviceProperties2(physical_device, &phys_dev_props);
 	physical_device_properties = phys_dev_props;
 

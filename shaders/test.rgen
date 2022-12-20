@@ -8,7 +8,7 @@
 #define SQUARE_ROUGHNESS
 #define MAX_BOUNCES 4
 #define RAY_TRACING
-//#define NEE
+#define NEE
 
 #include "test.glsl"
 #include "scene.glsl"
@@ -114,8 +114,11 @@ void main()
     
     int geom_id = int((pay.instance_id) & 0x3FFF);
     int material_id = int((pay.instance_id >> 14) & 0x3FF);
+    
+    Primitive_Info prim_info = primitive_info_array[geom_id].primitives[material_id];
+
     Vertex v = get_interpolated_vertex(pay.instance_id, pay.prim_id, pay.barycentrics);
-    Material mat = material_array.materials[material_id];
+    Material mat = material_array.materials[prim_info.material_index];
     if (gl_LaunchIDEXT.xy == ivec2(640, 360))
     {
         debugPrintfEXT("id: %d, tex_id: %d", material_id, mat.base_color_tex);
@@ -124,12 +127,10 @@ void main()
     vec3 albedo = mat.base_color_tex != -1 ? textureLod(textures[mat.base_color_tex], texcoord, 0).rgb : mat.base_color_factor.rgb;
     albedo = pow(albedo, vec3(2.2));
     vec3 mr = mat.metallic_roughness_tex != -1 ? textureLod(textures[mat.metallic_roughness_tex], v.texcoord, 0).rgb : vec3(0.0, mat.roughness_factor, mat.metallic_factor);
-    if (pay.instance_id != -1)
-        c = vec3(1.0, 0.0, 1.0);
-    if (mr.b > 0.2)
-        imageStore(output_image, ivec2(gl_LaunchIDEXT), vec4(1.0, 0.0, 1.0, 1.0));
-    else
-        imageStore(output_image, ivec2(gl_LaunchIDEXT), vec4(albedo, 1.0));
+    uvec4 random = uvec4(prim_info.material_index, 0, 0, 0);
+    random = pcg4d(random);
+    vec4 r_color = vec4(random) * ldexp(1.0, -32);
+    imageStore(output_image, ivec2(gl_LaunchIDEXT), vec4(albedo, 1.0));
     return;
 #endif 
 
@@ -165,7 +166,7 @@ void main()
             float roughness = v.material.roughness;
             float metallic = v.material.metallic;
             //Next event estimation
-            #if NEE
+            #ifdef NEE
             {
                 traceRayEXT(
                     scene,

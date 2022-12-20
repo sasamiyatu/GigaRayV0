@@ -15,6 +15,7 @@ struct Mesh_Primitive
 	u32 vertex_offset;
 	u32 vertex_count;
 	u32 material_id;
+	std::optional<Acceleration_Structure> acceleration_structure;
 };
 
 struct Mesh
@@ -22,14 +23,13 @@ struct Mesh
 	std::vector<Vertex> vertices;
 	std::vector<uint32_t> indices;
 	std::vector<Mesh_Primitive> primitives;
-
-	std::optional<Acceleration_Structure> blas;
 	
 	Vk_Allocated_Buffer vertex_buffer;
 	Vk_Allocated_Buffer index_buffer;
 	VkDeviceAddress vertex_buffer_address;
 	VkDeviceAddress index_buffer_address;
-
+	
+	GPU_Buffer instance_data_buffer;
 
 	uint32_t get_vertex_buffer_size();
 	uint32_t get_index_buffer_size();
@@ -43,6 +43,12 @@ struct Mesh
 		VkAccelerationStructureBuildRangeInfoKHR* range_info);
 };
 
+struct Primitive_Info
+{
+	u32 material_index;
+	u32 vertex_count;
+	u32 vertex_offset;
+};
 
 struct Geometry
 {

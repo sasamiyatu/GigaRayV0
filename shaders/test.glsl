@@ -35,6 +35,13 @@ struct Vertex
     Material_Properties material;
 };
 
+struct Primitive_Info
+{
+    uint material_index;
+    uint vertex_count;
+    uint vertex_offset;
+};
+
 struct Index_Data
 {
     uvec3 index;

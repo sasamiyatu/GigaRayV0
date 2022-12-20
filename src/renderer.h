@@ -138,6 +138,7 @@ struct Renderer
 	Vk_Allocated_Image brdf_lut;
 	Vk_Allocated_Image prefiltered_envmap;
 	GPU_Buffer indirect_draw_buffer;
+	GPU_Buffer instance_data_buffer;
 
 	Render_Mode render_mode = PATH_TRACER;
 

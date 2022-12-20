@@ -122,6 +122,7 @@ struct Vk_Context
 	VkQueue graphics_queue;
 	Async_Upload async_upload;
 	VkPhysicalDeviceProperties2 physical_device_properties;
+	VkPhysicalDeviceAccelerationStructurePropertiesKHR acceleration_structure_properties = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR };
 
 	std::array<Per_Frame_Objects, FRAMES_IN_FLIGHT> frame_objects;
 
