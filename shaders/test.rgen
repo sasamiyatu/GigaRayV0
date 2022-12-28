@@ -9,6 +9,7 @@
 #define MAX_BOUNCES 4
 #define RAY_TRACING
 #define NEE
+#define OWN_BRDF
 
 #include "test.glsl"
 #include "scene.glsl"
@@ -17,7 +18,11 @@
 #include "material.glsl"
 #include "ggx.glsl"
 #include "sampling.glsl"
+#ifdef OWN_BRDF
 #include "brdf.glsl"
+#else
+#include "brdf.h"
+#endif
 
 layout( push_constant ) uniform constants
 {
@@ -27,7 +32,6 @@ layout( push_constant ) uniform constants
 layout(location = 0) rayPayloadEXT Ray_Payload pay;
 layout(location = 1) rayPayloadEXT Miss_Payload miss_payload;
 layout(binding = 0, set = 0, rgba32f) uniform image2D output_image;
-
 
 vec3 sample_environment_map(vec3 dir, sampler2D s)
 {
@@ -59,7 +63,7 @@ vec3 offset_ray(vec3 p, vec3 n)
 
 float get_specular_probability(Material_Properties material, vec3 V, vec3 shading_normal)
 {
-    float f0 = luminance(mix(DIELECTRIC_F0, material.base_color, material.metallic));
+    float f0 = luminance(mix(vec3(0.04), material.base_color, material.metallic));
     float diffuse_reflectance = luminance((1.0 - material.metallic) * material.base_color);
     float fresnel = clamp(luminance(f_schlick(vec3(f0), vec3(1.0), max(0.f, dot(V, shading_normal)))), 0.0, 1.0);
 
@@ -130,7 +134,7 @@ void main()
     uvec4 random = uvec4(prim_info.material_index, 0, 0, 0);
     random = pcg4d(random);
     vec4 r_color = vec4(random) * ldexp(1.0, -32);
-    imageStore(output_image, ivec2(gl_LaunchIDEXT), vec4(albedo, 1.0));
+    imageStore(output_image, ivec2(gl_LaunchIDEXT), vec4(v.normal * 0.5 + 0.5, 1.0));
     return;
 #endif 
 
@@ -165,8 +169,17 @@ void main()
             ro = p + v.geometric_normal * 0.001;
             float roughness = v.material.roughness;
             float metallic = v.material.metallic;
+#ifndef OWN_BRDF
+            MaterialProperties mat_props;
+            mat_props.baseColor = albedo;
+            mat_props.metalness = metallic;
+            mat_props.roughness = roughness;
+            mat_props.emissive = vec3(0.0);
+            mat_props.transmissivness = 0.0;
+            mat_props.opacity = 1.0;
+#endif
             //Next event estimation
-            #ifdef NEE
+#ifdef NEE
             {
                 traceRayEXT(
                     scene,
@@ -184,10 +197,15 @@ void main()
                 if (pay.prim_id == -1)
                 {
                     vec3 V = -rd;
-                    radiance += throughput * eval_combined_brdf(normal, L, V, v.material) * 10.f;
+#ifdef OWN_BRDF
+                    radiance += throughput * eval_combined_brdf(normal, L, V, v.material);
+#else
+                    vec3 brdf = evalCombinedBRDF(normal, L, V, mat_props);
+                    radiance += throughput * brdf;
+#endif
                 }
             }
-            #endif
+#endif
             float spec_probability = get_specular_probability(v.material, -rd, normal);
             vec4 rand = vec4(pcg4d(seed)) * ldexp(1.0, -32);
             int brdf_type;
@@ -211,10 +229,17 @@ void main()
 
             vec3 brdf_weight;
             vec3 new_dir;
+#ifdef OWN_BRDF
             if (!eval_indirect_combined_brdf(rand.yz, normal, v.geometric_normal, -rd, v.material, brdf_type, new_dir, brdf_weight))
             {
                 break;
             }
+#else
+            if (!evalIndirectCombinedBRDF(rand.yz, normal, v.geometric_normal, -rd, mat_props, brdf_type, new_dir, brdf_weight))
+            {
+                break;
+            }
+#endif
             rd = new_dir;
             throughput *= brdf_weight;
             if (any(isnan(throughput)))

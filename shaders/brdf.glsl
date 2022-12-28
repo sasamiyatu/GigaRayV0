@@ -33,6 +33,11 @@ struct brdf_data
     float vdoth;
 };
 
+float luminance(vec3 rgb)
+{
+	return dot(rgb, vec3(0.2126f, 0.7152f, 0.0722f));
+}
+
 brdf_data prepare_brdf_data(vec3 view, vec3 shading_normal, vec3 light_direction, vec3 half_vector, Material_Properties mat)
 {
     brdf_data data;

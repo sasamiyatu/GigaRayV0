@@ -31,8 +31,9 @@ inline float saturate(float x) { return clamp(x, 0.0f, 1.0f); }
 #define float4 vec4
 #define input input_
 
-float saturate(float x) { return clamp(x, 0.0f, 1.0f); }
-vec3 saturate(vec3 x) { return clamp(x, vec3(0.f), vec3(1.0f)); }
+
+float saturate(float x);// { return clamp(x, 0.0f, 1.0f); }
+vec3 saturate(vec3 x);// { return clamp(x, vec3(0.f), vec3(1.0f)); }
 float rsqrt(float x) { return inversesqrt(x); }
 
 #define lerp mix

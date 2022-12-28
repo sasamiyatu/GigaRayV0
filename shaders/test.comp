@@ -36,6 +36,7 @@ void main()
     color.rgb = color.rgb / (color.rgb + 1.0);
     color.rgb *= exposure;
     vec3 gamma_corrected = pow(color.rgb, vec3(0.4545));
+    //vec3 gamma_corrected = color.rgb;
     imageStore(output_image, p.xy, vec4(gamma_corrected.rgb, 1.0));
 
     //vec4 v = imageLoad(test_img, p.xy + ivec2(0, 500));

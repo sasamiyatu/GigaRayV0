@@ -5,7 +5,7 @@
 #include "vk_helpers.h"
 #include "shaders.h"
 
-#define VSYNC 0
+#define VSYNC 1
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL debug_callback(
 	VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
