@@ -7,6 +7,7 @@ add_library(cgltf INTERFACE)
 
 add_library(tinyobjloader STATIC)
 add_library(spirv-reflect STATIC)
+add_library(xatlas STATIC)
 
 target_include_directories(vma INTERFACE vma/include)
 target_include_directories(glm INTERFACE glm)
@@ -34,7 +35,13 @@ target_sources(spirv-reflect PRIVATE
     spirv-reflect/spirv_reflect.c
 )
 
+target_sources(xatlas PRIVATE
+    xatlas/source/xatlas/xatlas.h
+    xatlas/source/xatlas/xatlas.cpp
+)
+
 target_include_directories(spirv-reflect PUBLIC spirv_reflect)
 target_include_directories(tinyobjloader PUBLIC tinyobjloader)
+target_include_directories(xatlas PUBLIC xatlas/source/xatlas)
 
 target_link_libraries(sdl2 INTERFACE SDL2 SDL2main)

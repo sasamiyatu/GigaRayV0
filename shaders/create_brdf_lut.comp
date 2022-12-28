@@ -36,6 +36,11 @@ float GeometrySmith(vec3 N, vec3 V, vec3 L, float roughness)
 	return ggx1 * ggx2;
 }
 
+float saturate(float f)
+{
+    return clamp(f, 0.0, 1.0);
+}
+
 vec2 integrate_brdf(float roughness, float NoV)
 {
     vec3 V;

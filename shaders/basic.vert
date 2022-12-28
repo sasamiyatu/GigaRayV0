@@ -24,7 +24,7 @@ void main()
 {
     int geom_id = int((gl_InstanceIndex) & 0x3FFF);
     int material_id = int((gl_InstanceIndex >> 14) & 0x3FF);
-
+    geom_id = 0;
     mat = material_array.materials[material_id];
 
     Material mat = material_array.materials[material_id];
