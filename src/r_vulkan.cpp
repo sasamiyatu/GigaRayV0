@@ -1114,6 +1114,23 @@ Vk_Pipeline Vk_Context::create_raster_pipeline(VkShaderModule vertex_shader, VkS
 	return pp;
 }
 
+void Vk_Context::free_command_buffer(VkCommandBuffer cmd)
+{
+	vkFreeCommandBuffers(device, command_pool, 1, &cmd);
+}
+
+VkCommandBuffer Vk_Context::allocate_command_buffer()
+{
+	VkCommandBufferAllocateInfo info{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO };
+	info.commandPool = command_pool;
+	info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+	info.commandBufferCount = 1;
+
+	VkCommandBuffer cmd = 0;
+	vkAllocateCommandBuffers(device, &info, &cmd);
+	return cmd;
+}
+
 void Vk_Context::save_screenshot(Vk_Allocated_Image image, const char* filename)
 {
 }

@@ -1,5 +1,7 @@
 #pragma once
 #include "Volk/volk.h"
+#include "defines.h"
+#include <vector>
 
 namespace vkinit
 {
@@ -209,6 +211,94 @@ namespace vkinit
 		VkPipelineInputAssemblyStateCreateInfo info{ VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };
 		info.topology = topology;
 		info.primitiveRestartEnable = primitive_restart;
+
+		return info;
+	}
+
+	inline VkInstanceCreateInfo instance_create_info(const std::vector<const char*> enabled_extensions, const std::vector<const char*> enabled_layers, VkApplicationInfo* app_info)
+	{
+		VkInstanceCreateInfo info{ VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
+		info.enabledLayerCount = (u32)enabled_layers.size();
+		info.ppEnabledLayerNames = enabled_layers.data();
+		info.enabledExtensionCount = (u32)enabled_extensions.size();
+		info.ppEnabledExtensionNames = enabled_extensions.data();
+		info.pApplicationInfo = app_info;
+	}
+
+	inline VkCommandBufferBeginInfo command_buffer_begin_info(VkCommandBufferUsageFlags flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT)
+	{
+		VkCommandBufferBeginInfo info{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
+		info.flags = flags;
+
+		return info;
+	}
+
+	inline VkBufferImageCopy buffer_image_copy(VkExtent3D extent)
+	{
+		VkBufferImageCopy img_copy{};
+
+		VkImageSubresourceLayers subres{};
+		subres.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		subres.baseArrayLayer = 0;
+		subres.layerCount = 1;
+		subres.mipLevel = 0;
+
+		img_copy.bufferOffset = 0;
+		img_copy.bufferImageHeight = 0;
+		img_copy.bufferRowLength = 0;
+		img_copy.imageSubresource = subres;
+		img_copy.imageOffset = { 0, 0, 0 };
+		img_copy.imageExtent = extent;
+
+		return img_copy;
+	}
+
+	inline VkCommandBufferSubmitInfo command_buffer_submit_info(VkCommandBuffer cmd)
+	{
+		VkCommandBufferSubmitInfo info{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO };
+		info.commandBuffer = cmd;
+
+		return info;
+	}
+
+	inline VkSubmitInfo submit_info(u32 command_buffer_count, VkCommandBuffer* cmd, 
+		u32 wait_semaphore_count = 0, VkSemaphore* wait_semaphores = 0, 
+		u32 signal_semaphore_count = 0, VkSemaphore* signal_semaphores = 0,
+		VkPipelineStageFlags* wait_dst_stage = 0)
+	{
+		VkSubmitInfo info{ VK_STRUCTURE_TYPE_SUBMIT_INFO };
+		info.waitSemaphoreCount = wait_semaphore_count;
+		info.pWaitSemaphores = wait_semaphores;
+		info.pWaitDstStageMask = wait_dst_stage;
+		info.commandBufferCount = command_buffer_count;
+		info.pCommandBuffers = cmd;
+		info.signalSemaphoreCount = signal_semaphore_count;
+		info.pSignalSemaphores = signal_semaphores;
+
+		return info;
+	}
+
+	inline VkBufferCopy buffer_copy(VkDeviceSize size = VK_WHOLE_SIZE, VkDeviceSize src_offset = 0, VkDeviceSize dst_offset = 0)
+	{
+		VkBufferCopy copy{};
+		
+		copy.srcOffset = src_offset;
+		copy.dstOffset = dst_offset;
+		copy.size = size;
+
+		return copy;
+	}
+
+	inline VkSamplerCreateInfo sampler_create_info()
+	{
+		VkSamplerCreateInfo info{ VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
+
+		info.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+		info.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+		info.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+		info.minFilter = VK_FILTER_LINEAR;
+		info.magFilter = VK_FILTER_LINEAR;
+		info.maxLod = VK_LOD_CLAMP_NONE;
 
 		return info;
 	}

@@ -20,6 +20,8 @@ add_executable(GigaRayV0
     janitor.cpp
     lightmap.h
     lightmap.cpp
+    logging.h
+    logging.cpp
     material.h 
     material.cpp
     misc.h 

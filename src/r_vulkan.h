@@ -161,6 +161,9 @@ struct Vk_Context
 		VkShaderModule rgen, VkShaderModule rmiss, VkShaderModule rchit,
 		VkDescriptorSetLayout* layouts, int num_layouts);
 
+	VkCommandBuffer allocate_command_buffer();
+	void free_command_buffer(VkCommandBuffer cmd);
+
 	Vk_Pipeline create_raster_pipeline(VkShaderModule vertex_shader, VkShaderModule fragment_shader,
 		u32 num_layouts, VkDescriptorSetLayout* layouts);
 

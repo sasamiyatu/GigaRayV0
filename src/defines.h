@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <glm/glm.hpp>
 #include <glm/gtx/quaternion.hpp>
+#include <glm/gtc/type_ptr.hpp>
 #include <optional>
 #include <functional>
 #include <array>
@@ -27,6 +28,16 @@
 #define NOMINMAX
 #include "windows.h"
 #endif
+
+#define GB_VALIDATE(expr, str) \
+	do                         \
+	{                          \
+		if (!expr)             \
+		{                      \
+			printf(str);       \
+			__debugbreak();    \
+		}                      \
+	} while (0)
 
 constexpr char* APP_NAME = "GigaRayV0";
 constexpr char* ENGINE_NAME = "GigaEngine";

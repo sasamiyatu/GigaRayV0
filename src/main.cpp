@@ -20,6 +20,7 @@
 #include "timer.h"
 #include "gltf.h"
 #include "shaders.h"
+#include "lightmap.h"
 constexpr int WINDOW_WIDTH = 1280;
 constexpr int WINDOW_HEIGHT = 720;
 
@@ -34,6 +35,8 @@ int main(int argc, char** argv)
 	Resource_Manager<Material> material_manager;
 	Renderer renderer(&ctx, &platform, &mesh_manager, &texture_manager, &material_manager, &timer);
 
+	lm::Lightmap_Renderer lightmap_renderer(&ctx);
+	lightmap_renderer.init_scene("data/cube/Cube.gltf");
 
 	//Mesh2 gltf = load_gltf_from_file("data/cube/Cube.gltf", &ctx, &texture_manager, &material_manager);
 	//Mesh2 gltf = load_gltf_from_file("data/sponza/Sponza.gltf", &ctx, &texture_manager, &material_manager);
