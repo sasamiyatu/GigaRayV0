@@ -7,17 +7,17 @@
 #include "r_mesh.h"
 
 template <typename T>
-static void read_data(cgltf_buffer_view* view, u32 stride, const std::map<std::string, u8*>& buffer_data, T* out_data)
+static void read_data(cgltf_accessor* acc, u32 stride, const std::map<std::string, u8*>& buffer_data, T* out_data)
 {
     assert(stride != 0);
-    u8* src_data = buffer_data.at(view->buffer->uri);
-    u8* start = src_data + view->offset;
-    u8* end = start + view->size;
+    u8* src_data = buffer_data.at(acc->buffer_view->buffer->uri);
+    u8* start = src_data + acc->buffer_view->offset + acc->offset;
+    u8* end = start + acc->stride * acc->count;
     assert(stride == sizeof(T));
-    memcpy(out_data, start, view->size);
+    memcpy(out_data, start, acc->stride * acc->count);
 }
 
-Mesh2 load_gltf_from_file(const char* filepath, Vk_Context* ctx, Resource_Manager<Texture>* texture_manager, Resource_Manager<Material>* material_manager)
+Mesh2 load_gltf_from_file(const char* filepath, Vk_Context* ctx, Resource_Manager<Texture>* texture_manager, Resource_Manager<Material>* material_manager, bool swap_y_and_z)
 {
     Mesh2 ret{};
 
@@ -161,7 +161,7 @@ Mesh2 load_gltf_from_file(const char* filepath, Vk_Context* ctx, Resource_Manage
                     assert(acc->count != 0);
                     assert(acc->component_type == cgltf_component_type_r_32f);
                     normals.resize(acc->count);
-                    read_data(acc->buffer_view, (u32)acc->stride, buffers, normals.data());
+                    read_data(acc, (u32)acc->stride, buffers, normals.data());
                 }
                 else if (a.type == cgltf_attribute_type_position)
                 {
@@ -169,7 +169,7 @@ Mesh2 load_gltf_from_file(const char* filepath, Vk_Context* ctx, Resource_Manage
                     assert(acc->count != 0);
                     assert(acc->component_type == cgltf_component_type_r_32f);
                     positions.resize(acc->count);
-                    read_data(acc->buffer_view, (u32)acc->stride, buffers, positions.data());
+                    read_data(acc, (u32)acc->stride, buffers, positions.data());
                 }
                 else if (a.type == cgltf_attribute_type_texcoord)
                 {
@@ -177,7 +177,7 @@ Mesh2 load_gltf_from_file(const char* filepath, Vk_Context* ctx, Resource_Manage
                     assert(acc->count != 0);
                     assert(acc->component_type == cgltf_component_type_r_32f);
                     texcoords.resize(acc->count);
-                    read_data(acc->buffer_view, (u32)acc->stride, buffers, texcoords.data());
+                    read_data(acc, (u32)acc->stride, buffers, texcoords.data());
                 }
                 else if (a.type == cgltf_attribute_type_tangent)
                 {
@@ -185,7 +185,7 @@ Mesh2 load_gltf_from_file(const char* filepath, Vk_Context* ctx, Resource_Manage
                     assert(acc->count != 0);
                     assert(acc->component_type == cgltf_component_type_r_32f);
                     tangents.resize(acc->count);
-                    read_data(acc->buffer_view, (u32)acc->stride, buffers, tangents.data());
+                    read_data(acc, (u32)acc->stride, buffers, tangents.data());
                 }
                 else
                 {
@@ -193,6 +193,14 @@ Mesh2 load_gltf_from_file(const char* filepath, Vk_Context* ctx, Resource_Manage
                 }
             }
 
+            if (swap_y_and_z)
+            {
+                for (auto& pos : positions)
+                    pos = glm::vec3(pos.x, pos.z, -pos.y);
+                for (auto& normal : normals)
+                    normal = glm::vec3(normal.x, normal.z, -normal.y);
+            }
+               
             //assert(!tangents.empty());
             Vertex_Group vg{};
             vg.pos = std::move(positions);
@@ -204,7 +212,7 @@ Mesh2 load_gltf_from_file(const char* filepath, Vk_Context* ctx, Resource_Manage
             i32 material_id = local_material_map.at(prim->material);
             //i32 material_id = material_manager->get_id_from_string(prim->material->name);
             ret.materials.push_back(material_id);
-            ret.meshes.emplace_back(vg);
+            ret.meshes.push_back(vg);
         }
     }
 
@@ -230,8 +238,8 @@ void create_from_mesh2(Mesh2* m, u32 mesh_count, Mesh* out_meshes)
         prim.vertex_offset = 0;
         mesh->primitives.push_back(prim);
         mesh->indices = m->meshes[i].indices;
-        assert(m->meshes[i].pos.size() == m->meshes[i].normal.size()
-            && m->meshes[i].pos.size() == m->meshes[i].texcoord.size());
+        //assert(m->meshes[i].pos.size() == m->meshes[i].normal.size()
+        //    && m->meshes[i].pos.size() == m->meshes[i].texcoord.size());
         u32 vertex_count = (u32)m->meshes[i].pos.size();
         out_meshes[i].vertices.resize(vertex_count);
         for (u32 j = 0; j < vertex_count; ++j)
@@ -239,7 +247,8 @@ void create_from_mesh2(Mesh2* m, u32 mesh_count, Mesh* out_meshes)
             Vertex new_vert{};
             new_vert.pos = m->meshes[i].pos[j];
             new_vert.normal = m->meshes[i].normal[j];
-            new_vert.texcoord = m->meshes[i].texcoord[j];
+            if (j < m->meshes[i].texcoord.size())
+                new_vert.texcoord = m->meshes[i].texcoord[j];
             if (!m->meshes[i].tangent.empty())
                 new_vert.tangent = m->meshes[i].tangent[j];
             else

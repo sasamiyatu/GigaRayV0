@@ -140,8 +140,10 @@ bool eval_indirect_combined_brdf(
 {
     //if (dot(shading_normal, V_world) <= 0.f) return false;
 
-    vec4 q_rotation_to_z = get_rotation_to_z_axis(shading_normal);
-    vec3 V = rotate_point(q_rotation_to_z, V_world); // Transform to tangent space
+    mat3 tbn = create_tangent_space(shading_normal);
+    //vec4 q_rotation_to_z = get_rotation_to_z_axis(shading_normal);
+    //vec3 V = rotate_point(q_rotation_to_z, V_world); // Transform to tangent space
+    vec3 V = V_world * tbn;
     const vec3 N = vec3(0.0f, 0.0f, 1.f); // Tangent space normal
 
     vec3 L = vec3(0.0);
@@ -168,9 +170,10 @@ bool eval_indirect_combined_brdf(
 
     if (luminance(brdf_weight) == 0.0f) return false;
 
-    new_ray_dir = normalize(rotate_point(invert_rotation(q_rotation_to_z), L));
+    //new_ray_dir = normalize(rotate_point(invert_rotation(q_rotation_to_z), L));
+    new_ray_dir = tbn * normalize(L);
 
-    if (dot(geometric_normal, new_ray_dir) <= 0.0) return false;
+    if (dot(shading_normal, new_ray_dir) <= 0.0) return false;
 
     return true;
 }

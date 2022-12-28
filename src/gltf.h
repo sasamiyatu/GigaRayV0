@@ -26,6 +26,6 @@ struct Mesh2
 	std::vector<i32> materials; 
 };
 
-Mesh2 load_gltf_from_file(const char* filepath, Vk_Context* ctx, Resource_Manager<Texture>* texture_manager, Resource_Manager<Material>* material_manager);
+Mesh2 load_gltf_from_file(const char* filepath, Vk_Context* ctx, Resource_Manager<Texture>* texture_manager, Resource_Manager<Material>* material_manager, bool swap_y_and_z = false);
 
 void create_from_mesh2(Mesh2* m, u32 mesh_count, Mesh* out_meshes);

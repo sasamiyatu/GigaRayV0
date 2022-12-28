@@ -8,7 +8,9 @@
 #define SQUARE_ROUGHNESS
 #define MAX_BOUNCES 4
 #define RAY_TRACING
-#define NEE
+//#define NEE
+#define USE_ENVMAP
+#define WHITE_ENVMAP
 #define OWN_BRDF
 
 #include "test.glsl"
@@ -159,14 +161,17 @@ void main()
         if (pay.prim_id != -1)
         {
             Vertex v = get_interpolated_vertex(pay.instance_id, pay.prim_id, pay.barycentrics);
-            vec3 normal = v.normal;
-            vec3 albedo = v.material.base_color;
-           // if (dot(v.geometric_normal, -rd) < 0.0) v.geometric_normal *= -1.0;
+            if (dot(v.geometric_normal, -rd) < 0.0) v.geometric_normal *= -1.0;
             //if (dot(v.geometric_normal, v.normal) < 0.0) v.normal *= -1.0;
 
+            v.normal = v.geometric_normal;
+            vec3 normal = v.normal;
+            vec3 albedo = v.material.base_color;
+
+
             vec3 p = v.pos;
-            //ro = offset_ray(p, v.geometric_normal);
-            ro = p + v.geometric_normal * 0.001;
+            ro = offset_ray(p, v.geometric_normal);
+            //ro = p + v.geometric_normal * 0.001;
             float roughness = v.material.roughness;
             float metallic = v.material.metallic;
 #ifndef OWN_BRDF
@@ -230,12 +235,12 @@ void main()
             vec3 brdf_weight;
             vec3 new_dir;
 #ifdef OWN_BRDF
-            if (!eval_indirect_combined_brdf(rand.yz, normal, v.geometric_normal, -rd, v.material, brdf_type, new_dir, brdf_weight))
+            if (!eval_indirect_combined_brdf(rand.yz, v.geometric_normal, v.geometric_normal, -rd, v.material, brdf_type, new_dir, brdf_weight))
             {
                 break;
             }
 #else
-            if (!evalIndirectCombinedBRDF(rand.yz, normal, v.geometric_normal, -rd, mat_props, brdf_type, new_dir, brdf_weight))
+            if (!evalIndirectCombinedBRDF(rand.yz, v.geometric_normal, v.geometric_normal, -rd, mat_props, brdf_type, new_dir, brdf_weight))
             {
                 break;
             }
@@ -250,7 +255,13 @@ void main()
             // Miss 
             //if (bounce == 0) radiance = vec3(0.2f, 0.5f, 0.1f);
             //else 
+#ifdef USE_ENVMAP
+#ifdef WHITE_ENVMAP
+            radiance += throughput;
+#else
             radiance += throughput * sample_environment_map(rd, environment_map);
+#endif
+#endif
             break;
         }
         if (any(isnan(throughput)) || any(isinf(throughput))) break;

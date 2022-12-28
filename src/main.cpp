@@ -36,7 +36,8 @@ int main(int argc, char** argv)
 
 
 	//Mesh2 gltf = load_gltf_from_file("data/cube/Cube.gltf", &ctx, &texture_manager, &material_manager);
-	Mesh2 gltf = load_gltf_from_file("data/sponza/Sponza.gltf", &ctx, &texture_manager, &material_manager);
+	//Mesh2 gltf = load_gltf_from_file("data/sponza/Sponza.gltf", &ctx, &texture_manager, &material_manager);
+	Mesh2 gltf = load_gltf_from_file("data/cornellbox/scene.gltf", &ctx, &texture_manager, &material_manager, true);
 	std::vector<Mesh> meshes(gltf.meshes.size());
 	create_from_mesh2(&gltf, (u32)gltf.meshes.size(), meshes.data());
 	Mesh combined_mesh{};

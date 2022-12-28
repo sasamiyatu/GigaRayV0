@@ -40,7 +40,7 @@ void main()
     // vec4 t3 = texture(brdf_lut, texcoord);
     // vec2 t2 = texture(brdf_lut, vec2(NoV, 0.01)).rg;
 
-    vec4 base_color = texture(textures[mat.base_color_tex], texcoord);
+    vec4 base_color = mat.base_color_tex != -1 ? texture(textures[mat.base_color_tex], texcoord, 0) : mat.base_color_factor;
     if (base_color.a < 0.5) discard;
     vec3 metallic_roughness = texture(textures[mat.metallic_roughness_tex], texcoord).rgb;
     vec3 albedo = pow(base_color.rgb, vec3(2.2));
