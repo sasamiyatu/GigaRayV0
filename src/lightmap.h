@@ -48,6 +48,11 @@ struct Index_Info
 
 struct Primitive
 {
+	std::vector<glm::vec3> positions;
+	std::vector<glm::vec3> normals;
+	std::vector<glm::vec4> tangents;
+	std::vector<glm::vec2> uv0;
+
 	Index_Info indices;
 
 	Attribute position;
@@ -77,6 +82,16 @@ struct Render_Target
 	VkImageLayout layout;
 };
 
+struct Vertex
+{
+	glm::vec3 position;
+	glm::vec3 normal;
+	glm::vec3 color;
+	glm::vec4 tangent;
+	glm::vec2 uv0;
+	glm::vec2 uv1;
+};
+
 struct Lightmap_Renderer
 {
 	Vk_Context* ctx;
@@ -89,6 +104,7 @@ struct Lightmap_Renderer
 	std::vector<Mesh> meshes;
 
 	VkSampler default_sampler = 0;
+	VkSampler block_sampler = 0;
 	Vk_Pipeline pipeline = {};
 	Render_Target color_target;
 	Render_Target depth_target;
@@ -102,6 +118,12 @@ struct Lightmap_Renderer
 	cgltf_data* scene_data;
 
 	xatlas::Atlas* atlas;
+
+	// TEMP
+	Vk_Allocated_Buffer vertex_buffer{};
+	Vk_Allocated_Buffer index_buffer{};
+
+	Vk_Allocated_Image checkerboard_texture;
 
 	Camera_Component* camera = nullptr;
 

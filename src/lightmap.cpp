@@ -59,6 +59,8 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
     cgltf_data* data = nullptr;
     cgltf_result result = cgltf_parse_file(&options, gltf_path, &data);
     assert(result == cgltf_result_success);
+    result = cgltf_load_buffers(&options, data, gltf_path);
+    assert(result == cgltf_result_success);
     scene_data = data;
 
     u32 str_length = (u32)strlen(gltf_path);
@@ -76,6 +78,8 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
     // Create textures
     VkSamplerCreateInfo sampler_info = vkinit::sampler_create_info();
     vkCreateSampler(ctx->device, &sampler_info, nullptr, &default_sampler);
+    sampler_info.minFilter = sampler_info.magFilter = VK_FILTER_NEAREST;
+    vkCreateSampler(ctx->device, &sampler_info, nullptr, &block_sampler);
     for (u32 i = 0; i < data->textures_count; ++i)
     {
         Texture2D tex{};
@@ -127,7 +131,8 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
                 cgltf_accessor* acc = prim->attributes[a].data;
                 attrib.count = (u32)acc->count;
                 attrib.offset = u32(acc->offset + acc->buffer_view->offset);
-                attrib.buffer = buffers[get_index(data->buffers, acc->buffer_view->buffer)].buffer;
+                u32 buffer_index = get_index(data->buffers, acc->buffer_view->buffer);
+                attrib.buffer = buffers[buffer_index].buffer;
                 new_prim.material = &materials[get_index(data->materials, prim->material)];
                 switch (prim->attributes[a].type)
                 {
@@ -135,30 +140,38 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
                     assert(acc->component_type == cgltf_component_type_r_32f);
                     assert(acc->type == cgltf_type_vec3);
                     new_prim.normal = attrib;
+                    new_prim.normals.resize(acc->count);
+                    cgltf_accessor_unpack_floats(acc, (float*)new_prim.normals.data(), acc->count * 3);
                     break;
                 case cgltf_attribute_type_position:
                     assert(acc->component_type == cgltf_component_type_r_32f);
                     assert(acc->type == cgltf_type_vec3);
                     new_prim.position = attrib;
+                    new_prim.positions.resize(acc->count);
+                    cgltf_accessor_unpack_floats(acc, (float*)new_prim.positions.data(), acc->count * 3);
                     break;
                 case cgltf_attribute_type_texcoord:
                     assert(acc->component_type == cgltf_component_type_r_32f);
                     assert(acc->type == cgltf_type_vec2);
                     new_prim.texcoord0 = attrib;
+                    new_prim.uv0.resize(acc->count);
+                    cgltf_accessor_unpack_floats(acc, (float*)new_prim.uv0.data(), acc->count * 2);
                     break;
                 case cgltf_attribute_type_tangent:
                     assert(acc->component_type == cgltf_component_type_r_32f);
                     assert(acc->type == cgltf_type_vec4);
                     new_prim.tangent = attrib;
+                    new_prim.tangents.resize(acc->count);
+                    cgltf_accessor_unpack_floats(acc, (float*)new_prim.tangents.data(), acc->count * 4);
                     break;
                 default:
                     assert(!"Attribute type not implemented\n");
                 }
             }
-            new_mesh.primitives.push_back(new_prim);
+            new_mesh.primitives.push_back(std::move(new_prim));
 
         }
-        meshes.push_back(new_mesh);
+        meshes.push_back(std::move(new_mesh));
     }
 
     {
@@ -174,8 +187,174 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
             }
         }
 
-        xatlas::Generate(atlas);
+        xatlas::ChartOptions chart_opts{};
+        xatlas::PackOptions pack_opts{};
+        pack_opts.texelsPerUnit = 4.0;
+        xatlas::Generate(atlas, chart_opts, pack_opts);
         render_debug_atlas(atlas, "test_atlas.png");
+
+        std::vector<Vertex> verts;
+        std::vector<u32> indices;
+        for (u32 m = 0; m < atlas->meshCount; ++m)
+        {
+            const auto* mesh = &atlas->meshes[m];
+            for (u32 i = 0; i < mesh->indexCount; ++i)
+            {
+                assert(i < mesh->vertexCount);
+                u32 index = mesh->indexArray[i];
+                indices.push_back(index);
+                u32 xref = mesh->vertexArray[index].xref;
+                u32 chart_index = mesh->vertexArray[index].chartIndex;
+                glm::vec2 uv = glm::make_vec2(mesh->vertexArray[index].uv);
+                Vertex v{};
+                v.uv1 = uv / glm::vec2(atlas->width, atlas->height);
+                v.normal = meshes[0].primitives[0].normals[xref];
+                v.position = meshes[0].primitives[0].positions[xref];
+                v.uv0 = meshes[0].primitives[0].uv0[xref];
+                v.tangent = meshes[0].primitives[0].tangents[xref];
+                v.color = math::random_vector((u64)chart_index);
+                verts.push_back(v);
+            }
+        }
+
+        {
+            VkCommandBuffer cmd = ctx->allocate_command_buffer();
+            VkCommandBufferBeginInfo cmd_info = vkinit::command_buffer_begin_info();
+            vkBeginCommandBuffer(cmd, &cmd_info);
+
+            {
+                u32 required_size = (u32)(sizeof(Vertex) * verts.size());
+                vertex_buffer = ctx->allocate_buffer(required_size,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                    VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0
+                );
+
+                Vk_Allocated_Buffer vertex_staging = ctx->allocate_buffer(required_size,
+                    VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                    VMA_MEMORY_USAGE_AUTO, VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
+                );
+                void* mapped = 0;
+                vmaMapMemory(ctx->allocator, vertex_staging.allocation, &mapped);
+                memcpy(mapped, verts.data(), required_size);
+                vmaUnmapMemory(ctx->allocator, vertex_staging.allocation);
+
+                VkBufferCopy buffer_copy = vkinit::buffer_copy(required_size, 0, 0);
+                vkCmdCopyBuffer(cmd, vertex_staging.buffer, vertex_buffer.buffer, 1, &buffer_copy);
+            }
+
+            {
+                u32 required_size = (u32)(sizeof(u32) * indices.size());
+                index_buffer = ctx->allocate_buffer(required_size,
+                    VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                    VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0
+                );
+
+                Vk_Allocated_Buffer staging = ctx->allocate_buffer(required_size,
+                    VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                    VMA_MEMORY_USAGE_AUTO, VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
+                );
+                void* mapped = 0;
+                vmaMapMemory(ctx->allocator, staging.allocation, &mapped);
+                memcpy(mapped, indices.data(), required_size);
+                vmaUnmapMemory(ctx->allocator, staging.allocation);
+
+                VkBufferCopy buffer_copy = vkinit::buffer_copy(required_size, 0, 0);
+                vkCmdCopyBuffer(cmd, staging.buffer, index_buffer.buffer, 1, &buffer_copy);
+            }
+
+            vkEndCommandBuffer(cmd);
+            VkSubmitInfo submit_info = vkinit::submit_info(1, &cmd);
+            vkQueueSubmit(ctx->graphics_queue, 1, &submit_info, 0);
+            vkQueueWaitIdle(ctx->graphics_queue);
+        }
+
+        {
+            // Create checkerboard texture
+            u32 w = atlas->width;
+            u32 h = atlas->height;
+            u32 tile_size = 1;
+
+            u32 required_size = w * h;
+
+            checkerboard_texture = ctx->allocate_image({ w, h, 1 }, VK_FORMAT_R8_UNORM, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+            Vk_Allocated_Buffer staging = ctx->allocate_buffer(required_size,
+                VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                VMA_MEMORY_USAGE_AUTO, VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
+            );
+
+            void* mapped = 0;
+            vmaMapMemory(ctx->allocator, staging.allocation, &mapped);
+
+            u8* dst = (u8*)mapped;
+            for (u32 y = 0; y < h; ++y)
+            {
+                for (u32 x = 0; x < w; ++x)
+                {
+                    u32 scaled_x = x / tile_size;
+                    u32 scaled_y = y / tile_size;
+                    u32 odd = (scaled_x ^ scaled_y) & 1;
+                    if (odd)
+                        dst[y * w + x] = 63;
+                    else
+                        dst[y * w + x] = 127;
+                }
+            }
+
+            vmaUnmapMemory(ctx->allocator, staging.allocation);
+
+            VkCommandBuffer cmd = ctx->allocate_command_buffer();
+            VkCommandBufferBeginInfo cmd_info = vkinit::command_buffer_begin_info();
+            vkBeginCommandBuffer(cmd, &cmd_info);
+
+            VkImageSubresourceLayers subres{};
+            subres.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            subres.baseArrayLayer = 0;
+            subres.layerCount = 1;
+            subres.mipLevel = 0;
+            VkBufferImageCopy regions{};
+            regions.bufferOffset = 0;
+            regions.bufferImageHeight = 0;
+            regions.bufferRowLength = 0;
+            regions.imageSubresource = subres;
+            regions.imageOffset = { 0, 0, 0 };
+            regions.imageExtent = { (u32)w, (u32)h, 1 };
+
+            vkinit::vk_transition_layout(cmd, checkerboard_texture.image,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                0, VK_ACCESS_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT
+            );
+
+            vkCmdCopyBufferToImage(cmd, staging.buffer, checkerboard_texture.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &regions);
+
+            vkinit::vk_transition_layout(cmd, checkerboard_texture.image,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                0, VK_ACCESS_SHADER_READ_BIT,
+                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
+                | VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_NV
+            );
+
+            vkEndCommandBuffer(cmd);
+
+            VkSubmitInfo submit_info = vkinit::submit_info(1, &cmd);
+            vkQueueSubmit(ctx->graphics_queue, 1, &submit_info, 0);
+            vkQueueWaitIdle(ctx->graphics_queue);
+        }
+
+        for (u32 m = 0; m < atlas->meshCount; ++m)
+        {
+            for (u32 c = 0; c < atlas->meshes[m].chartCount; ++c)
+            {
+                const auto* chart = &atlas->meshes[m].chartArray[c];
+                printf("chart: %d\n", c);
+                for (u32 f = 0; f < chart->faceCount; ++f)
+                {
+                    printf("f %d: %d\n", f, chart->faceArray[f]);
+                }
+            }
+        }
 
         // Add lightmap UVs to meshes
         // Ostensibly xatlas generates extra vertices but keeps index count the same, so 
@@ -283,6 +462,7 @@ void Lightmap_Renderer::render()
     vkCmdPushConstants(cmd, pipeline.layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(view_proj), &view_proj);
     //vkCmdDraw(cmd, 3, 1, 0, 0);
 
+#if 0
     for (const auto& m : meshes)
     {
         for (const auto& p : m.primitives)
@@ -298,6 +478,16 @@ void Lightmap_Renderer::render()
             vkCmdDrawIndexed(cmd, p.indices.count, 1, 0, 0, 0);
         }
     }
+#endif
+
+    vkCmdBindIndexBuffer(cmd, index_buffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+    Descriptor_Info descs[] = {
+        Descriptor_Info(vertex_buffer.buffer, 0, VK_WHOLE_SIZE),
+        Descriptor_Info(default_sampler, textures[0].image.image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
+        Descriptor_Info(block_sampler, checkerboard_texture.image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
+    };
+    vkCmdPushDescriptorSetWithTemplateKHR(cmd, pipeline.update_template, pipeline.layout, 0, &descs);
+    vkCmdDrawIndexed(cmd, 36, 1, 0, 0, 0);
 
     vkCmdEndRendering(cmd);
 
@@ -343,6 +533,7 @@ void Lightmap_Renderer::render()
 void Lightmap_Renderer::shutdown()
 {
     vkDestroySampler(ctx->device, default_sampler, nullptr);
+    vkDestroySampler(ctx->device, block_sampler, nullptr);
     vkDestroyPipelineLayout(ctx->device, pipeline.layout, nullptr);
     vkDestroyPipeline(ctx->device, pipeline.pipeline, nullptr);
     vkDestroyDescriptorSetLayout(ctx->device, pipeline.desc_sets[0], nullptr);
