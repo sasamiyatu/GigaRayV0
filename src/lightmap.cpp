@@ -32,16 +32,18 @@ static void draw_line(int x0, int y0, int x1, int y1, Image* img, glm::vec3 colo
 static void set_pixel(Image* img, int x, int y, glm::vec3 color);
 static void write_image(Image* img, const char* filename);
 
-Lightmap_Renderer::Lightmap_Renderer(Vk_Context* context)
+Lightmap_Renderer::Lightmap_Renderer(Vk_Context* context, u32 window_width, u32 window_height)
     : ctx(context), 
     atlas(nullptr),
-    scene_data(nullptr)
+    scene_data(nullptr),
+    window_width(window_width),
+    window_height(window_height),
+    aspect_ratio(float(window_width) / float(window_height))
 {
 }
 
 Lightmap_Renderer::~Lightmap_Renderer()
 {
-    vkDestroySampler(ctx->device, default_sampler, nullptr);
 }
 
 template <typename T>
@@ -159,22 +161,28 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
         meshes.push_back(new_mesh);
     }
 
-    // Generate atlas
-    atlas = xatlas::Create();
-    for (u32 m = 0; m < data->meshes_count; ++m)
     {
-        for (u32 p = 0; p < data->meshes[m].primitives_count; ++p)
+        // Generate atlas
+        atlas = xatlas::Create();
+        for (u32 m = 0; m < data->meshes_count; ++m)
         {
-            xatlas::MeshDecl decl = create_mesh_decl(data, &data->meshes[m].primitives[p], raw_buffers);
-            xatlas::AddMeshError err = xatlas::AddMesh(atlas, decl);
-            assert(err == xatlas::AddMeshError::Success);
+            for (u32 p = 0; p < data->meshes[m].primitives_count; ++p)
+            {
+                xatlas::MeshDecl decl = create_mesh_decl(data, &data->meshes[m].primitives[p], raw_buffers);
+                xatlas::AddMeshError err = xatlas::AddMesh(atlas, decl);
+                assert(err == xatlas::AddMeshError::Success);
+            }
         }
+
+        xatlas::Generate(atlas);
+        render_debug_atlas(atlas, "test_atlas.png");
+
+        // Add lightmap UVs to meshes
+        // Ostensibly xatlas generates extra vertices but keeps index count the same, so 
+        // I guess we need to replace all the vertices in the GLTF with new vertices?
+
+        LOG_DEBUG("created atlas with %d meshes", atlas->meshCount);
     }
-
-    xatlas::Generate(atlas);
-    render_debug_atlas(atlas, "test_atlas.png");
-
-    LOG_DEBUG("created atlas with %d meshes", atlas->meshCount);
 
     // Create pipelines
     Shader vert_shader{};
@@ -188,13 +196,157 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
     pipeline.update_template = ctx->create_descriptor_update_template((u32)std::size(shaders), shaders, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout);
     pipeline.desc_sets[0] = desc_set_layout;
 
-    // Create render targets
+    vkDestroyShaderModule(ctx->device, vert_shader.shader, nullptr);
+    vkDestroyShaderModule(ctx->device, frag_shader.shader, nullptr);
 
+    {
+        // Create render targets
+        color_target.image = ctx->allocate_image({ window_width, window_height, 1 }, 
+            VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+        depth_target.image = ctx->allocate_image({ window_width, window_height, 1 }, VK_FORMAT_D32_SFLOAT, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
+
+        VkCommandBuffer cmd = ctx->allocate_command_buffer();
+        VkCommandBufferBeginInfo begin_info = vkinit::command_buffer_begin_info();
+        vkBeginCommandBuffer(cmd, &begin_info);
+
+        vkinit::vk_transition_layout(cmd, depth_target.image.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+            0, 0,
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+            1, VK_IMAGE_ASPECT_DEPTH_BIT);
+
+        color_target.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        depth_target.layout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        
+        vkEndCommandBuffer(cmd);
+
+        VkSubmitInfo submit_info = vkinit::submit_info(1, &cmd);
+        vkQueueSubmit(ctx->graphics_queue, 1, &submit_info, 0);
+        vkQueueWaitIdle(ctx->graphics_queue);
+    }
+}
+
+void Lightmap_Renderer::set_camera(Camera_Component* camera)
+{
+    this->camera = camera;
 }
 
 void Lightmap_Renderer::render()
 {
+    u32 current_frame_index = frame_counter % FRAMES_IN_FLIGHT;
+    u32 swapchain_image_index = 0;
+
+    vkWaitForFences(ctx->device, 1, &ctx->frame_objects[current_frame_index].fence, VK_TRUE, UINT64_MAX);
+    vkResetFences(ctx->device, 1, &ctx->frame_objects[current_frame_index].fence);
+    vkAcquireNextImageKHR(ctx->device, ctx->swapchain,
+        UINT64_MAX, ctx->frame_objects[current_frame_index].image_available_sem,
+        VK_NULL_HANDLE, &swapchain_image_index);
+
+    VkCommandBuffer cmd = ctx->frame_objects[current_frame_index].cmd;
+    VkImage next_image = ctx->swapchain_images[swapchain_image_index];
+
+    VkCommandBufferBeginInfo begin_info = vkinit::command_buffer_begin_info();
+    vkBeginCommandBuffer(cmd, &begin_info);
     
+    vkinit::vk_transition_layout(cmd, color_target.image.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        0, VK_ACCESS_SHADER_WRITE_BIT,
+        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        1, VK_IMAGE_ASPECT_COLOR_BIT);
+
+    VkClearValue color_clear{};
+    color_clear.color = { 0.0, 0.0, 0.0, 1.0 };
+    VkClearValue depth_clear{};
+    depth_clear.depthStencil.depth = 0.0f;
+    VkRenderingAttachmentInfo color_info = vkinit::rendering_attachment_info(color_target.image.image_view, color_target.layout, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE, color_clear);
+    VkRenderingAttachmentInfo depth_info = vkinit::rendering_attachment_info(depth_target.image.image_view, depth_target.layout, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE, depth_clear);
+
+    VkRect2D render_area{};
+    render_area.offset = { 0, 0 };
+    render_area.extent = { window_width, window_height };
+    VkRenderingInfo rendering_info = vkinit::rendering_info(render_area, 1, &color_info, &depth_info);
+
+    vkCmdBeginRendering(cmd, &rendering_info);
+
+    VkViewport viewport{};
+    viewport.height = -(float)window_height;
+    viewport.width = (float)window_width;
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+    viewport.x = 0.f;
+    viewport.y = (float)window_height;
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+    vkCmdSetScissor(cmd, 0, 1, &render_area);
+
+    glm::mat4 view_proj = camera ? camera->get_projection_matrix(aspect_ratio, 0.01f, 1000.f) * camera->get_view_matrix() : glm::mat4(1.0f);
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.pipeline);
+    vkCmdPushConstants(cmd, pipeline.layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(view_proj), &view_proj);
+    //vkCmdDraw(cmd, 3, 1, 0, 0);
+
+    for (const auto& m : meshes)
+    {
+        for (const auto& p : m.primitives)
+        {
+            vkCmdBindIndexBuffer(cmd, p.indices.buffer, p.indices.offset, p.indices.index_type == Index_Info::UINT16 ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32);
+            Descriptor_Info descs[] = {
+                Descriptor_Info(p.position.buffer, p.position.offset, p.position.count * sizeof(glm::vec3)),
+                Descriptor_Info(p.normal.buffer, p.normal.offset, p.normal.count * sizeof(glm::vec3)),
+                Descriptor_Info(p.texcoord0.buffer, p.texcoord0.offset, p.texcoord0.count * sizeof(glm::vec2)),
+                Descriptor_Info(p.material->base_color_tex->sampler, p.material->base_color_tex->image.image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+            };
+            vkCmdPushDescriptorSetWithTemplateKHR(cmd, pipeline.update_template, pipeline.layout, 0, &descs);
+            vkCmdDrawIndexed(cmd, p.indices.count, 1, 0, 0, 0);
+        }
+    }
+
+    vkCmdEndRendering(cmd);
+
+    vkinit::vk_transition_layout(cmd, color_target.image.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        1, VK_IMAGE_ASPECT_COLOR_BIT);
+
+    vkinit::vk_transition_layout(cmd, next_image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        0, VK_ACCESS_TRANSFER_WRITE_BIT,
+        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        1, VK_IMAGE_ASPECT_COLOR_BIT);
+
+    VkImageSubresourceLayers src_res = vkinit::image_subresource_layers(VK_IMAGE_ASPECT_COLOR_BIT);
+    VkImageSubresourceLayers dst_res = vkinit::image_subresource_layers(VK_IMAGE_ASPECT_COLOR_BIT);
+    VkImageBlit2 blit2 = vkinit::image_blit2(src_res, { 0, 0, 0 }, { (int)window_width, (int)window_height, 1 }, dst_res, { 0, 0, 0 }, { (int)window_width, (int)window_height, 1 });
+    VkBlitImageInfo2 blit_info = vkinit::blit_image_info2(color_target.image.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, next_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit2);
+    vkCmdBlitImage2(cmd, &blit_info);
+
+    vkinit::vk_transition_layout(cmd, next_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+        VK_ACCESS_TRANSFER_WRITE_BIT, 0,
+        VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+        1, VK_IMAGE_ASPECT_COLOR_BIT);
+
+    vkEndCommandBuffer(cmd);
+
+    VkSubmitInfo submit_info = vkinit::submit_info(
+        1, &cmd,
+        1, &ctx->frame_objects[current_frame_index].image_available_sem,
+        1, &ctx->frame_objects[current_frame_index].render_finished_sem
+    );
+
+    vkQueueSubmit(ctx->graphics_queue, 1, &submit_info, ctx->frame_objects[current_frame_index].fence);
+
+    VkPresentInfoKHR present_info = vkinit::present_info_khr(
+        1, &ctx->frame_objects[current_frame_index].render_finished_sem,
+        1, &ctx->swapchain, &swapchain_image_index
+    );
+        
+    vkQueuePresentKHR(ctx->graphics_queue, &present_info);
+}
+
+void Lightmap_Renderer::shutdown()
+{
+    vkDestroySampler(ctx->device, default_sampler, nullptr);
+    vkDestroyPipelineLayout(ctx->device, pipeline.layout, nullptr);
+    vkDestroyPipeline(ctx->device, pipeline.pipeline, nullptr);
+    vkDestroyDescriptorSetLayout(ctx->device, pipeline.desc_sets[0], nullptr);
+    vkDestroyDescriptorUpdateTemplate(ctx->device, pipeline.update_template, nullptr);
 }
 
 static void load_textures(Vk_Context* ctx, const char* basepath, cgltf_image* images, u32 image_count, std::vector<Vk_Allocated_Image>& out_images)

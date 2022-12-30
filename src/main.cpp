@@ -35,7 +35,7 @@ int main(int argc, char** argv)
 	Resource_Manager<Material> material_manager;
 	Renderer renderer(&ctx, &platform, &mesh_manager, &texture_manager, &material_manager, &timer);
 
-	lm::Lightmap_Renderer lightmap_renderer(&ctx);
+	lm::Lightmap_Renderer lightmap_renderer(&ctx, (u32)WINDOW_WIDTH, (u32)WINDOW_HEIGHT);
 	lightmap_renderer.init_scene("data/cube/Cube.gltf");
 
 	//Mesh2 gltf = load_gltf_from_file("data/cube/Cube.gltf", &ctx, &texture_manager, &material_manager);
@@ -87,7 +87,8 @@ int main(int argc, char** argv)
 		ecs.get_component<Camera_Component>(game_state.player_entity)->set_transform(xform);
 	}
 
-	renderer.init_scene(&ecs);
+	lightmap_renderer.set_camera(ecs.get_component<Camera_Component>(game_state.player_entity));
+	//renderer.init_scene(&ecs);
 
 	bool quit = false;
 	while (!quit)
@@ -126,12 +127,14 @@ int main(int argc, char** argv)
 		float dt = timer.update();
 		
 		game_state.simulate(dt);
-		renderer.do_frame(&ecs);
+		//renderer.do_frame(&ecs);
+		lightmap_renderer.render();
 
 		double end = timer.get_current_time();
 	}
 here:
 	vkDeviceWaitIdle(ctx.device);
+	lightmap_renderer.shutdown();
 	renderer.cleanup();
 	g_garbage_collector->shutdown();
 

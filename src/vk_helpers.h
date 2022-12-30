@@ -302,4 +302,83 @@ namespace vkinit
 
 		return info;
 	}
+
+	inline VkRenderingAttachmentInfo rendering_attachment_info(VkImageView view, VkImageLayout layout, VkAttachmentLoadOp load_op, VkAttachmentStoreOp store_op, VkClearValue clear_value = {})
+	{
+		VkRenderingAttachmentInfo info{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
+		info.imageView = view;
+		info.imageLayout = layout;
+		info.loadOp = load_op;
+		info.storeOp = store_op;
+		info.clearValue = clear_value;
+		return info;
+	}
+
+	inline VkRenderingInfo rendering_info(
+		VkRect2D render_area,
+		u32 color_attachment_count,
+		VkRenderingAttachmentInfo* color_attachments,
+		VkRenderingAttachmentInfo* depth_attachment,
+		VkRenderingAttachmentInfo* stencil_attachment = nullptr
+	)
+	{
+		VkRenderingInfo info{ VK_STRUCTURE_TYPE_RENDERING_INFO };
+		info.renderArea = render_area;
+		info.layerCount = 1;
+		info.colorAttachmentCount = color_attachment_count;
+		info.pColorAttachments = color_attachments;
+		info.pDepthAttachment = depth_attachment;
+		info.pStencilAttachment = stencil_attachment;
+
+		return info;
+	}
+
+	inline VkImageSubresourceLayers image_subresource_layers(VkImageAspectFlags aspect, int mip_level = 0, int base_array_layer = 0, int layer_count = 1)
+	{
+		VkImageSubresourceLayers layers{};
+		layers.aspectMask = aspect;
+		layers.mipLevel = mip_level;
+		layers.baseArrayLayer = base_array_layer;
+		layers.layerCount = layer_count;
+		return layers;
+	}
+
+	inline VkImageBlit2 image_blit2(VkImageSubresourceLayers src_res, VkOffset3D src_offset0, VkOffset3D src_offset1, VkImageSubresourceLayers dst_res, VkOffset3D dst_offset0, VkOffset3D dst_offset1)
+	{
+		VkImageBlit2 blit{ VK_STRUCTURE_TYPE_IMAGE_BLIT_2 };
+		blit.srcSubresource = src_res;
+		blit.srcOffsets[0] = src_offset0;
+		blit.srcOffsets[1] = src_offset1;
+		blit.dstSubresource = dst_res;
+		blit.dstOffsets[0] = dst_offset0;
+		blit.dstOffsets[1] = dst_offset1;
+		return blit;
+	}
+
+	inline VkBlitImageInfo2 blit_image_info2(VkImage src_image, VkImageLayout src_layout, VkImage dst_image, VkImageLayout dst_layout, u32 region_count, VkImageBlit2* regions, VkFilter filter = VK_FILTER_NEAREST)
+	{
+		VkBlitImageInfo2 info{ VK_STRUCTURE_TYPE_BLIT_IMAGE_INFO_2 };
+		info.srcImage = src_image;
+		info.srcImageLayout = src_layout;
+		info.dstImage = dst_image;
+		info.dstImageLayout = dst_layout;
+		info.regionCount = region_count;
+		info.pRegions = regions;
+		info.filter = filter;
+		return info;
+	}
+
+	inline VkPresentInfoKHR present_info_khr(u32 wait_semaphore_count, VkSemaphore* wait_semaphores, u32 swapchain_count, VkSwapchainKHR* swapchains, u32* image_indices, VkResult* results = nullptr)
+	{
+		VkPresentInfoKHR info{ VK_STRUCTURE_TYPE_PRESENT_INFO_KHR };
+		info.waitSemaphoreCount = wait_semaphore_count;
+		info.pWaitSemaphores = wait_semaphores;
+		info.swapchainCount = swapchain_count;
+		info.pSwapchains = swapchains;
+		info.pImageIndices = image_indices;
+		info.pResults = results;
+
+		return info;
+	}
+	
 }

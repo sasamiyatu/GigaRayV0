@@ -3,6 +3,7 @@
 #include "defines.h"
 #include "cgltf/cgltf.h"
 #include "xatlas.h"
+#include "ecs.h"
 
 namespace lm 
 {
@@ -92,17 +93,25 @@ struct Lightmap_Renderer
 	Render_Target color_target;
 	Render_Target depth_target;
 
+	u32 window_width = 0;
+	u32 window_height = 0;
+	float aspect_ratio = 1.0f;
+
 	u64 frame_counter = 0;
 
 	cgltf_data* scene_data;
 
 	xatlas::Atlas* atlas;
 
-	Lightmap_Renderer(Vk_Context* context);
+	Camera_Component* camera = nullptr;
+
+	Lightmap_Renderer(Vk_Context* context, u32 window_width, u32 window_height);
 	~Lightmap_Renderer();
 
 	void init_scene(const char* gltf_path);
+	void set_camera(Camera_Component* camera);
 	void render();
+	void shutdown();
 };
 
 template <typename T>
