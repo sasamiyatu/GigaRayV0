@@ -26,35 +26,18 @@ void Renderer::create_bindless_descriptor_set_layout()
 {
 	VkShaderStageFlags flags = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
 	// Bindless stuff
-	std::array<VkDescriptorSetLayoutBinding, 5> bindless_bindings{};
-	bindless_bindings[0].binding = 0;
-	bindless_bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-	bindless_bindings[0].descriptorCount = MAX_BINDLESS_RESOURCES;
-	bindless_bindings[0].stageFlags = flags;
 
-	bindless_bindings[1].binding = 1;
-	bindless_bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-	bindless_bindings[1].descriptorCount = MAX_BINDLESS_RESOURCES;
-	bindless_bindings[1].stageFlags = flags;
-
-	bindless_bindings[2].binding = 2;
-	bindless_bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-	bindless_bindings[2].descriptorCount = MAX_BINDLESS_RESOURCES;
-	bindless_bindings[2].stageFlags = flags;
-
-	bindless_bindings[3].binding = 3;
-	bindless_bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-	bindless_bindings[3].descriptorCount = 1;
-	bindless_bindings[3].stageFlags = flags;
-
-	bindless_bindings[4].binding = 4;
-	bindless_bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-	bindless_bindings[4].descriptorCount = MAX_BINDLESS_RESOURCES;
-	bindless_bindings[4].stageFlags = flags;
+	VkDescriptorSetLayoutBinding bindless_bindings[] = {
+	vkinit::descriptor_set_layout_binding(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, MAX_BINDLESS_RESOURCES, flags),
+	vkinit::descriptor_set_layout_binding(1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, MAX_BINDLESS_RESOURCES, flags),
+	vkinit::descriptor_set_layout_binding(2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, MAX_BINDLESS_RESOURCES, flags),
+	vkinit::descriptor_set_layout_binding(3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, flags),
+	vkinit::descriptor_set_layout_binding(4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, MAX_BINDLESS_RESOURCES, flags),
+	};
 
 	VkDescriptorSetLayoutCreateInfo layout_info = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
-	layout_info.bindingCount = uint32_t(bindless_bindings.size());
-	layout_info.pBindings = bindless_bindings.data();
+	layout_info.bindingCount = uint32_t(std::size(bindless_bindings));
+	layout_info.pBindings = bindless_bindings;
 	layout_info.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
 
 	VkDescriptorBindingFlags bindless_flags = 
@@ -64,7 +47,7 @@ void Renderer::create_bindless_descriptor_set_layout()
 	VkDescriptorBindingFlags flags2[5] = { bindless_flags, bindless_flags, bindless_flags, 0, bindless_flags };
 
 	VkDescriptorSetLayoutBindingFlagsCreateInfoEXT extended_info{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO_EXT, nullptr };
-	extended_info.bindingCount = (u32)bindless_bindings.size();
+	extended_info.bindingCount = (u32)std::size(bindless_bindings);
 	extended_info.pBindingFlags = flags2;
 	layout_info.pNext = &extended_info;
 
@@ -125,152 +108,20 @@ Vk_Pipeline Renderer::vk_create_rt_pipeline()
 	load_shader_from_file(&rgen_shader, context->device, "shaders/spirv/test.rgen.spv");
 	load_shader_from_file(&rmiss_shader, context->device, "shaders/spirv/test.rmiss.spv");
 	load_shader_from_file(&rchit_shader, context->device, "shaders/spirv/test.rchit.spv");
-
-	constexpr int n_rt_shader_stages = 3;
-	constexpr int n_rt_shader_groups = 3;
-
-	constexpr int raygen_index = 0;
-	constexpr int miss_index = 1;
-	constexpr int closest_hit_index = 2;
-
-	constexpr int raygen_group_index = 0;
-	constexpr int miss_group_index = 1;
-	constexpr int hit_group_index = 2;
-
-	std::array<VkPipelineShaderStageCreateInfo, n_rt_shader_stages> pssci{ };
-
-	pssci[raygen_index].sType = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
-	pssci[raygen_index].module = rgen_shader.shader;
-	pssci[raygen_index].pName = "main";
-	pssci[raygen_index].stage = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-
-	pssci[miss_index].sType = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
-	pssci[miss_index].module = rmiss_shader.shader;
-	pssci[miss_index].pName = "main";
-	pssci[miss_index].stage = VK_SHADER_STAGE_MISS_BIT_KHR;
-
-	pssci[closest_hit_index].sType = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
-	pssci[closest_hit_index].module = rchit_shader.shader;
-	pssci[closest_hit_index].pName = "main";
-	pssci[closest_hit_index].stage = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-
-	std::array<VkRayTracingShaderGroupCreateInfoKHR, n_rt_shader_groups> rtsgci{};
-	rtsgci[raygen_group_index].sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
-	rtsgci[raygen_group_index].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
-	rtsgci[raygen_group_index].generalShader = raygen_index;
-	rtsgci[raygen_group_index].closestHitShader = VK_SHADER_UNUSED_KHR;
-	rtsgci[raygen_group_index].anyHitShader = VK_SHADER_UNUSED_KHR;
-	rtsgci[raygen_group_index].intersectionShader = VK_SHADER_UNUSED_KHR;
-
-	rtsgci[miss_group_index] = rtsgci[raygen_group_index];
-	rtsgci[miss_group_index].sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
-	rtsgci[miss_group_index].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
-	rtsgci[miss_group_index].generalShader = miss_index;
-	rtsgci[miss_group_index].closestHitShader = VK_SHADER_UNUSED_KHR;
-	rtsgci[miss_group_index].anyHitShader = VK_SHADER_UNUSED_KHR;
-	rtsgci[miss_group_index].intersectionShader = VK_SHADER_UNUSED_KHR;
-
-	rtsgci[hit_group_index].sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
-	rtsgci[hit_group_index].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
-	rtsgci[hit_group_index].generalShader = VK_SHADER_UNUSED_KHR;
-	rtsgci[hit_group_index].closestHitShader = closest_hit_index;
-	rtsgci[hit_group_index].anyHitShader = VK_SHADER_UNUSED_KHR;
-	rtsgci[hit_group_index].intersectionShader = VK_SHADER_UNUSED_KHR;
-
+	
 	VkDescriptorSetLayout push_desc_layout = create_descriptor_set_layout(&rgen_shader);
-
-	// Create pipeline layout
-	VkPipelineLayoutCreateInfo cinfo{ VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
 	VkDescriptorSetLayout layouts[] = { push_desc_layout, bindless_set_layout };
-	cinfo.pSetLayouts = layouts;
-	cinfo.setLayoutCount = (u32)std::size(layouts);
-	VkPushConstantRange push_constant_range{};
-	push_constant_range.offset = 0;
-	push_constant_range.size = sizeof(u32);
-	push_constant_range.stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-	cinfo.pushConstantRangeCount = 1;
-	cinfo.pPushConstantRanges = &push_constant_range;
-	VkPipelineLayout layout;
-	vkCreatePipelineLayout(context->device, &cinfo, nullptr, &layout);
-	g_garbage_collector->push([=]()
-		{
-			vkDestroyPipelineLayout(context->device, layout, nullptr);
-		}, Garbage_Collector::SHUTDOWN);
+	Raytracing_Pipeline rt_pp = context->create_raytracing_pipeline(rgen_shader.shader, rmiss_shader.shader, rchit_shader.shader, layouts, (int)std::size(layouts));
 
-	VkRayTracingPipelineCreateInfoKHR rtpci{ VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR };
-	rtpci.stageCount = (uint32_t)pssci.size();
-	rtpci.pStages = pssci.data();
-	rtpci.groupCount = (uint32_t)rtsgci.size();
-	rtpci.pGroups = rtsgci.data();
-	rtpci.maxPipelineRayRecursionDepth = 4;
-	rtpci.layout = layout;
-
-	VkPipeline rt_pipeline;
-	VK_CHECK(vkCreateRayTracingPipelinesKHR(
-		context->device,
-		VK_NULL_HANDLE,
-		VK_NULL_HANDLE,
-		1, &rtpci,
-		nullptr,
-		&rt_pipeline));
-
-	g_garbage_collector->push([=]()
-		{
-			vkDestroyDescriptorSetLayout(context->device, push_desc_layout, nullptr);
-			vkDestroyPipeline(context->device, rt_pipeline, nullptr);
-		}, Garbage_Collector::SHUTDOWN);
-
-	Vk_Pipeline pl;
-	pl.layout = layout;
-	pl.pipeline = rt_pipeline;
-
-	uint32_t group_count = (uint32_t)rtsgci.size();
-	uint32_t group_handle_size = context->device_shader_group_handle_size;
-	uint32_t shader_group_base_alignment = context->device_sbt_alignment;
-	uint32_t group_size_aligned = (group_handle_size + shader_group_base_alignment - 1) & ~(shader_group_base_alignment - 1);
-
-	uint32_t sbt_size = group_count * group_size_aligned;
-
-	std::vector<uint8_t> shader_handle_storage(sbt_size);
-	VK_CHECK(vkGetRayTracingShaderGroupHandlesKHR(
-		context->device,
-		rt_pipeline,
-		0,
-		group_count,
-		sbt_size,
-		shader_handle_storage.data()
-	));
-
-	Vk_Allocated_Buffer rt_sbt_buffer = context->allocate_buffer(sbt_size,
-		VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-		VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-		VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR,
-		VMA_MEMORY_USAGE_AUTO,
-		VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
-	);
-
-
-	void* mapped;
-	vmaMapMemory(context->allocator, rt_sbt_buffer.allocation, &mapped);
-	uint8_t* pdata = (uint8_t*)mapped;
-	for (uint32_t g = 0; g < group_count; ++g)
-	{
-		memcpy(pdata, shader_handle_storage.data() + g * group_handle_size,
-			group_handle_size);
-		pdata += group_size_aligned;
-	}
-	vmaUnmapMemory(context->allocator, rt_sbt_buffer.allocation);
-
-	shader_binding_table = rt_sbt_buffer;
-	context->device_sbt_alignment = group_size_aligned;
+	shader_binding_table = rt_pp.shader_binding_table.sbt_data;
 
 	vkDestroyShaderModule(context->device, rgen_shader.shader, nullptr);
 	vkDestroyShaderModule(context->device, rmiss_shader.shader, nullptr);
 	vkDestroyShaderModule(context->device, rchit_shader.shader, nullptr);
 
-	descriptor_update_template = context->create_descriptor_update_template(1, &rgen_shader, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, pl.layout);
+	descriptor_update_template = context->create_descriptor_update_template(1, &rgen_shader, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, rt_pp.pipeline.layout);
 
-	return pl;
+	return rt_pp.pipeline;
 }
 
 Raytracing_Pipeline Renderer::create_gbuffer_rt_pipeline()
@@ -1100,6 +951,9 @@ void Renderer::cleanup()
 	for (int i = 0; i < FRAMES_IN_FLIGHT; ++i)
 		vkDestroyQueryPool(context->device, query_pools[i], nullptr);
 	vkDestroyDescriptorUpdateTemplate(context->device, descriptor_update_template, nullptr);
+	vkDestroyPipelineLayout(context->device, rt_pipeline.layout, nullptr);
+	vkDestroyPipeline(context->device, rt_pipeline.pipeline, nullptr);
+	vkDestroyDescriptorSetLayout(context->device, rt_pipeline.desc_sets[0], nullptr);
 }
 
 

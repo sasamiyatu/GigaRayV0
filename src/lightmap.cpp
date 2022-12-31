@@ -9,6 +9,8 @@
 #include "logging.h"
 #include "shaders.h"
 
+constexpr u32 MAX_BINDLESS_RESOURCES = 16384;
+
 namespace lm
 {
 
@@ -122,6 +124,10 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
 
         // Generate UVs and create vertex / index buffers
         u32 atlas_mesh_index = 0;
+
+        VkCommandBuffer cmd = ctx->allocate_command_buffer();
+        VkCommandBufferBeginInfo cmd_info = vkinit::command_buffer_begin_info();
+        vkBeginCommandBuffer(cmd, &cmd_info);
         for (u32 m = 0; m < data->meshes_count; ++m)
         {
             size_t mesh_index = meshes.size();
@@ -183,10 +189,6 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
                 new_prim.index_count = (u32)prim->indices->count;
                 new_prim.material = prim->material ? &materials[get_index(data->materials, prim->material)] : nullptr;
 
-                VkCommandBuffer cmd = ctx->allocate_command_buffer();
-                VkCommandBufferBeginInfo cmd_info = vkinit::command_buffer_begin_info();
-                vkBeginCommandBuffer(cmd, &cmd_info);
-
                 {
                     u32 required_size = (u32)(sizeof(Vertex) * verts.count);
                     new_prim.vertex_buffer = ctx->allocate_buffer(required_size,
@@ -228,13 +230,13 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
                 }
 
                 meshes[mesh_index].primitives.push_back(new_prim);
-
-                vkEndCommandBuffer(cmd);
-                VkSubmitInfo submit_info = vkinit::submit_info(1, &cmd);
-                vkQueueSubmit(ctx->graphics_queue, 1, &submit_info, 0);
-                vkQueueWaitIdle(ctx->graphics_queue);
             }
         }
+
+        vkEndCommandBuffer(cmd);
+        VkSubmitInfo submit_info = vkinit::submit_info(1, &cmd);
+        vkQueueSubmit(ctx->graphics_queue, 1, &submit_info, 0);
+        vkQueueWaitIdle(ctx->graphics_queue);
 
         // Get transforms from nodes
         for (u32 i = 0; i < data->nodes_count; ++i)
@@ -242,7 +244,7 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
             const cgltf_node* n = &data->nodes[i];
             if (n->mesh)
             {
-                u32 mesh_index = get_index(data->meshes, n->mesh);
+                size_t mesh_index = get_index(data->meshes, n->mesh);
                 cgltf_node_transform_world(n, (float*)&meshes[mesh_index].xform);
             }
         }
@@ -271,28 +273,100 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
         LOG_DEBUG("created atlas with %d meshes", atlas->meshCount);
     }
 
-    // Create pipelines
-    Shader vert_shader{};
-    bool success = load_shader_from_file(&vert_shader, ctx->device, "shaders/spirv/lm_basic.vert.spv");
-    Shader frag_shader{};
-    success = load_shader_from_file(&frag_shader, ctx->device, "shaders/spirv/lm_basic.frag.spv");
+    {
+        // Create pipelines
 
-    Shader shaders[] = { vert_shader, frag_shader };
-    VkDescriptorSetLayout desc_set_layout = ctx->create_descriptor_set_layout((u32)std::size(shaders), shaders);
-    Raster_Options opt{};
-    opt.cull_mode = VK_CULL_MODE_NONE;
-    pipeline = ctx->create_raster_pipeline(vert_shader.shader, frag_shader.shader, 1, &desc_set_layout, opt);
-    pipeline.update_template = ctx->create_descriptor_update_template((u32)std::size(shaders), shaders, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout);
-    pipeline.desc_sets[0] = desc_set_layout;
+        // Raster pipelines
+        Raster_Options opt{};
+        opt.cull_mode = VK_CULL_MODE_NONE;
+        opt.color_attachment_count = 1;
+        opt.color_formats = { VK_FORMAT_R32G32B32A32_SFLOAT, VK_FORMAT_R32G32B32A32_SFLOAT, VK_FORMAT_R32G32B32A32_SFLOAT };
+        pipeline = ctx->create_raster_pipeline("shaders/spirv/lm_basic.vert.spv", "shaders/spirv/lm_basic.frag.spv", opt);
 
-    vkDestroyShaderModule(ctx->device, vert_shader.shader, nullptr);
-    vkDestroyShaderModule(ctx->device, frag_shader.shader, nullptr);
+        opt.color_attachment_count = 2;
+        opt.depth_test_enable = false;
+        opt.depth_write_enable = false;
+        lightmap_gbuffer_pipeline = ctx->create_raster_pipeline("shaders/spirv/lm_gbuf.vert.spv", "shaders/spirv/lm_gbuf.frag.spv", opt);
+
+        // Raytracing pipelines
+        VkDescriptorPoolCreateInfo cinfo{ VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
+        VkDescriptorPoolSize pool_sizes_bindless[] =
+        {
+            { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, MAX_BINDLESS_RESOURCES },
+            { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, MAX_BINDLESS_RESOURCES}
+        };
+
+        cinfo.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT_EXT;
+        cinfo.maxSets = (u32)(std::size(pool_sizes_bindless) * MAX_BINDLESS_RESOURCES);
+        cinfo.poolSizeCount = (u32)std::size(pool_sizes_bindless);
+        cinfo.pPoolSizes = pool_sizes_bindless;
+
+        vkCreateDescriptorPool(ctx->device, &cinfo, nullptr, &descriptor_pool);
+
+        VkShaderStageFlags flags = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+        // Bindless stuff
+        VkDescriptorSetLayoutBinding bindless_bindings[] = {
+            vkinit::descriptor_set_layout_binding(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, MAX_BINDLESS_RESOURCES, flags),
+            vkinit::descriptor_set_layout_binding(1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, MAX_BINDLESS_RESOURCES, flags),
+            vkinit::descriptor_set_layout_binding(2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, MAX_BINDLESS_RESOURCES, flags),
+            vkinit::descriptor_set_layout_binding(3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, flags),
+            vkinit::descriptor_set_layout_binding(4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, MAX_BINDLESS_RESOURCES, flags),
+        };
+
+        VkDescriptorSetLayoutCreateInfo layout_info = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
+        layout_info.bindingCount = uint32_t(std::size(bindless_bindings));
+        layout_info.pBindings = bindless_bindings;
+        layout_info.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
+
+        VkDescriptorBindingFlags bindless_flags =
+            VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT_EXT
+            | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT_EXT;
+
+        VkDescriptorBindingFlags flags2[5] = { bindless_flags, bindless_flags, bindless_flags, 0, bindless_flags };
+
+        VkDescriptorSetLayoutBindingFlagsCreateInfoEXT extended_info{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO_EXT, nullptr };
+        extended_info.bindingCount = (u32)std::size(bindless_bindings);
+        extended_info.pBindingFlags = flags2;
+        layout_info.pNext = &extended_info;
+
+        VK_CHECK(vkCreateDescriptorSetLayout(ctx->device, &layout_info, nullptr, &bindless_set_layout));
+
+        // Allocate bindless descriptors
+
+        VkDescriptorSetAllocateInfo alloc_info{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
+        alloc_info.descriptorPool = descriptor_pool;
+        alloc_info.descriptorSetCount = 1;
+        alloc_info.pSetLayouts = &bindless_set_layout;
+
+        VK_CHECK(vkAllocateDescriptorSets(ctx->device, &alloc_info, &bindless_descriptor_set));
+
+        Shader rgen_shader, rmiss_shader, rchit_shader;
+        load_shader_from_file(&rgen_shader, ctx->device, "shaders/spirv/lightmap.rgen.spv");
+        load_shader_from_file(&rmiss_shader, ctx->device, "shaders/spirv/lightmap.rmiss.spv");
+        load_shader_from_file(&rchit_shader, ctx->device, "shaders/spirv/lightmap.rchit.spv");
+
+        VkDescriptorSetLayout push_desc_layout = ctx->create_descriptor_set_layout(1, &rgen_shader);
+        VkDescriptorSetLayout layouts[] = { push_desc_layout, bindless_set_layout };
+        lightmap_rt_pipeline = ctx->create_raytracing_pipeline(rgen_shader.shader, rmiss_shader.shader, rchit_shader.shader, layouts, (int)std::size(layouts));
+
+        vkDestroyShaderModule(ctx->device, rgen_shader.shader, nullptr);
+        vkDestroyShaderModule(ctx->device, rmiss_shader.shader, nullptr);
+        vkDestroyShaderModule(ctx->device, rchit_shader.shader, nullptr);
+
+        lightmap_rt_pipeline.pipeline.update_template = ctx->create_descriptor_update_template(1, &rgen_shader, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, lightmap_rt_pipeline.pipeline.layout);
+    }
 
     {
         // Create render targets
         color_target.image = ctx->allocate_image({ window_width, window_height, 1 }, 
             VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
         depth_target.image = ctx->allocate_image({ window_width, window_height, 1 }, VK_FORMAT_D32_SFLOAT, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
+        normal_target.image = ctx->allocate_image({ atlas->width, atlas->height, 1 },
+            VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+        position_target.image = ctx->allocate_image({ atlas->width, atlas->height, 1 },
+            VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+        lightmap_target.image = ctx->allocate_image({ atlas->width, atlas->height, 1 },
+            VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
 
         VkCommandBuffer cmd = ctx->allocate_command_buffer();
         VkCommandBufferBeginInfo begin_info = vkinit::command_buffer_begin_info();
@@ -303,8 +377,16 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
             VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
             1, VK_IMAGE_ASPECT_DEPTH_BIT);
 
+        vkinit::vk_transition_layout(cmd, lightmap_target.image.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+            0, 0,
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+            1, VK_IMAGE_ASPECT_COLOR_BIT);
+
         color_target.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        normal_target.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        position_target.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         depth_target.layout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        lightmap_target.layout = VK_IMAGE_LAYOUT_GENERAL;
         
         vkEndCommandBuffer(cmd);
 
@@ -341,55 +423,150 @@ void Lightmap_Renderer::render()
         VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
         1, VK_IMAGE_ASPECT_COLOR_BIT);
 
-    VkClearValue color_clear{};
-    color_clear.color = { 0.0, 0.0, 0.0, 1.0 };
-    VkClearValue depth_clear{};
-    depth_clear.depthStencil.depth = 0.0f;
-    VkRenderingAttachmentInfo color_info = vkinit::rendering_attachment_info(color_target.image.image_view, color_target.layout, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE, color_clear);
-    VkRenderingAttachmentInfo depth_info = vkinit::rendering_attachment_info(depth_target.image.image_view, depth_target.layout, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE, depth_clear);
+    vkinit::vk_transition_layout(cmd, normal_target.image.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        0, VK_ACCESS_SHADER_WRITE_BIT,
+        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        1, VK_IMAGE_ASPECT_COLOR_BIT);
 
-    VkRect2D render_area{};
-    render_area.offset = { 0, 0 };
-    render_area.extent = { window_width, window_height };
-    VkRenderingInfo rendering_info = vkinit::rendering_info(render_area, 1, &color_info, &depth_info);
+    vkinit::vk_transition_layout(cmd, position_target.image.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        0, VK_ACCESS_SHADER_WRITE_BIT,
+        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        1, VK_IMAGE_ASPECT_COLOR_BIT);
 
-    vkCmdBeginRendering(cmd, &rendering_info);
 
-    VkViewport viewport{};
-    viewport.height = -(float)window_height;
-    viewport.width = (float)window_width;
-    viewport.minDepth = 0.0f;
-    viewport.maxDepth = 1.0f;
-    viewport.x = 0.f;
-    viewport.y = (float)window_height;
-    vkCmdSetViewport(cmd, 0, 1, &viewport);
 
-    vkCmdSetScissor(cmd, 0, 1, &render_area);
-
-    glm::mat4 view_proj = camera ? camera->get_projection_matrix(aspect_ratio, 0.01f, 1000.f) * camera->get_view_matrix() : glm::mat4(1.0f);
-
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.pipeline);
-    vkCmdPushConstants(cmd, pipeline.layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(view_proj), &view_proj);
-
-    for (const auto& m : meshes)
     {
-        for (const auto& p : m.primitives)
+        // Render 3D view
+
+        VkClearValue color_clear{};
+        color_clear.color = { 0.0, 0.0, 0.0, 1.0 };
+        VkClearValue depth_clear{};
+        depth_clear.depthStencil.depth = 0.0f;
+
+        VkRenderingAttachmentInfo color_info = vkinit::rendering_attachment_info(color_target.image.image_view, color_target.layout, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE, color_clear);
+        VkRenderingAttachmentInfo depth_info = vkinit::rendering_attachment_info(depth_target.image.image_view, depth_target.layout, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE, depth_clear);
+
+        VkRect2D render_area{};
+        render_area.offset = { 0, 0 };
+        render_area.extent = { window_width, window_height };
+        VkRenderingAttachmentInfo color_infos[] = { color_info };
+        VkRenderingInfo rendering_info = vkinit::rendering_info(render_area, (u32)std::size(color_infos), color_infos, &depth_info);
+
+        vkCmdBeginRendering(cmd, &rendering_info);
+
+        VkViewport viewport{};
+        viewport.height = -(float)window_height;
+        viewport.width = (float)window_width;
+        viewport.minDepth = 0.0f;
+        viewport.maxDepth = 1.0f;
+        viewport.x = 0.f;
+        viewport.y = (float)window_height;
+        vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+        vkCmdSetScissor(cmd, 0, 1, &render_area);
+
+        glm::mat4 view_proj = camera ? camera->get_projection_matrix(aspect_ratio, 0.01f, 1000.f) * camera->get_view_matrix() : glm::mat4(1.0f);
+
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.pipeline);
+        vkCmdPushConstants(cmd, pipeline.layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(view_proj), &view_proj);
+
+        for (const auto& m : meshes)
         {
-            vkCmdBindIndexBuffer(cmd, p.index_buffer.buffer, 0, VK_INDEX_TYPE_UINT32);
-            vkCmdPushConstants(cmd, pipeline.layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, sizeof(glm::mat4), sizeof(glm::mat4), &m.xform);
-            Descriptor_Info descs[] = {
-                Descriptor_Info(p.vertex_buffer.buffer, 0, VK_WHOLE_SIZE),
-                Descriptor_Info(default_sampler, lightmap_texture.image_view, VK_IMAGE_LAYOUT_GENERAL),
-                Descriptor_Info(block_sampler, lightmap_texture.image_view, VK_IMAGE_LAYOUT_GENERAL),
-            };
-            vkCmdPushDescriptorSetWithTemplateKHR(cmd, pipeline.update_template, pipeline.layout, 0, &descs);
-            vkCmdDrawIndexed(cmd, p.index_count, 1, 0, 0, 0);
+            for (const auto& p : m.primitives)
+            {
+                vkCmdBindIndexBuffer(cmd, p.index_buffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+                vkCmdPushConstants(cmd, pipeline.layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, sizeof(glm::mat4), sizeof(glm::mat4), &m.xform);
+                Descriptor_Info descs[] = {
+                    Descriptor_Info(p.vertex_buffer.buffer, 0, VK_WHOLE_SIZE),
+                    Descriptor_Info(default_sampler, lightmap_texture.image_view, VK_IMAGE_LAYOUT_GENERAL),
+                    Descriptor_Info(block_sampler, lightmap_texture.image_view, VK_IMAGE_LAYOUT_GENERAL),
+                };
+                vkCmdPushDescriptorSetWithTemplateKHR(cmd, pipeline.update_template, pipeline.layout, 0, &descs);
+                vkCmdDrawIndexed(cmd, p.index_count, 1, 0, 0, 0);
+            }
         }
+
+        vkCmdEndRendering(cmd);
     }
 
-    vkCmdEndRendering(cmd);
+    {
+        // Render lightmap gbuffer
 
-    vkinit::vk_transition_layout(cmd, color_target.image.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        VkClearValue clear{};
+        clear.color = { 
+            std::numeric_limits<float>::quiet_NaN(), 
+            std::numeric_limits<float>::quiet_NaN(), 
+            std::numeric_limits<float>::quiet_NaN(), 
+            std::numeric_limits<float>::quiet_NaN() 
+        };
+
+        VkRenderingAttachmentInfo normal_info = vkinit::rendering_attachment_info(normal_target.image.image_view, normal_target.layout, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE, clear);
+        VkRenderingAttachmentInfo position_info = vkinit::rendering_attachment_info(position_target.image.image_view, position_target.layout, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE, clear);
+
+        VkRect2D render_area{};
+        render_area.offset = { 0, 0 };
+        render_area.extent = { atlas->width, atlas->height };
+        VkRenderingAttachmentInfo color_infos[] = { normal_info, position_info };
+        VkRenderingInfo rendering_info = vkinit::rendering_info(render_area, (u32)std::size(color_infos), color_infos);
+
+        vkCmdBeginRendering(cmd, &rendering_info);
+
+        VkViewport viewport{};
+        viewport.height = -(float)atlas->height;
+        viewport.width = (float)atlas->width;
+        viewport.minDepth = 0.0f;
+        viewport.maxDepth = 1.0f;
+        viewport.x = 0.f;
+        viewport.y = (float)atlas->height;
+
+        vkCmdSetViewport(cmd, 0, 1, &viewport);
+        vkCmdSetScissor(cmd, 0, 1, &render_area);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, lightmap_gbuffer_pipeline.pipeline);
+
+        for (const auto& m : meshes)
+        {
+            for (const auto& p : m.primitives)
+            {
+                vkCmdBindIndexBuffer(cmd, p.index_buffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+                vkCmdPushConstants(cmd, lightmap_gbuffer_pipeline.layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, sizeof(glm::mat4), sizeof(glm::mat4), &m.xform);
+                Descriptor_Info descs[] = {
+                    Descriptor_Info(p.vertex_buffer.buffer, 0, VK_WHOLE_SIZE)
+                };
+                vkCmdPushDescriptorSetWithTemplateKHR(cmd, lightmap_gbuffer_pipeline.update_template, lightmap_gbuffer_pipeline.layout, 0, &descs);
+                vkCmdDrawIndexed(cmd, p.index_count, 1, 0, 0, 0);
+            }
+        }
+
+        vkCmdEndRendering(cmd);
+    }
+
+    {
+        // Raytrace lightmaps
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, lightmap_rt_pipeline.pipeline.pipeline);
+        
+        Descriptor_Info descs[] = {
+                    Descriptor_Info(0, lightmap_target.image.image_view, VK_IMAGE_LAYOUT_GENERAL)
+        };
+
+        vkCmdPushDescriptorSetWithTemplateKHR(cmd, lightmap_rt_pipeline.pipeline.update_template, lightmap_rt_pipeline.pipeline.layout, 0, descs);
+
+        //printf("Trace rays cmd at: %f\n", timer->get_current_time());
+        vkCmdTraceRaysKHR(
+            cmd,
+            &lightmap_rt_pipeline.shader_binding_table.raygen_region,
+            &lightmap_rt_pipeline.shader_binding_table.miss_region,
+            &lightmap_rt_pipeline.shader_binding_table.chit_region,
+            &lightmap_rt_pipeline.shader_binding_table.callable_region,
+            atlas->width, atlas->height, 1
+        );
+    }
+
+    VkImage copy_src = color_target.image.image;
+    //VkImage copy_src = normal_target.image.image;
+    //VkImage copy_src = lightmap_target.image.image;
+    VkOffset3D src_extent = { (int)window_width, (int)window_height, 1 };
+    VkImageLayout src_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    vkinit::vk_transition_layout(cmd, copy_src, src_layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
         VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
         1, VK_IMAGE_ASPECT_COLOR_BIT);
@@ -401,8 +578,8 @@ void Lightmap_Renderer::render()
 
     VkImageSubresourceLayers src_res = vkinit::image_subresource_layers(VK_IMAGE_ASPECT_COLOR_BIT);
     VkImageSubresourceLayers dst_res = vkinit::image_subresource_layers(VK_IMAGE_ASPECT_COLOR_BIT);
-    VkImageBlit2 blit2 = vkinit::image_blit2(src_res, { 0, 0, 0 }, { (int)window_width, (int)window_height, 1 }, dst_res, { 0, 0, 0 }, { (int)window_width, (int)window_height, 1 });
-    VkBlitImageInfo2 blit_info = vkinit::blit_image_info2(color_target.image.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, next_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit2);
+    VkImageBlit2 blit2 = vkinit::image_blit2(src_res, { 0, 0, 0 }, src_extent, dst_res, { 0, 0, 0 }, { (int)window_width, (int)window_height, 1 });
+    VkBlitImageInfo2 blit_info = vkinit::blit_image_info2(copy_src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, next_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit2);
     vkCmdBlitImage2(cmd, &blit_info);
 
     vkinit::vk_transition_layout(cmd, next_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
@@ -436,6 +613,16 @@ void Lightmap_Renderer::shutdown()
     vkDestroyPipeline(ctx->device, pipeline.pipeline, nullptr);
     vkDestroyDescriptorSetLayout(ctx->device, pipeline.desc_sets[0], nullptr);
     vkDestroyDescriptorUpdateTemplate(ctx->device, pipeline.update_template, nullptr);
+    vkDestroyPipelineLayout(ctx->device, lightmap_gbuffer_pipeline.layout, nullptr);
+    vkDestroyPipeline(ctx->device, lightmap_gbuffer_pipeline.pipeline, nullptr);
+    vkDestroyDescriptorSetLayout(ctx->device, lightmap_gbuffer_pipeline.desc_sets[0], nullptr);
+    vkDestroyDescriptorUpdateTemplate(ctx->device, lightmap_gbuffer_pipeline.update_template, nullptr);
+    vkDestroyPipelineLayout(ctx->device, lightmap_rt_pipeline.pipeline.layout, nullptr);
+    vkDestroyPipeline(ctx->device, lightmap_rt_pipeline.pipeline.pipeline, nullptr);
+    vkDestroyDescriptorPool(ctx->device, descriptor_pool, nullptr);
+    vkDestroyDescriptorSetLayout(ctx->device, lightmap_rt_pipeline.pipeline.desc_sets[0], nullptr);
+    vkDestroyDescriptorSetLayout(ctx->device, bindless_set_layout, nullptr);
+    vkDestroyDescriptorUpdateTemplate(ctx->device, lightmap_rt_pipeline.pipeline.update_template, nullptr);
 }
 
 static void load_textures(Vk_Context* ctx, const char* basepath, cgltf_image* images, u32 image_count, std::vector<Vk_Allocated_Image>& out_images)

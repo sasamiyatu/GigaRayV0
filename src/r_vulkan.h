@@ -69,6 +69,8 @@ struct Raster_Options
 	VkCompareOp depth_compare_op = VK_COMPARE_OP_GREATER;
 	bool depth_test_enable = true;
 	bool depth_write_enable = true;
+	u32 color_attachment_count = 1;
+	std::array<VkFormat, 8> color_formats = {VK_FORMAT_R32G32B32A32_SFLOAT};
 };
 
 struct Garbage_Collector
@@ -176,6 +178,7 @@ struct Vk_Context
 
 	Vk_Pipeline create_raster_pipeline(VkShaderModule vertex_shader, VkShaderModule fragment_shader,
 		u32 num_layouts, VkDescriptorSetLayout* layouts, Raster_Options raster_opt);
+	Vk_Pipeline create_raster_pipeline(const char* vertex_shader, const char* fragment_shader, Raster_Options opt = {});
 
 	void save_screenshot(Vk_Allocated_Image image, const char* filename);
 };

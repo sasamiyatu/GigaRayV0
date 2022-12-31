@@ -47,6 +47,9 @@ struct Render_Target
 {
 	Vk_Allocated_Image image;
 	VkImageLayout layout;
+	u32 width;
+	u32 height;
+	u32 depth;
 };
 
 struct Vertex
@@ -72,8 +75,18 @@ struct Lightmap_Renderer
 	VkSampler default_sampler = 0;
 	VkSampler block_sampler = 0;
 	Vk_Pipeline pipeline = {};
+	Vk_Pipeline lightmap_gbuffer_pipeline = {};
+	Raytracing_Pipeline lightmap_rt_pipeline = {};
+	VkDescriptorSetLayout bindless_set_layout = 0;
+	VkDescriptorSet bindless_descriptor_set = 0;
+	VkDescriptorPool descriptor_pool;
 	Render_Target color_target;
 	Render_Target depth_target;
+
+	// These are for lightmaps
+	Render_Target lightmap_target;
+	Render_Target normal_target;
+	Render_Target position_target;
 
 	u32 window_width = 0;
 	u32 window_height = 0;
@@ -86,7 +99,6 @@ struct Lightmap_Renderer
 	xatlas::Atlas* atlas;
 
 	Vk_Allocated_Image lightmap_texture;
-
 
 	Camera_Component* camera = nullptr;
 

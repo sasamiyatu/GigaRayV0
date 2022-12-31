@@ -6,6 +6,8 @@ add_executable(GigaRayV0
     defines.h
     ecs.h
     ecs.cpp
+    events.h
+    events.cpp
     g_math.h
     g_math.cpp
     game.h 

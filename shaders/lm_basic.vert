@@ -45,6 +45,8 @@ layout( push_constant ) uniform constants
 layout (location = 0) out vec3 color;
 layout (location = 1) out vec2 texcoord0;
 layout (location = 2) out vec2 texcoord1;
+layout (location = 3) out vec3 normal;
+layout (location = 4) out vec3 pos;
 
 void main()
 {
@@ -52,6 +54,8 @@ void main()
     Vertex v = verts[gl_VertexIndex];
     color = v.color;
     //gl_Position = control.viewproj * control.model * vec4(v.position, 1.0);
+    pos = (control.model * vec4(v.position, 1.0)).xyz;
+    normal = v.normal;
     gl_Position = vec4(v.uv1 * 2.0 - 1.0, 0.5, 1.0);
     texcoord0 = v.uv0;
     texcoord1 = v.uv1;

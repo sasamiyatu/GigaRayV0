@@ -1018,17 +1018,17 @@ Raytracing_Pipeline Vk_Context::create_raytracing_pipeline(
 	VkDeviceAddress base = get_buffer_device_address(rt_sbt_buffer);
 	VkStridedDeviceAddressRegionKHR raygen_region{};
 	raygen_region.deviceAddress = base + raygen_group_index * device_sbt_alignment;
-	raygen_region.stride = group_handle_size;
+	raygen_region.stride = group_size_aligned;
 	raygen_region.size = group_size_aligned;
 
 	VkStridedDeviceAddressRegionKHR miss_region{};
 	miss_region.deviceAddress = base + miss_group_index * device_sbt_alignment;
-	miss_region.stride = group_handle_size;
+	miss_region.stride = group_size_aligned;
 	miss_region.size = group_size_aligned;
 
 	VkStridedDeviceAddressRegionKHR hit_region{};
 	hit_region.deviceAddress = base + hit_group_index * device_sbt_alignment;
-	hit_region.stride = group_handle_size;
+	hit_region.stride = group_size_aligned;
 	hit_region.size = group_size_aligned;
 
 	sbt.raygen_region = raygen_region;
@@ -1080,17 +1080,18 @@ Vk_Pipeline Vk_Context::create_raster_pipeline(VkShaderModule vertex_shader, VkS
 	depth_stencil_state.minDepthBounds = 0.f;
 	depth_stencil_state.maxDepthBounds = 1.f;
 
-	VkPipelineColorBlendAttachmentState attachment = vkinit::pipeline_color_blend_attachment_state();
-	VkPipelineColorBlendStateCreateInfo blend_state = vkinit::pipeline_color_blend_state_create_info(1, &attachment);
+	std::vector<VkPipelineColorBlendAttachmentState> attachments(raster_opt.color_attachment_count);
+	for (auto& a : attachments)
+		a = vkinit::pipeline_color_blend_attachment_state();
+	VkPipelineColorBlendStateCreateInfo blend_state = vkinit::pipeline_color_blend_state_create_info((u32)attachments.size(), attachments.data());
 
 	VkDynamicState dynamic_states[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
 	VkPipelineDynamicStateCreateInfo dynamic_state = vkinit::pipeline_dynamic_state_create_info((u32)std::size(dynamic_states), dynamic_states);
 
 	VkPipelineRenderingCreateInfo rendering_create_info{ VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO };
 	rendering_create_info.viewMask = 0;
-	rendering_create_info.colorAttachmentCount = 1;
-	VkFormat color_format = VK_FORMAT_R32G32B32A32_SFLOAT;
-	rendering_create_info.pColorAttachmentFormats = &color_format;
+	rendering_create_info.colorAttachmentCount = raster_opt.color_attachment_count;
+	rendering_create_info.pColorAttachmentFormats = raster_opt.color_formats.data();
 	rendering_create_info.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
 
 	VkGraphicsPipelineCreateInfo pipeline_create_info = { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
@@ -1131,6 +1132,28 @@ VkCommandBuffer Vk_Context::allocate_command_buffer()
 
 void Vk_Context::save_screenshot(Vk_Allocated_Image image, const char* filename)
 {
+}
+
+Vk_Pipeline Vk_Context::create_raster_pipeline(const char* vertex_shader, const char* fragment_shader, Raster_Options opt)
+{
+	Vk_Pipeline pipeline;
+
+	Shader vert_shader{};
+	bool success = load_shader_from_file(&vert_shader, device, vertex_shader);
+	Shader frag_shader{};
+	success = load_shader_from_file(&frag_shader, device, fragment_shader);
+
+	Shader shaders[] = { vert_shader, frag_shader };
+	VkDescriptorSetLayout desc_set_layout = create_descriptor_set_layout((u32)std::size(shaders), shaders);
+
+	pipeline = create_raster_pipeline(vert_shader.shader, frag_shader.shader, 1, &desc_set_layout, opt);
+	pipeline.update_template = create_descriptor_update_template((u32)std::size(shaders), shaders, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout);
+	pipeline.desc_sets[0] = desc_set_layout;
+
+	vkDestroyShaderModule(device, vert_shader.shader, nullptr);
+	vkDestroyShaderModule(device, frag_shader.shader, nullptr);
+
+	return pipeline;
 }
 
 Vk_Allocated_Image Vk_Context::load_texture(const char* filepath)

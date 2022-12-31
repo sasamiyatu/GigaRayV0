@@ -318,7 +318,7 @@ namespace vkinit
 		VkRect2D render_area,
 		u32 color_attachment_count,
 		VkRenderingAttachmentInfo* color_attachments,
-		VkRenderingAttachmentInfo* depth_attachment,
+		VkRenderingAttachmentInfo* depth_attachment = nullptr,
 		VkRenderingAttachmentInfo* stencil_attachment = nullptr
 	)
 	{
@@ -379,6 +379,16 @@ namespace vkinit
 		info.pResults = results;
 
 		return info;
+	}
+
+	inline VkDescriptorSetLayoutBinding descriptor_set_layout_binding(u32 binding, VkDescriptorType type, u32 count, VkShaderStageFlags flags)
+	{
+		VkDescriptorSetLayoutBinding layout_binding{};
+		layout_binding.binding = binding;
+		layout_binding.descriptorType = type;
+		layout_binding.descriptorCount = count;
+		layout_binding.stageFlags = flags;
+		return layout_binding;
 	}
 	
 }
