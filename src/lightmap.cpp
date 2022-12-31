@@ -21,9 +21,7 @@ struct Image
 };
 
 static void load_textures(Vk_Context* ctx, const char* basepath, cgltf_image* images, u32 image_count, std::vector<Vk_Allocated_Image>& out_images);
-static void load_buffers(Vk_Context* ctx, const std::vector<Raw_Buffer>& raw_buffers, std::vector<Vk_Allocated_Buffer>& out_buffers);
-static void load_raw_buffers(const char* basepath, cgltf_buffer* buffers, u32 buffer_count, std::vector<Raw_Buffer>& raw_buffers);
-static xatlas::MeshDecl create_mesh_decl(cgltf_data* data, cgltf_primitive* prim, std::vector<Raw_Buffer>& raw_buffers);
+static xatlas::MeshDecl create_mesh_decl(cgltf_data* data, cgltf_primitive* prim);
 static void render_debug_atlas(xatlas::Atlas* atlas, const char* filename);
 static void fill_triangle(Image* img, glm::vec2 uvs[3], glm::vec3 color);
 static int orient2d(glm::vec2 a, glm::vec2 b, glm::vec2 c);
@@ -71,9 +69,7 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
         ;
     *(slashpos + 1) = 0;
 
-    load_raw_buffers(stripped, data->buffers, (u32)data->buffers_count, raw_buffers);
     load_textures(ctx, stripped, data->images, (u32)data->images_count, images);
-    load_buffers(ctx, raw_buffers, buffers);
 
     // Create textures
     VkSamplerCreateInfo sampler_info = vkinit::sampler_create_info();
@@ -105,75 +101,6 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
         materials.push_back(new_mat);
     }
 
-    // Create meshes
-    for (u32 m = 0; m < data->meshes_count; ++m)
-    {
-        Mesh new_mesh{};
-        for (u32 p = 0; p < data->meshes[m].primitives_count; ++p)
-        {
-            cgltf_primitive* prim = &data->meshes[m].primitives[p];
-            Primitive new_prim{};
-
-            Index_Info info{};
-            assert(prim->indices->component_type == cgltf_component_type_r_16u ||
-                prim->indices->component_type == cgltf_component_type_r_32u);
-            info.index_type = prim->indices->component_type == cgltf_component_type_r_16u ?
-                Index_Info::Index_Type::UINT16 : Index_Info::Index_Type::UINT32;
-            info.count = (u32)prim->indices->count;
-            info.buffer = buffers[get_index(data->buffers, prim->indices->buffer_view->buffer)].buffer;
-            info.offset = u32(prim->indices->offset + prim->indices->buffer_view->offset);
-            info.stride = (u32)prim->indices->stride;
-            new_prim.indices = info;
-
-            for (u32 a = 0; a < prim->attributes_count; ++a)
-            {
-                Attribute attrib{};
-                cgltf_accessor* acc = prim->attributes[a].data;
-                attrib.count = (u32)acc->count;
-                attrib.offset = u32(acc->offset + acc->buffer_view->offset);
-                u32 buffer_index = get_index(data->buffers, acc->buffer_view->buffer);
-                attrib.buffer = buffers[buffer_index].buffer;
-                new_prim.material = &materials[get_index(data->materials, prim->material)];
-                switch (prim->attributes[a].type)
-                {
-                case cgltf_attribute_type_normal:
-                    assert(acc->component_type == cgltf_component_type_r_32f);
-                    assert(acc->type == cgltf_type_vec3);
-                    new_prim.normal = attrib;
-                    new_prim.normals.resize(acc->count);
-                    cgltf_accessor_unpack_floats(acc, (float*)new_prim.normals.data(), acc->count * 3);
-                    break;
-                case cgltf_attribute_type_position:
-                    assert(acc->component_type == cgltf_component_type_r_32f);
-                    assert(acc->type == cgltf_type_vec3);
-                    new_prim.position = attrib;
-                    new_prim.positions.resize(acc->count);
-                    cgltf_accessor_unpack_floats(acc, (float*)new_prim.positions.data(), acc->count * 3);
-                    break;
-                case cgltf_attribute_type_texcoord:
-                    assert(acc->component_type == cgltf_component_type_r_32f);
-                    assert(acc->type == cgltf_type_vec2);
-                    new_prim.texcoord0 = attrib;
-                    new_prim.uv0.resize(acc->count);
-                    cgltf_accessor_unpack_floats(acc, (float*)new_prim.uv0.data(), acc->count * 2);
-                    break;
-                case cgltf_attribute_type_tangent:
-                    assert(acc->component_type == cgltf_component_type_r_32f);
-                    assert(acc->type == cgltf_type_vec4);
-                    new_prim.tangent = attrib;
-                    new_prim.tangents.resize(acc->count);
-                    cgltf_accessor_unpack_floats(acc, (float*)new_prim.tangents.data(), acc->count * 4);
-                    break;
-                default:
-                    assert(!"Attribute type not implemented\n");
-                }
-            }
-            new_mesh.primitives.push_back(std::move(new_prim));
-
-        }
-        meshes.push_back(std::move(new_mesh));
-    }
-
     {
         // Generate atlas
         atlas = xatlas::Create();
@@ -181,7 +108,7 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
         {
             for (u32 p = 0; p < data->meshes[m].primitives_count; ++p)
             {
-                xatlas::MeshDecl decl = create_mesh_decl(data, &data->meshes[m].primitives[p], raw_buffers);
+                xatlas::MeshDecl decl = create_mesh_decl(data, &data->meshes[m].primitives[p]);
                 xatlas::AddMeshError err = xatlas::AddMesh(atlas, decl);
                 assert(err == xatlas::AddMeshError::Success);
             }
@@ -193,79 +120,131 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
         xatlas::Generate(atlas, chart_opts, pack_opts);
         render_debug_atlas(atlas, "test_atlas.png");
 
-        std::vector<Vertex> verts;
-        std::vector<u32> indices;
-        for (u32 m = 0; m < atlas->meshCount; ++m)
+        // Generate UVs and create vertex / index buffers
+        u32 atlas_mesh_index = 0;
+        for (u32 m = 0; m < data->meshes_count; ++m)
         {
-            const auto* mesh = &atlas->meshes[m];
-            for (u32 i = 0; i < mesh->indexCount; ++i)
+            size_t mesh_index = meshes.size();
+            meshes.push_back({});
+            for (u32 p = 0; p < data->meshes[m].primitives_count; ++p)
             {
-                assert(i < mesh->vertexCount);
-                u32 index = mesh->indexArray[i];
-                indices.push_back(index);
-                u32 xref = mesh->vertexArray[index].xref;
-                u32 chart_index = mesh->vertexArray[index].chartIndex;
-                glm::vec2 uv = glm::make_vec2(mesh->vertexArray[index].uv);
-                Vertex v{};
-                v.uv1 = uv / glm::vec2(atlas->width, atlas->height);
-                v.normal = meshes[0].primitives[0].normals[xref];
-                v.position = meshes[0].primitives[0].positions[xref];
-                v.uv0 = meshes[0].primitives[0].uv0[xref];
-                v.tangent = meshes[0].primitives[0].tangents[xref];
-                v.color = math::random_vector((u64)chart_index + 1337);
-                verts.push_back(v);
+                const xatlas::Mesh* mesh = &atlas->meshes[atlas_mesh_index++];
+                const cgltf_primitive* prim = &data->meshes[m].primitives[p];
+
+                Buffer<Vertex> verts(mesh->vertexCount);
+                Buffer<u32> indices(mesh->indexCount);
+
+                for (u32 i = 0; i < mesh->vertexCount; ++i)
+                {
+                    const xatlas::Vertex* vertex = &mesh->vertexArray[i];
+                    u32 xref = vertex->xref;
+                    u32 chart_index = vertex->chartIndex;
+                    glm::vec2 uv = glm::make_vec2(vertex->uv);
+
+                    Vertex v{};
+
+                    for (u32 a = 0; a < prim->attributes_count; ++a)
+                    {
+                        const cgltf_attribute* attrib = &prim->attributes[a];
+                        cgltf_accessor* acc = attrib->data;
+                        size_t component_count = cgltf_num_components(acc->type);
+                        float* in_ptr = (float*)((u8*)acc->buffer_view->buffer->data + acc->buffer_view->offset + acc->offset + acc->stride * xref);
+                        switch (attrib->type)
+                        {
+                        case cgltf_attribute_type_position:
+                            v.position = glm::make_vec3(in_ptr);
+                            break;
+                        case cgltf_attribute_type_normal:
+                            v.normal = glm::make_vec3(in_ptr);
+                            break;
+                        case cgltf_attribute_type_texcoord:
+                            v.uv0 = glm::make_vec2(in_ptr);
+                            break;
+                        case cgltf_attribute_type_tangent:
+                            v.tangent = glm::make_vec4(in_ptr);
+                            break;
+                        default:
+                            assert(!"Unhandled cgltf attribute type!");
+                            break;
+                        }
+                    }
+                    v.uv1 = uv / glm::vec2(atlas->width, atlas->height);
+                    v.color = math::random_vector((u64)chart_index + 1337);
+                    verts[i] = v;
+                }
+
+                for (u32 i = 0; i < mesh->indexCount; ++i)
+                {
+                    assert(mesh->indexArray[i] < mesh->vertexCount);
+                    indices[i] = mesh->indexArray[i];
+                }
+
+                Primitive new_prim{};
+                new_prim.index_count = (u32)prim->indices->count;
+                new_prim.material = prim->material ? &materials[get_index(data->materials, prim->material)] : nullptr;
+
+                VkCommandBuffer cmd = ctx->allocate_command_buffer();
+                VkCommandBufferBeginInfo cmd_info = vkinit::command_buffer_begin_info();
+                vkBeginCommandBuffer(cmd, &cmd_info);
+
+                {
+                    u32 required_size = (u32)(sizeof(Vertex) * verts.count);
+                    new_prim.vertex_buffer = ctx->allocate_buffer(required_size,
+                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                        VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0
+                    );
+
+                    Vk_Allocated_Buffer vertex_staging = ctx->allocate_buffer(required_size,
+                        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                        VMA_MEMORY_USAGE_AUTO, VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
+                    );
+                    void* mapped = 0;
+                    vmaMapMemory(ctx->allocator, vertex_staging.allocation, &mapped);
+                    memcpy(mapped, verts.data, required_size);
+                    vmaUnmapMemory(ctx->allocator, vertex_staging.allocation);
+
+                    VkBufferCopy buffer_copy = vkinit::buffer_copy(required_size, 0, 0);
+                    vkCmdCopyBuffer(cmd, vertex_staging.buffer, new_prim.vertex_buffer.buffer, 1, &buffer_copy);
+                }
+
+                {
+                    u32 required_size = (u32)(sizeof(u32) * indices.count);
+                    new_prim.index_buffer = ctx->allocate_buffer(required_size,
+                        VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                        VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0
+                    );
+
+                    Vk_Allocated_Buffer staging = ctx->allocate_buffer(required_size,
+                        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                        VMA_MEMORY_USAGE_AUTO, VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
+                    );
+                    void* mapped = 0;
+                    vmaMapMemory(ctx->allocator, staging.allocation, &mapped);
+                    memcpy(mapped, indices.data, required_size);
+                    vmaUnmapMemory(ctx->allocator, staging.allocation);
+
+                    VkBufferCopy buffer_copy = vkinit::buffer_copy(required_size, 0, 0);
+                    vkCmdCopyBuffer(cmd, staging.buffer, new_prim.index_buffer.buffer, 1, &buffer_copy);
+                }
+
+                meshes[mesh_index].primitives.push_back(new_prim);
+
+                vkEndCommandBuffer(cmd);
+                VkSubmitInfo submit_info = vkinit::submit_info(1, &cmd);
+                vkQueueSubmit(ctx->graphics_queue, 1, &submit_info, 0);
+                vkQueueWaitIdle(ctx->graphics_queue);
             }
         }
 
+        // Get transforms from nodes
+        for (u32 i = 0; i < data->nodes_count; ++i)
         {
-            VkCommandBuffer cmd = ctx->allocate_command_buffer();
-            VkCommandBufferBeginInfo cmd_info = vkinit::command_buffer_begin_info();
-            vkBeginCommandBuffer(cmd, &cmd_info);
-
+            const cgltf_node* n = &data->nodes[i];
+            if (n->mesh)
             {
-                u32 required_size = (u32)(sizeof(Vertex) * verts.size());
-                vertex_buffer = ctx->allocate_buffer(required_size,
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0
-                );
-
-                Vk_Allocated_Buffer vertex_staging = ctx->allocate_buffer(required_size,
-                    VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                    VMA_MEMORY_USAGE_AUTO, VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
-                );
-                void* mapped = 0;
-                vmaMapMemory(ctx->allocator, vertex_staging.allocation, &mapped);
-                memcpy(mapped, verts.data(), required_size);
-                vmaUnmapMemory(ctx->allocator, vertex_staging.allocation);
-
-                VkBufferCopy buffer_copy = vkinit::buffer_copy(required_size, 0, 0);
-                vkCmdCopyBuffer(cmd, vertex_staging.buffer, vertex_buffer.buffer, 1, &buffer_copy);
+                u32 mesh_index = get_index(data->meshes, n->mesh);
+                cgltf_node_transform_world(n, (float*)&meshes[mesh_index].xform);
             }
-
-            {
-                u32 required_size = (u32)(sizeof(u32) * indices.size());
-                index_buffer = ctx->allocate_buffer(required_size,
-                    VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0
-                );
-
-                Vk_Allocated_Buffer staging = ctx->allocate_buffer(required_size,
-                    VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                    VMA_MEMORY_USAGE_AUTO, VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
-                );
-                void* mapped = 0;
-                vmaMapMemory(ctx->allocator, staging.allocation, &mapped);
-                memcpy(mapped, indices.data(), required_size);
-                vmaUnmapMemory(ctx->allocator, staging.allocation);
-
-                VkBufferCopy buffer_copy = vkinit::buffer_copy(required_size, 0, 0);
-                vkCmdCopyBuffer(cmd, staging.buffer, index_buffer.buffer, 1, &buffer_copy);
-            }
-
-            vkEndCommandBuffer(cmd);
-            VkSubmitInfo submit_info = vkinit::submit_info(1, &cmd);
-            vkQueueSubmit(ctx->graphics_queue, 1, &submit_info, 0);
-            vkQueueWaitIdle(ctx->graphics_queue);
         }
 
         {
@@ -288,23 +267,6 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
             vkQueueSubmit(ctx->graphics_queue, 1, &submit_info, 0);
             vkQueueWaitIdle(ctx->graphics_queue);
         }
-
-        for (u32 m = 0; m < atlas->meshCount; ++m)
-        {
-            for (u32 c = 0; c < atlas->meshes[m].chartCount; ++c)
-            {
-                const auto* chart = &atlas->meshes[m].chartArray[c];
-                printf("chart: %d\n", c);
-                for (u32 f = 0; f < chart->faceCount; ++f)
-                {
-                    printf("f %d: %d\n", f, chart->faceArray[f]);
-                }
-            }
-        }
-
-        // Add lightmap UVs to meshes
-        // Ostensibly xatlas generates extra vertices but keeps index count the same, so 
-        // I guess we need to replace all the vertices in the GLTF with new vertices?
 
         LOG_DEBUG("created atlas with %d meshes", atlas->meshCount);
     }
@@ -408,34 +370,22 @@ void Lightmap_Renderer::render()
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.pipeline);
     vkCmdPushConstants(cmd, pipeline.layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(view_proj), &view_proj);
-    //vkCmdDraw(cmd, 3, 1, 0, 0);
 
-#if 0
     for (const auto& m : meshes)
     {
         for (const auto& p : m.primitives)
         {
-            vkCmdBindIndexBuffer(cmd, p.indices.buffer, p.indices.offset, p.indices.index_type == Index_Info::UINT16 ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32);
+            vkCmdBindIndexBuffer(cmd, p.index_buffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+            vkCmdPushConstants(cmd, pipeline.layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, sizeof(glm::mat4), sizeof(glm::mat4), &m.xform);
             Descriptor_Info descs[] = {
-                Descriptor_Info(p.position.buffer, p.position.offset, p.position.count * sizeof(glm::vec3)),
-                Descriptor_Info(p.normal.buffer, p.normal.offset, p.normal.count * sizeof(glm::vec3)),
-                Descriptor_Info(p.texcoord0.buffer, p.texcoord0.offset, p.texcoord0.count * sizeof(glm::vec2)),
-                Descriptor_Info(p.material->base_color_tex->sampler, p.material->base_color_tex->image.image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                Descriptor_Info(p.vertex_buffer.buffer, 0, VK_WHOLE_SIZE),
+                Descriptor_Info(default_sampler, lightmap_texture.image_view, VK_IMAGE_LAYOUT_GENERAL),
+                Descriptor_Info(block_sampler, lightmap_texture.image_view, VK_IMAGE_LAYOUT_GENERAL),
             };
             vkCmdPushDescriptorSetWithTemplateKHR(cmd, pipeline.update_template, pipeline.layout, 0, &descs);
-            vkCmdDrawIndexed(cmd, p.indices.count, 1, 0, 0, 0);
+            vkCmdDrawIndexed(cmd, p.index_count, 1, 0, 0, 0);
         }
     }
-#endif
-
-    vkCmdBindIndexBuffer(cmd, index_buffer.buffer, 0, VK_INDEX_TYPE_UINT32);
-    Descriptor_Info descs[] = {
-        Descriptor_Info(vertex_buffer.buffer, 0, VK_WHOLE_SIZE),
-        Descriptor_Info(default_sampler, textures[0].image.image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
-        Descriptor_Info(block_sampler, lightmap_texture.image_view, VK_IMAGE_LAYOUT_GENERAL),
-    };
-    vkCmdPushDescriptorSetWithTemplateKHR(cmd, pipeline.update_template, pipeline.layout, 0, &descs);
-    vkCmdDrawIndexed(cmd, 36, 1, 0, 0, 0);
 
     vkCmdEndRendering(cmd);
 
@@ -556,63 +506,12 @@ static void load_textures(Vk_Context* ctx, const char* basepath, cgltf_image* im
     ctx->free_command_buffer(cmd);
 }
 
-static void load_buffers(Vk_Context* ctx, const std::vector<Raw_Buffer>& raw_buffers, std::vector<Vk_Allocated_Buffer>& out_buffers)
-{
-    VkCommandBuffer cmd = ctx->allocate_command_buffer();
-
-    VkCommandBufferBeginInfo begin_info = vkinit::command_buffer_begin_info();
-    vkBeginCommandBuffer(cmd, &begin_info);
-
-    for (size_t i = 0; i < raw_buffers.size(); ++i)
-    {
-        u8* data = raw_buffers[i].data;
-        u32 size = raw_buffers[i].size;
-
-        Vk_Allocated_Buffer gpu_buffer = ctx->allocate_buffer(
-            size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-            VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0);
-
-        Vk_Allocated_Buffer staging_buffer = ctx->allocate_buffer(
-            size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_AUTO, VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-
-        void* mapped;
-        vmaMapMemory(ctx->allocator, staging_buffer.allocation, &mapped);
-        memcpy(mapped, data, size);
-        vmaUnmapMemory(ctx->allocator, staging_buffer.allocation);
-
-        VkBufferCopy buffer_copy = vkinit::buffer_copy(size);
-        vkCmdCopyBuffer(cmd, staging_buffer.buffer, gpu_buffer.buffer, 1, &buffer_copy);
-
-        out_buffers.push_back(gpu_buffer);
-    }
-
-    vkEndCommandBuffer(cmd);
-
-    VkSubmitInfo submit_info = vkinit::submit_info(1, &cmd);
-    vkQueueSubmit(ctx->graphics_queue, 1, &submit_info, 0);
-
-    vkQueueWaitIdle(ctx->graphics_queue);
-    ctx->free_command_buffer(cmd);
-}
-
-static void load_raw_buffers(const char* basepath, cgltf_buffer* buffers, u32 buffer_count, std::vector<Raw_Buffer>& raw_buffers)
-{
-    for (u32 i = 0; i < buffer_count; ++i)
-    {
-        Raw_Buffer buf{};
-        std::string fp = std::string(basepath) + std::string(buffers->uri);
-        u32 bytes_read = read_entire_file(fp.c_str(), &buf.data);
-        buf.size = bytes_read;
-        raw_buffers.push_back(buf);
-    }
-}
-
-static xatlas::MeshDecl create_mesh_decl(cgltf_data* data, cgltf_primitive* prim, std::vector<Raw_Buffer>& raw_buffers)
+static xatlas::MeshDecl create_mesh_decl(cgltf_data* data, cgltf_primitive* prim)
 {
     xatlas::MeshDecl decl{};
     decl.indexCount = (u32)prim->indices->count;
     decl.indexFormat = prim->indices->component_type == cgltf_component_type_r_16u ? xatlas::IndexFormat::UInt16 : xatlas::IndexFormat::UInt32;
-    decl.indexData = raw_buffers[get_index(data->buffers, prim->indices->buffer_view->buffer)].data + 
+    decl.indexData = (u8*)prim->indices->buffer_view->buffer->data +
         (u32)(prim->indices->offset + prim->indices->buffer_view->offset);
 
     cgltf_attribute* vertex_attrib = 0;
@@ -626,8 +525,7 @@ static xatlas::MeshDecl create_mesh_decl(cgltf_data* data, cgltf_primitive* prim
     }
     assert(vertex_attrib);
     decl.vertexCount = (u32)vertex_attrib->data->count;
-    decl.vertexPositionData = 
-        raw_buffers[get_index(data->buffers, vertex_attrib->data->buffer_view->buffer)].data 
+    decl.vertexPositionData = (u8*)vertex_attrib->data->buffer_view->buffer->data
         + vertex_attrib->data->offset 
         + vertex_attrib->data->buffer_view->offset;
     decl.vertexPositionStride = (u32)vertex_attrib->data->stride;

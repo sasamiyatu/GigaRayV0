@@ -36,7 +36,9 @@ int main(int argc, char** argv)
 	Renderer renderer(&ctx, &platform, &mesh_manager, &texture_manager, &material_manager, &timer);
 
 	lm::Lightmap_Renderer lightmap_renderer(&ctx, (u32)WINDOW_WIDTH, (u32)WINDOW_HEIGHT);
-	lightmap_renderer.init_scene("data/cube/Cube.gltf");
+	//lightmap_renderer.init_scene("data/cube/Cube.gltf");
+	//lightmap_renderer.init_scene("data/cornellbox/scene.gltf");
+	lightmap_renderer.init_scene("data/sphere/sphere.gltf");
 
 	//Mesh2 gltf = load_gltf_from_file("data/cube/Cube.gltf", &ctx, &texture_manager, &material_manager);
 	//Mesh2 gltf = load_gltf_from_file("data/sponza/Sponza.gltf", &ctx, &texture_manager, &material_manager);

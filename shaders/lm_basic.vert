@@ -39,6 +39,7 @@ vec3 positions[3] = {
 layout( push_constant ) uniform constants
 {
     mat4 viewproj;
+    mat4 model;
 } control;
 
 layout (location = 0) out vec3 color;
@@ -50,8 +51,8 @@ void main()
     //color = normals[gl_VertexIndex] * 0.5 + 0.5;
     Vertex v = verts[gl_VertexIndex];
     color = v.color;
-    gl_Position = control.viewproj * vec4(v.position, 1.0);
-    //gl_Position = vec4(v.uv1 * 2.0 - 1.0, 0.5, 1.0);
+    //gl_Position = control.viewproj * control.model * vec4(v.position, 1.0);
+    gl_Position = vec4(v.uv1 * 2.0 - 1.0, 0.5, 1.0);
     texcoord0 = v.uv0;
     texcoord1 = v.uv1;
     //gl_Position = control.viewproj * vec4(verts[gl_VertexIndex], 1.0);

@@ -25,41 +25,12 @@ struct Material
 	float metallic_factor;
 };
 
-struct Attribute
-{
-	VkBuffer buffer;
-	u32 offset;
-	u32 count;
-};
-
-struct Index_Info
-{
-	enum Index_Type
-	{
-		UINT16 = 0,
-		UINT32
-	};
-	Index_Type index_type;
-	u32 count;
-	VkBuffer buffer;
-	u32 offset;
-	u32 stride;
-};
 
 struct Primitive
 {
-	std::vector<glm::vec3> positions;
-	std::vector<glm::vec3> normals;
-	std::vector<glm::vec4> tangents;
-	std::vector<glm::vec2> uv0;
-
-	Index_Info indices;
-
-	Attribute position;
-	Attribute normal;
-	Attribute texcoord0;
-	Attribute texcoord1; // lightmap texcoord
-	Attribute tangent;
+	Vk_Allocated_Buffer vertex_buffer;
+	Vk_Allocated_Buffer index_buffer;
+	u32 index_count;
 
 	Material* material;
 };
@@ -68,12 +39,8 @@ struct Primitive
 struct Mesh
 {
 	std::vector<Primitive> primitives;
-};
 
-struct Raw_Buffer
-{
-	u8* data;
-	u32 size;
+	glm::mat4 xform;
 };
 
 struct Render_Target
@@ -97,7 +64,6 @@ struct Lightmap_Renderer
 	Vk_Context* ctx;
 	std::vector<Vk_Allocated_Image> images;
 	std::vector<Vk_Allocated_Buffer> buffers;
-	std::vector<Raw_Buffer> raw_buffers;
 
 	std::vector<Texture2D> textures;
 	std::vector<Material> materials;
@@ -119,11 +85,8 @@ struct Lightmap_Renderer
 
 	xatlas::Atlas* atlas;
 
-	// TEMP
-	Vk_Allocated_Buffer vertex_buffer{};
-	Vk_Allocated_Buffer index_buffer{};
-
 	Vk_Allocated_Image lightmap_texture;
+
 
 	Camera_Component* camera = nullptr;
 
