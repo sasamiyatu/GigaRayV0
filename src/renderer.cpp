@@ -364,7 +364,8 @@ Vk_Pipeline Renderer::create_raster_pipeline()
 
 	VkDescriptorSetLayout descriptor_set_layouts[] = { desc_0, bindless_set_layout };
 
-	Vk_Pipeline pp = context->create_raster_pipeline(vertex_shader.shader, fragment_shader.shader, (u32)std::size(descriptor_set_layouts), descriptor_set_layouts);
+	Raster_Options opt{};
+	Vk_Pipeline pp = context->create_raster_pipeline(vertex_shader.shader, fragment_shader.shader, (u32)std::size(descriptor_set_layouts), descriptor_set_layouts, opt);
 
 	VkDescriptorUpdateTemplate update_template = context->create_descriptor_update_template((u32)std::size(shaders), shaders, VK_PIPELINE_BIND_POINT_GRAPHICS, pp.layout);
 	pp.update_template = update_template;

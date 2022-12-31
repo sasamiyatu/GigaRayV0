@@ -1041,7 +1041,7 @@ Raytracing_Pipeline Vk_Context::create_raytracing_pipeline(
 	return rt_pp;
 }
 
-Vk_Pipeline Vk_Context::create_raster_pipeline(VkShaderModule vertex_shader, VkShaderModule fragment_shader, u32 num_layouts, VkDescriptorSetLayout* layouts)
+Vk_Pipeline Vk_Context::create_raster_pipeline(VkShaderModule vertex_shader, VkShaderModule fragment_shader, u32 num_layouts, VkDescriptorSetLayout* layouts, Raster_Options raster_opt)
 {
 	Vk_Pipeline pp{};
 
@@ -1067,18 +1067,16 @@ Vk_Pipeline Vk_Context::create_raster_pipeline(VkShaderModule vertex_shader, VkS
 	VkPipelineViewportStateCreateInfo viewport_state = vkinit::pipeline_viewport_state_create_info(1, nullptr, 1, nullptr, true);
 
 	VkPipelineRasterizationStateCreateInfo raster_state{ VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO };
-	raster_state.polygonMode = VK_POLYGON_MODE_FILL;
-	//raster_state.polygonMode = VK_POLYGON_MODE_LINE;
-	raster_state.cullMode = VK_CULL_MODE_NONE;
-	//raster_state.cullMode = VK_CULL_MODE_BACK_BIT;
-	raster_state.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+	raster_state.polygonMode = raster_opt.polygon_mode;
+	raster_state.cullMode = raster_opt.cull_mode;
+	raster_state.frontFace = raster_opt.front_face;
 
 	VkPipelineMultisampleStateCreateInfo multisample_state = vkinit::pipeline_multisample_state_create_info(VK_SAMPLE_COUNT_1_BIT);
 
 	VkPipelineDepthStencilStateCreateInfo depth_stencil_state{ VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO };
-	depth_stencil_state.depthTestEnable = VK_TRUE;
-	depth_stencil_state.depthWriteEnable = VK_TRUE;
-	depth_stencil_state.depthCompareOp = VK_COMPARE_OP_GREATER;
+	depth_stencil_state.depthTestEnable = raster_opt.depth_test_enable;
+	depth_stencil_state.depthWriteEnable = raster_opt.depth_write_enable;
+	depth_stencil_state.depthCompareOp = raster_opt.depth_compare_op;
 	depth_stencil_state.minDepthBounds = 0.f;
 	depth_stencil_state.maxDepthBounds = 1.f;
 

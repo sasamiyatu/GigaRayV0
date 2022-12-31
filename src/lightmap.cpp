@@ -212,7 +212,7 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
                 v.position = meshes[0].primitives[0].positions[xref];
                 v.uv0 = meshes[0].primitives[0].uv0[xref];
                 v.tangent = meshes[0].primitives[0].tangents[xref];
-                v.color = math::random_vector((u64)chart_index);
+                v.color = math::random_vector((u64)chart_index + 1337);
                 verts.push_back(v);
             }
         }
@@ -269,71 +269,17 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
         }
 
         {
-            // Create checkerboard texture
-            u32 w = atlas->width;
-            u32 h = atlas->height;
-            u32 tile_size = 1;
-
-            u32 required_size = w * h;
-
-            checkerboard_texture = ctx->allocate_image({ w, h, 1 }, VK_FORMAT_R8_UNORM, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
-            Vk_Allocated_Buffer staging = ctx->allocate_buffer(required_size,
-                VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                VMA_MEMORY_USAGE_AUTO, VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
-            );
-
-            void* mapped = 0;
-            vmaMapMemory(ctx->allocator, staging.allocation, &mapped);
-
-            u8* dst = (u8*)mapped;
-            for (u32 y = 0; y < h; ++y)
-            {
-                for (u32 x = 0; x < w; ++x)
-                {
-                    u32 scaled_x = x / tile_size;
-                    u32 scaled_y = y / tile_size;
-                    u32 odd = (scaled_x ^ scaled_y) & 1;
-                    if (odd)
-                        dst[y * w + x] = 63;
-                    else
-                        dst[y * w + x] = 127;
-                }
-            }
-
-            vmaUnmapMemory(ctx->allocator, staging.allocation);
+            // Create lightmap texture
+            lightmap_texture = ctx->allocate_image({ atlas->width, atlas->height, 1 }, VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT);
 
             VkCommandBuffer cmd = ctx->allocate_command_buffer();
             VkCommandBufferBeginInfo cmd_info = vkinit::command_buffer_begin_info();
             vkBeginCommandBuffer(cmd, &cmd_info);
 
-            VkImageSubresourceLayers subres{};
-            subres.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            subres.baseArrayLayer = 0;
-            subres.layerCount = 1;
-            subres.mipLevel = 0;
-            VkBufferImageCopy regions{};
-            regions.bufferOffset = 0;
-            regions.bufferImageHeight = 0;
-            regions.bufferRowLength = 0;
-            regions.imageSubresource = subres;
-            regions.imageOffset = { 0, 0, 0 };
-            regions.imageExtent = { (u32)w, (u32)h, 1 };
-
-            vkinit::vk_transition_layout(cmd, checkerboard_texture.image,
-                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                0, VK_ACCESS_TRANSFER_WRITE_BIT,
-                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT
-            );
-
-            vkCmdCopyBufferToImage(cmd, staging.buffer, checkerboard_texture.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &regions);
-
-            vkinit::vk_transition_layout(cmd, checkerboard_texture.image,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                0, VK_ACCESS_SHADER_READ_BIT,
-                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
-                | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
-                | VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_NV
+            vkinit::vk_transition_layout(cmd, lightmap_texture.image,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                0, 0,
+                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT
             );
 
             vkEndCommandBuffer(cmd);
@@ -371,7 +317,9 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
 
     Shader shaders[] = { vert_shader, frag_shader };
     VkDescriptorSetLayout desc_set_layout = ctx->create_descriptor_set_layout((u32)std::size(shaders), shaders);
-    pipeline = ctx->create_raster_pipeline(vert_shader.shader, frag_shader.shader, 1, &desc_set_layout);
+    Raster_Options opt{};
+    opt.cull_mode = VK_CULL_MODE_NONE;
+    pipeline = ctx->create_raster_pipeline(vert_shader.shader, frag_shader.shader, 1, &desc_set_layout, opt);
     pipeline.update_template = ctx->create_descriptor_update_template((u32)std::size(shaders), shaders, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout);
     pipeline.desc_sets[0] = desc_set_layout;
 
@@ -484,7 +432,7 @@ void Lightmap_Renderer::render()
     Descriptor_Info descs[] = {
         Descriptor_Info(vertex_buffer.buffer, 0, VK_WHOLE_SIZE),
         Descriptor_Info(default_sampler, textures[0].image.image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
-        Descriptor_Info(block_sampler, checkerboard_texture.image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
+        Descriptor_Info(block_sampler, lightmap_texture.image_view, VK_IMAGE_LAYOUT_GENERAL),
     };
     vkCmdPushDescriptorSetWithTemplateKHR(cmd, pipeline.update_template, pipeline.layout, 0, &descs);
     vkCmdDrawIndexed(cmd, 36, 1, 0, 0, 0);
@@ -707,7 +655,7 @@ static void render_debug_atlas(xatlas::Atlas* atlas, const char* filename)
 
             glm::vec2 uvs[3];
             int chart_index = mesh->vertexArray[mesh->indexArray[tri * 3]].chartIndex;
-            glm::vec3 color = math::random_vector((u64)chart_index);
+            glm::vec3 color = math::random_vector((u64)chart_index + 1337);
             for (uint32_t i = 0; i < 3; ++i)
             {
                 uint32_t index = mesh->indexArray[tri * 3 + i];

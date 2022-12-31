@@ -123,7 +123,7 @@ struct Lightmap_Renderer
 	Vk_Allocated_Buffer vertex_buffer{};
 	Vk_Allocated_Buffer index_buffer{};
 
-	Vk_Allocated_Image checkerboard_texture;
+	Vk_Allocated_Image lightmap_texture;
 
 	Camera_Component* camera = nullptr;
 

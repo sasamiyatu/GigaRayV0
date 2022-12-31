@@ -61,6 +61,16 @@ struct Raytracing_Pipeline
 	Shader_Binding_Table shader_binding_table;
 };
 
+struct Raster_Options
+{
+	VkPolygonMode polygon_mode = VK_POLYGON_MODE_FILL;
+	VkCullModeFlags cull_mode = VK_CULL_MODE_BACK_BIT;
+	VkFrontFace front_face = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+	VkCompareOp depth_compare_op = VK_COMPARE_OP_GREATER;
+	bool depth_test_enable = true;
+	bool depth_write_enable = true;
+};
+
 struct Garbage_Collector
 {
 	struct Garbage
@@ -165,7 +175,7 @@ struct Vk_Context
 	void free_command_buffer(VkCommandBuffer cmd);
 
 	Vk_Pipeline create_raster_pipeline(VkShaderModule vertex_shader, VkShaderModule fragment_shader,
-		u32 num_layouts, VkDescriptorSetLayout* layouts);
+		u32 num_layouts, VkDescriptorSetLayout* layouts, Raster_Options raster_opt);
 
 	void save_screenshot(Vk_Allocated_Image image, const char* filename);
 };

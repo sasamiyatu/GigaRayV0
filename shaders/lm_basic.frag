@@ -12,8 +12,11 @@ layout (binding = 2, set = 0) uniform sampler2D checkerboard_tex;
 void main()
 {
     vec4 albedo = texture(albedo_tex, texcoord1);
+    ivec2 pixelcoord = ivec2(textureSize(checkerboard_tex, 0) * texcoord1);
+    int odd = (pixelcoord.x ^ pixelcoord.y) & 1;
+    vec3 c = odd == 1 ? vec3(0.25) : vec3(0.5);
     vec4 checker = texture(checkerboard_tex, texcoord1);
-    out_color = vec4(checker.rrr * in_color, 1.0);
+    out_color = vec4(c * in_color, 1.0);
     //out_color = vec4(albedo.rgb, 1.0);
     //out_color = vec4(in_color, 1.0);
 }
