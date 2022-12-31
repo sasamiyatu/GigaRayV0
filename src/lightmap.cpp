@@ -362,9 +362,9 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
             VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
         depth_target.image = ctx->allocate_image({ window_width, window_height, 1 }, VK_FORMAT_D32_SFLOAT, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
         normal_target.image = ctx->allocate_image({ atlas->width, atlas->height, 1 },
-            VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+            VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
         position_target.image = ctx->allocate_image({ atlas->width, atlas->height, 1 },
-            VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+            VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
         lightmap_target.image = ctx->allocate_image({ atlas->width, atlas->height, 1 },
             VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
 
@@ -381,6 +381,12 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
             0, 0,
             VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
             1, VK_IMAGE_ASPECT_COLOR_BIT);
+
+        color_target.extent = { window_width, window_height, 1 };
+        depth_target.extent = { window_width, window_height, 1 };
+        normal_target.extent = { atlas->width, atlas->height, 1 };
+        position_target.extent = { atlas->width, atlas->height, 1 };
+        lightmap_target.extent = { atlas->width, atlas->height, 1 };
 
         color_target.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         normal_target.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
@@ -427,13 +433,13 @@ void Lightmap_Renderer::render()
         0, VK_ACCESS_SHADER_WRITE_BIT,
         VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
         1, VK_IMAGE_ASPECT_COLOR_BIT);
+    normal_target.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
     vkinit::vk_transition_layout(cmd, position_target.image.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
         0, VK_ACCESS_SHADER_WRITE_BIT,
         VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
         1, VK_IMAGE_ASPECT_COLOR_BIT);
-
-
+    position_target.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
     {
         // Render 3D view
@@ -540,12 +546,27 @@ void Lightmap_Renderer::render()
         vkCmdEndRendering(cmd);
     }
 
+    vkinit::vk_transition_layout(cmd, normal_target.image.image, normal_target.layout, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        1, VK_IMAGE_ASPECT_COLOR_BIT);
+
+    vkinit::vk_transition_layout(cmd, position_target.image.image, position_target.layout, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        1, VK_IMAGE_ASPECT_COLOR_BIT);
+
+    normal_target.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    position_target.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
     {
         // Raytrace lightmaps
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, lightmap_rt_pipeline.pipeline.pipeline);
         
         Descriptor_Info descs[] = {
-                    Descriptor_Info(0, lightmap_target.image.image_view, VK_IMAGE_LAYOUT_GENERAL)
+            Descriptor_Info(0, lightmap_target.image.image_view, VK_IMAGE_LAYOUT_GENERAL),
+            Descriptor_Info(default_sampler, normal_target.image.image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
+            Descriptor_Info(default_sampler, position_target.image.image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
         };
 
         vkCmdPushDescriptorSetWithTemplateKHR(cmd, lightmap_rt_pipeline.pipeline.update_template, lightmap_rt_pipeline.pipeline.layout, 0, descs);
@@ -561,15 +582,15 @@ void Lightmap_Renderer::render()
         );
     }
 
-    VkImage copy_src = color_target.image.image;
-    //VkImage copy_src = normal_target.image.image;
-    //VkImage copy_src = lightmap_target.image.image;
-    VkOffset3D src_extent = { (int)window_width, (int)window_height, 1 };
-    VkImageLayout src_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    vkinit::vk_transition_layout(cmd, copy_src, src_layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
-        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-        1, VK_IMAGE_ASPECT_COLOR_BIT);
+    //Render_Target display_rt = color_target;
+    Render_Target display_rt = lightmap_target;
+    VkImage copy_src = display_rt.image.image;
+    VkOffset3D src_extent = { (i32)display_rt.extent.width, (i32)display_rt.extent.height, (i32)display_rt.extent.depth };
+    VkImageLayout src_layout = display_rt.layout;
+    //vkinit::vk_transition_layout(cmd, copy_src, src_layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+    //    VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+    //    VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+    //    1, VK_IMAGE_ASPECT_COLOR_BIT);
 
     vkinit::vk_transition_layout(cmd, next_image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
         0, VK_ACCESS_TRANSFER_WRITE_BIT,
@@ -579,7 +600,7 @@ void Lightmap_Renderer::render()
     VkImageSubresourceLayers src_res = vkinit::image_subresource_layers(VK_IMAGE_ASPECT_COLOR_BIT);
     VkImageSubresourceLayers dst_res = vkinit::image_subresource_layers(VK_IMAGE_ASPECT_COLOR_BIT);
     VkImageBlit2 blit2 = vkinit::image_blit2(src_res, { 0, 0, 0 }, src_extent, dst_res, { 0, 0, 0 }, { (int)window_width, (int)window_height, 1 });
-    VkBlitImageInfo2 blit_info = vkinit::blit_image_info2(copy_src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, next_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit2);
+    VkBlitImageInfo2 blit_info = vkinit::blit_image_info2(copy_src, VK_IMAGE_LAYOUT_GENERAL, next_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit2);
     vkCmdBlitImage2(cmd, &blit_info);
 
     vkinit::vk_transition_layout(cmd, next_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,

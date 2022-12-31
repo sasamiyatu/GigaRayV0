@@ -47,9 +47,7 @@ struct Render_Target
 {
 	Vk_Allocated_Image image;
 	VkImageLayout layout;
-	u32 width;
-	u32 height;
-	u32 depth;
+	VkExtent3D extent;
 };
 
 struct Vertex
