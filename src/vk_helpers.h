@@ -471,4 +471,25 @@ namespace vkinit
 		instances_vk.data.deviceAddress = device_address;
 		return instances_vk;
 	}
+
+	inline VkDescriptorBufferInfo descriptor_buffer_info(VkBuffer buffer, VkDeviceSize offset = 0, VkDeviceSize range = VK_WHOLE_SIZE)
+	{
+		VkDescriptorBufferInfo info{};
+		info.buffer = buffer;
+		info.offset = offset;
+		info.range = range;
+		return info;
+	}
+
+	inline VkWriteDescriptorSet write_descriptor_set(VkDescriptorBufferInfo* buffer_info, u32 binding, u32 dst_array_element, VkDescriptorSet dst_set)
+	{
+		VkWriteDescriptorSet write{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+		write.descriptorCount = 1;
+		write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+		write.dstArrayElement = dst_array_element;
+		write.dstBinding = binding;
+		write.dstSet = dst_set;
+		write.pBufferInfo = buffer_info;
+		return write;
+	}
 }

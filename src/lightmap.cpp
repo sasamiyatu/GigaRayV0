@@ -193,7 +193,7 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
                 {
                     u32 required_size = (u32)(sizeof(Vertex) * verts.count);
                     new_prim.vertex_buffer = ctx->allocate_buffer(required_size,
-                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | 
+                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
                         VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0
                     );
@@ -214,7 +214,7 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
                 {
                     u32 required_size = (u32)(sizeof(u32) * indices.count);
                     new_prim.index_buffer = ctx->allocate_buffer(required_size,
-                        VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | 
+                        VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
                         VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0
                     );
@@ -251,6 +251,7 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
             VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
             VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR);
 
+        // Create ray tracing acceleration structures
         for (auto& m : meshes)
         {
             for (auto& p : m.primitives)
@@ -265,7 +266,7 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
                 );
 
                 VkAccelerationStructureGeometryKHR geometry = vkinit::acceleration_structure_geometry_khr(triangles, VK_GEOMETRY_OPAQUE_BIT_KHR);
-                VkAccelerationStructureBuildRangeInfoKHR range_info = vkinit::acceleration_structure_build_range_info_khr(p.vertex_count / 3, 0);
+                VkAccelerationStructureBuildRangeInfoKHR range_info = vkinit::acceleration_structure_build_range_info_khr(p.index_count / 3, 0);
                 VkAccelerationStructureBuildGeometryInfoKHR build_info = vkinit::acceleration_structure_build_geometry_info_khr(
                     VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR,
                     1, &geometry,
@@ -282,9 +283,9 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
 
                 Vk_Allocated_Buffer scratch = ctx->allocate_buffer((uint32_t)size_info.buildScratchSize,
                     VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                    VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0, 
+                    VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0,
                     ctx->acceleration_structure_properties.minAccelerationStructureScratchOffsetAlignment);
-            
+
                 VkAccelerationStructureCreateInfoKHR create_info = vkinit::acceleration_structure_create_info(
                     build_info.type, size_info.accelerationStructureSize, buffer_blas.buffer, 0);
                 VK_CHECK(vkCreateAccelerationStructureKHR(ctx->device, &create_info, nullptr, &p.blas));
@@ -301,6 +302,9 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
                 );
             }
         }
+
+
+
 
         vkinit::memory_barrier2(cmd,
             VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR, 
@@ -324,7 +328,8 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
                             instance.transform.matrix[j][i] = m.xform[i][j];
                         }
 
-                    instance.instanceCustomIndex = 0;
+                    u32 mesh_id = (u32)instances.size();
+                    instance.instanceCustomIndex = mesh_id & 0x00FFFFFF;
                     instance.mask = 0xFF;
                     instance.instanceShaderBindingTableRecordOffset = 0;
                     instance.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
@@ -403,8 +408,6 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
             );
         }
 
-
-
         {
             // Create lightmap texture
             lightmap_texture = ctx->allocate_image({ atlas->width, atlas->height, 1 }, VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT);
@@ -457,11 +460,8 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
         VkShaderStageFlags flags = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         // Bindless stuff
         VkDescriptorSetLayoutBinding bindless_bindings[] = {
-            vkinit::descriptor_set_layout_binding(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, MAX_BINDLESS_RESOURCES, flags),
+            vkinit::descriptor_set_layout_binding(0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, MAX_BINDLESS_RESOURCES, flags),
             vkinit::descriptor_set_layout_binding(1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, MAX_BINDLESS_RESOURCES, flags),
-            vkinit::descriptor_set_layout_binding(2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, MAX_BINDLESS_RESOURCES, flags),
-            vkinit::descriptor_set_layout_binding(3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, flags),
-            vkinit::descriptor_set_layout_binding(4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, MAX_BINDLESS_RESOURCES, flags),
         };
 
         VkDescriptorSetLayoutCreateInfo layout_info = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
@@ -508,9 +508,31 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
     }
 
     {
+        // Update bindless descriptor sets
+        std::vector<VkDescriptorBufferInfo> buffer_infos;
+        std::vector<VkWriteDescriptorSet> writes;
+        for (const auto& m : meshes)
+        {
+            for (const auto& p : m.primitives)
+            {
+                buffer_infos.push_back(vkinit::descriptor_buffer_info(p.vertex_buffer.buffer));
+                buffer_infos.push_back(vkinit::descriptor_buffer_info(p.index_buffer.buffer));
+            }
+        }
+
+        for (u32 i = 0; i < buffer_infos.size() / 2; ++i)
+        {
+            writes.push_back(vkinit::write_descriptor_set(&buffer_infos[i * 2 + 0], 0, i, bindless_descriptor_set));
+            writes.push_back(vkinit::write_descriptor_set(&buffer_infos[i * 2 + 1], 1, i, bindless_descriptor_set));
+        }
+
+        vkUpdateDescriptorSets(ctx->device, (u32)writes.size(), writes.data(), 0, nullptr);
+    }
+
+    {
         // Create render targets
         color_target.image = ctx->allocate_image({ window_width, window_height, 1 }, 
-            VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+            VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_STORAGE_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
         depth_target.image = ctx->allocate_image({ window_width, window_height, 1 }, VK_FORMAT_D32_SFLOAT, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
         normal_target.image = ctx->allocate_image({ atlas->width, atlas->height, 1 },
             VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
@@ -710,17 +732,35 @@ void Lightmap_Renderer::render()
     normal_target.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     position_target.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
+#if 0
     {
+        vkinit::vk_transition_layout(cmd, color_target.image.image, color_target.layout, VK_IMAGE_LAYOUT_GENERAL,
+            VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            1, VK_IMAGE_ASPECT_COLOR_BIT);
+
         // Raytrace lightmaps
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, lightmap_rt_pipeline.pipeline.pipeline);
-        
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, lightmap_rt_pipeline.pipeline.layout, 1, 1, &bindless_descriptor_set, 0, 0);
         Descriptor_Info descs[] = {
-            Descriptor_Info(0, lightmap_target.image.image_view, VK_IMAGE_LAYOUT_GENERAL),
+            Descriptor_Info(0, color_target.image.image_view, VK_IMAGE_LAYOUT_GENERAL),
             Descriptor_Info(default_sampler, normal_target.image.image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
-            Descriptor_Info(default_sampler, position_target.image.image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+            Descriptor_Info(default_sampler, position_target.image.image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
+            Descriptor_Info(tlas)
         };
 
         vkCmdPushDescriptorSetWithTemplateKHR(cmd, lightmap_rt_pipeline.pipeline.update_template, lightmap_rt_pipeline.pipeline.layout, 0, descs);
+
+        struct
+        {
+            glm::mat4 inverse_view;
+            glm::mat4 projection;
+        } push_constants;
+        static_assert(sizeof(push_constants) <= 128);
+        push_constants.inverse_view = glm::inverse(camera->get_view_matrix());
+        push_constants.projection = camera->get_projection_matrix(aspect_ratio, 0.01f, 1000.f);
+        vkCmdPushConstants(cmd, lightmap_rt_pipeline.pipeline.layout, VK_SHADER_STAGE_RAYGEN_BIT_KHR, 0, (u32)sizeof(push_constants), &push_constants);
+
 
         //printf("Trace rays cmd at: %f\n", timer->get_current_time());
         vkCmdTraceRaysKHR(
@@ -729,19 +769,25 @@ void Lightmap_Renderer::render()
             &lightmap_rt_pipeline.shader_binding_table.miss_region,
             &lightmap_rt_pipeline.shader_binding_table.chit_region,
             &lightmap_rt_pipeline.shader_binding_table.callable_region,
-            atlas->width, atlas->height, 1
+            window_width, window_height, 1
         );
-    }
 
-    //Render_Target display_rt = color_target;
-    Render_Target display_rt = lightmap_target;
+        vkinit::vk_transition_layout(cmd, color_target.image.image, VK_IMAGE_LAYOUT_GENERAL, color_target.layout,
+            VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            1, VK_IMAGE_ASPECT_COLOR_BIT);
+    }
+#endif
+
+    Render_Target display_rt = color_target;
+    //Render_Target display_rt = lightmap_target;
     VkImage copy_src = display_rt.image.image;
     VkOffset3D src_extent = { (i32)display_rt.extent.width, (i32)display_rt.extent.height, (i32)display_rt.extent.depth };
     VkImageLayout src_layout = display_rt.layout;
-    //vkinit::vk_transition_layout(cmd, copy_src, src_layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-    //    VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
-    //    VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-    //    1, VK_IMAGE_ASPECT_COLOR_BIT);
+    vkinit::vk_transition_layout(cmd, copy_src, src_layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        1, VK_IMAGE_ASPECT_COLOR_BIT);
 
     vkinit::vk_transition_layout(cmd, next_image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
         0, VK_ACCESS_TRANSFER_WRITE_BIT,
@@ -751,7 +797,7 @@ void Lightmap_Renderer::render()
     VkImageSubresourceLayers src_res = vkinit::image_subresource_layers(VK_IMAGE_ASPECT_COLOR_BIT);
     VkImageSubresourceLayers dst_res = vkinit::image_subresource_layers(VK_IMAGE_ASPECT_COLOR_BIT);
     VkImageBlit2 blit2 = vkinit::image_blit2(src_res, { 0, 0, 0 }, src_extent, dst_res, { 0, 0, 0 }, { (int)window_width, (int)window_height, 1 });
-    VkBlitImageInfo2 blit_info = vkinit::blit_image_info2(copy_src, VK_IMAGE_LAYOUT_GENERAL, next_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit2);
+    VkBlitImageInfo2 blit_info = vkinit::blit_image_info2(copy_src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, next_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit2);
     vkCmdBlitImage2(cmd, &blit_info);
 
     vkinit::vk_transition_layout(cmd, next_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,

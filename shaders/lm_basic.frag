@@ -18,5 +18,6 @@ void main()
     int odd = (pixelcoord.x ^ pixelcoord.y) & 1;
     vec3 c = odd == 1 ? vec3(0.25) : vec3(0.5);
     vec4 checker = texture(checkerboard_tex, texcoord1);
-    out_color = vec4(c * in_color, 1.0);
+    //out_color = vec4(c * in_color, 1.0);
+    out_color = vec4(normal * 0.5 + 0.5, 1.0);
 }

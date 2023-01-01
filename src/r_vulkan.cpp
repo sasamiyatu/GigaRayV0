@@ -6,6 +6,7 @@
 #include "shaders.h"
 
 #define VSYNC 1
+#define DEBUG_VERBOSE
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL debug_callback(
 	VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
@@ -14,7 +15,9 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debug_callback(
 	void* pUserData) {
 
 	printf("validation layer: %s\n", pCallbackData->pMessage);
+#ifndef DEBUG_VERBOSE
 	assert(false);
+#endif
 	return VK_FALSE;
 }
 
@@ -83,7 +86,10 @@ void Vk_Context::create_instance(Platform_Window* window)
 	if constexpr (USE_VALIDATION_LAYERS)
 	{
 		VkDebugUtilsMessengerCreateInfoEXT ci{ VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT };
-		ci.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT; // VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT;
+		ci.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT; 
+#ifdef DEBUG_VERBOSE
+		ci.messageSeverity |= VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT;
+#endif
 		ci.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT;// | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
 		ci.pfnUserCallback = debug_callback;
 		VK_CHECK(vkCreateDebugUtilsMessengerEXT(instance, &ci, nullptr, &debug_messenger));

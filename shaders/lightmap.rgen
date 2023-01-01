@@ -1,14 +1,118 @@
 #version 460
 
 #extension GL_EXT_ray_tracing : require
+#extension GL_GOOGLE_include_directive : enable
+#extension GL_EXT_debug_printf : enable
+#extension GL_EXT_scalar_block_layout : enable
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "lightmap.glsl"
+#include "random.glsl"
 
 layout(binding = 0, set = 0, rgba32f) uniform image2D output_image;
 layout(binding = 1, set = 0) uniform sampler2D in_normal;
 layout(binding = 2, set = 0) uniform sampler2D in_position;
+layout(binding = 3, set = 0) uniform accelerationStructureEXT scene;
+
+struct Index_Data
+{
+    uvec3 index;
+};
+
+struct Vertex
+{
+	vec3 position;
+	vec3 normal;
+	vec3 color;
+	vec4 tangent;
+	vec2 uv0;
+	vec2 uv1;
+};
+
+layout (set = 1, binding = 0, scalar) readonly buffer vertex_buffer_array_t
+{
+    Vertex verts[];
+} vertex_buffer_array[];
+
+layout (set = 1, binding = 1, scalar) readonly buffer index_buffer_array_t
+{
+    Index_Data indices[];
+} index_buffer_array[];
+
+layout(location = 0) rayPayloadEXT Ray_Payload pay;
+
+layout(push_constant) uniform constants
+{
+    mat4 inverse_view;
+    mat4 projection;
+};
+
+Vertex get_interpolated_vertex(uint instance_id, uint primitive_id, vec2 barycentrics)
+{
+    uvec3 indices = index_buffer_array[instance_id].indices[primitive_id].index;
+    Vertex v0 = vertex_buffer_array[instance_id].verts[indices.x];
+    Vertex v1 = vertex_buffer_array[instance_id].verts[indices.y];
+    Vertex v2 = vertex_buffer_array[instance_id].verts[indices.z];
+
+    float u = barycentrics.x;
+    float v = barycentrics.y;
+    float w = 1.0 - barycentrics.x - barycentrics.y;
+
+    Vertex vert;
+	vert.position = v0.position * w + v1.position * u + v2.position * v;
+	vert.normal = v0.normal * w + v1.normal * u + v2.normal * v;
+	vert.color = v0.color * w + v1.color * u + v2.color * v;
+	vert.tangent = v0.tangent * w + v1.tangent * u + v2.tangent * v;
+	vert.uv0 = v0.uv0 * w + v1.uv0 * u + v2.uv0 * v;
+	vert.uv1 = v0.uv1 * w + v1.uv1 * u + v2.uv1 * v;
+
+    return vert;
+}
 
 void main()
 {
     ivec2 p = ivec2(gl_LaunchIDEXT.xy);
+
+    vec2 uv = ((p + 0.5f) / vec2(gl_LaunchSizeEXT.xy)) * 2.f - 1.f;
+
+    vec3 ro = inverse_view[3].xyz;
+    float aspect = projection[1][1] / projection[0][0];
+    float tan_half_fov_y = 1.f / projection[1][1];
+    vec3 rd = normalize(
+        (uv.x * inverse_view[0].xyz * tan_half_fov_y * aspect) - 
+        (uv.y * inverse_view[1].xyz * tan_half_fov_y) -
+        inverse_view[2].xyz
+    );
+
+    pay.instance_id = -1;
+
+    traceRayEXT(
+        scene,
+        gl_RayFlagsOpaqueEXT,
+        0xFF,
+        0,
+        0,
+        0,
+        ro,
+        0.0,
+        rd,
+        100000.0,
+        0
+    );
+
+    vec3 color = vec3(0.0);
+    if (pay.instance_id != -1)
+    {
+        uvec4 seed = uvec4(pay.instance_id, 0, 42, 1337);
+        seed = pcg4d(seed);
+        color = vec3(seed.xyz) * ldexp(1.0, -32);
+        Vertex v = get_interpolated_vertex(pay.instance_id, pay.prim_id, pay.barycentrics);
+        vec3 world_normal = normalize(vec3(vec4(v.normal, 0) * pay.object_to_world));
+        color = world_normal * 0.5 + 0.5;
+    }
+
+
     vec3 normal = texelFetch(in_normal, p, 0).rgb;
-    imageStore(output_image, p, vec4(normal * 0.5 + 0.5, 1.0));
+    //imageStore(output_image, p, vec4(normal * 0.5 + 0.5, 1.0));
+    imageStore(output_image, p, vec4(color, 1.0));
 }
