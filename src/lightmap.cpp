@@ -186,13 +186,15 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
                 }
 
                 Primitive new_prim{};
-                new_prim.index_count = (u32)prim->indices->count;
+                new_prim.index_count = (u32)mesh->indexCount;
+                new_prim.vertex_count = (u32)mesh->vertexCount;
                 new_prim.material = prim->material ? &materials[get_index(data->materials, prim->material)] : nullptr;
 
                 {
                     u32 required_size = (u32)(sizeof(Vertex) * verts.count);
                     new_prim.vertex_buffer = ctx->allocate_buffer(required_size,
-                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | 
+                        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
                         VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0
                     );
 
@@ -212,7 +214,8 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
                 {
                     u32 required_size = (u32)(sizeof(u32) * indices.count);
                     new_prim.index_buffer = ctx->allocate_buffer(required_size,
-                        VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                        VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | 
+                        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
                         VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0
                     );
 
@@ -233,11 +236,6 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
             }
         }
 
-        vkEndCommandBuffer(cmd);
-        VkSubmitInfo submit_info = vkinit::submit_info(1, &cmd);
-        vkQueueSubmit(ctx->graphics_queue, 1, &submit_info, 0);
-        vkQueueWaitIdle(ctx->graphics_queue);
-
         // Get transforms from nodes
         for (u32 i = 0; i < data->nodes_count; ++i)
         {
@@ -248,6 +246,167 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
                 cgltf_node_transform_world(n, (float*)&meshes[mesh_index].xform);
             }
         }
+
+        vkinit::memory_barrier2(cmd,
+            VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+            VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR);
+
+        for (auto& m : meshes)
+        {
+            for (auto& p : m.primitives)
+            {
+                VkAccelerationStructureGeometryTrianglesDataKHR triangles = vkinit::acceleration_structure_geometry_triangles_data_khr(
+                    VK_FORMAT_R32G32B32_SFLOAT,
+                    ctx->get_buffer_device_address(p.vertex_buffer),
+                    sizeof(Vertex),
+                    VK_INDEX_TYPE_UINT32,
+                    ctx->get_buffer_device_address(p.index_buffer),
+                    p.vertex_count - 1
+                );
+
+                VkAccelerationStructureGeometryKHR geometry = vkinit::acceleration_structure_geometry_khr(triangles, VK_GEOMETRY_OPAQUE_BIT_KHR);
+                VkAccelerationStructureBuildRangeInfoKHR range_info = vkinit::acceleration_structure_build_range_info_khr(p.vertex_count / 3, 0);
+                VkAccelerationStructureBuildGeometryInfoKHR build_info = vkinit::acceleration_structure_build_geometry_info_khr(
+                    VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR,
+                    1, &geometry,
+                    VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR, VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR
+                );
+
+                VkAccelerationStructureBuildSizesInfoKHR size_info{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR };
+                vkGetAccelerationStructureBuildSizesKHR(ctx->device,
+                    VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &build_info, &range_info.primitiveCount, &size_info);
+
+                Vk_Allocated_Buffer buffer_blas = ctx->allocate_buffer((uint32_t)size_info.accelerationStructureSize,
+                    VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                    VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0);
+
+                Vk_Allocated_Buffer scratch = ctx->allocate_buffer((uint32_t)size_info.buildScratchSize,
+                    VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                    VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0, 
+                    ctx->acceleration_structure_properties.minAccelerationStructureScratchOffsetAlignment);
+            
+                VkAccelerationStructureCreateInfoKHR create_info = vkinit::acceleration_structure_create_info(
+                    build_info.type, size_info.accelerationStructureSize, buffer_blas.buffer, 0);
+                VK_CHECK(vkCreateAccelerationStructureKHR(ctx->device, &create_info, nullptr, &p.blas));
+
+                build_info.dstAccelerationStructure = p.blas;
+                build_info.scratchData.deviceAddress = ctx->get_buffer_device_address(scratch);
+
+                VkAccelerationStructureBuildRangeInfoKHR* p_range_info = &range_info;
+                vkCmdBuildAccelerationStructuresKHR(
+                    cmd,
+                    1,
+                    &build_info,
+                    &p_range_info
+                );
+            }
+        }
+
+        vkinit::memory_barrier2(cmd,
+            VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR, 
+            VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+            VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, 
+            VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR
+        );
+
+        {
+            // Create top level acceleration structure 
+
+            std::vector<VkAccelerationStructureInstanceKHR> instances;
+            for (auto& m : meshes)
+            {
+                for (auto& p : m.primitives)
+                {
+                    VkAccelerationStructureInstanceKHR instance{};
+                    for (int i = 0; i < 4; ++i)
+                        for (int j = 0; j < 3; ++j)
+                        {
+                            instance.transform.matrix[j][i] = m.xform[i][j];
+                        }
+
+                    instance.instanceCustomIndex = 0;
+                    instance.mask = 0xFF;
+                    instance.instanceShaderBindingTableRecordOffset = 0;
+                    instance.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+                    instance.accelerationStructureReference = ctx->get_acceleration_structure_device_address(p.blas);
+
+                    instances.push_back(instance);
+                }
+            }
+
+            size_t required_size = sizeof(VkAccelerationStructureInstanceKHR) * instances.size();
+            GPU_Buffer instance_buf = ctx->create_gpu_buffer(
+                (u32)required_size,
+                VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR
+                | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                16
+            );
+
+            instance_buf.update_staging_buffer(ctx->allocator, 0, instances.data(), required_size);
+            instance_buf.upload(cmd, 0);
+
+            vkinit::memory_barrier(cmd,
+                VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR);
+
+            VkAccelerationStructureBuildRangeInfoKHR range_info = vkinit::acceleration_structure_build_range_info_khr((u32)instances.size(), 0);
+            VkAccelerationStructureGeometryInstancesDataKHR instances_vk =
+                vkinit::acceleration_structure_geometry_instance_data_khr(VK_FALSE, ctx->get_buffer_device_address(instance_buf.gpu_buffer));
+            VkAccelerationStructureGeometryKHR geometry = vkinit::acceleration_structure_geometry_khr(instances_vk);
+            VkAccelerationStructureBuildGeometryInfoKHR build_info = vkinit::acceleration_structure_build_geometry_info_khr(
+                VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR,
+                1, &geometry,
+                VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR, VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR
+            );
+
+            VkAccelerationStructureBuildSizesInfoKHR size_info{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
+            vkGetAccelerationStructureBuildSizesKHR(
+                ctx->device,
+                VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+                &build_info,
+                &range_info.primitiveCount,
+                &size_info
+            );
+
+            Vk_Allocated_Buffer buffer_tlas = ctx->allocate_buffer(
+                (u32)size_info.accelerationStructureSize,
+                VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR
+                | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT
+                | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0
+            );
+
+            VkAccelerationStructureCreateInfoKHR create_info = vkinit::acceleration_structure_create_info(
+                build_info.type, size_info.accelerationStructureSize, buffer_tlas.buffer, 0
+            );
+
+            VK_CHECK(vkCreateAccelerationStructureKHR(
+                ctx->device, &create_info, nullptr, &tlas
+            ));
+
+            build_info.dstAccelerationStructure = tlas;
+
+            Vk_Allocated_Buffer scratch = ctx->allocate_buffer(
+                (uint32_t)size_info.buildScratchSize,
+                VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT
+                | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0
+            );
+
+            build_info.scratchData.deviceAddress = ctx->get_buffer_device_address(scratch);
+
+            VkAccelerationStructureBuildRangeInfoKHR* p_range_info = &range_info;
+            vkCmdBuildAccelerationStructuresKHR(
+                cmd,
+                1, &build_info,
+                &p_range_info
+            );
+        }
+
+        vkEndCommandBuffer(cmd);
+        VkSubmitInfo submit_info = vkinit::submit_info(1, &cmd);
+        vkQueueSubmit(ctx->graphics_queue, 1, &submit_info, 0);
+        vkQueueWaitIdle(ctx->graphics_queue);
 
         {
             // Create lightmap texture
@@ -628,22 +787,36 @@ void Lightmap_Renderer::render()
 
 void Lightmap_Renderer::shutdown()
 {
+    vkDeviceWaitIdle(ctx->device);
+
     vkDestroySampler(ctx->device, default_sampler, nullptr);
     vkDestroySampler(ctx->device, block_sampler, nullptr);
     vkDestroyPipelineLayout(ctx->device, pipeline.layout, nullptr);
     vkDestroyPipeline(ctx->device, pipeline.pipeline, nullptr);
+
     vkDestroyDescriptorSetLayout(ctx->device, pipeline.desc_sets[0], nullptr);
     vkDestroyDescriptorUpdateTemplate(ctx->device, pipeline.update_template, nullptr);
     vkDestroyPipelineLayout(ctx->device, lightmap_gbuffer_pipeline.layout, nullptr);
     vkDestroyPipeline(ctx->device, lightmap_gbuffer_pipeline.pipeline, nullptr);
+
     vkDestroyDescriptorSetLayout(ctx->device, lightmap_gbuffer_pipeline.desc_sets[0], nullptr);
     vkDestroyDescriptorUpdateTemplate(ctx->device, lightmap_gbuffer_pipeline.update_template, nullptr);
     vkDestroyPipelineLayout(ctx->device, lightmap_rt_pipeline.pipeline.layout, nullptr);
     vkDestroyPipeline(ctx->device, lightmap_rt_pipeline.pipeline.pipeline, nullptr);
+
     vkDestroyDescriptorPool(ctx->device, descriptor_pool, nullptr);
     vkDestroyDescriptorSetLayout(ctx->device, lightmap_rt_pipeline.pipeline.desc_sets[0], nullptr);
     vkDestroyDescriptorSetLayout(ctx->device, bindless_set_layout, nullptr);
     vkDestroyDescriptorUpdateTemplate(ctx->device, lightmap_rt_pipeline.pipeline.update_template, nullptr);
+
+    vkDestroyAccelerationStructureKHR(ctx->device, tlas, nullptr);
+    for (auto& m : meshes)
+    {
+        for (auto& p : m.primitives)
+        {
+            vkDestroyAccelerationStructureKHR(ctx->device, p.blas, nullptr);
+        }
+    }
 }
 
 static void load_textures(Vk_Context* ctx, const char* basepath, cgltf_image* images, u32 image_count, std::vector<Vk_Allocated_Image>& out_images)

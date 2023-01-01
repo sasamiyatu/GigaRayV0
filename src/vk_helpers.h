@@ -390,5 +390,85 @@ namespace vkinit
 		layout_binding.stageFlags = flags;
 		return layout_binding;
 	}
-	
+
+	inline VkAccelerationStructureGeometryTrianglesDataKHR acceleration_structure_geometry_triangles_data_khr(
+		VkFormat vertex_format, 
+		VkDeviceAddress vertex_buffer_address,
+		VkDeviceSize vertex_stride,
+		VkIndexType index_type,
+		VkDeviceAddress index_buffer_address,
+		u32 max_vertex)
+	{
+		VkAccelerationStructureGeometryTrianglesDataKHR triangles{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR };
+		triangles.vertexFormat = vertex_format;
+		triangles.vertexData.deviceAddress = vertex_buffer_address;
+		triangles.vertexStride = vertex_stride;
+		triangles.indexType = index_type;
+		triangles.indexData.deviceAddress = index_buffer_address;
+		triangles.maxVertex = max_vertex;
+		triangles.transformData = { 0 };
+		return triangles;
+	}
+
+	inline VkAccelerationStructureGeometryKHR acceleration_structure_geometry_khr(VkAccelerationStructureGeometryTrianglesDataKHR triangles, VkGeometryFlagsKHR flags)
+	{
+		VkAccelerationStructureGeometryKHR geometry{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR };
+		geometry.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+		geometry.geometry.triangles = triangles;
+		geometry.flags = flags;
+		return geometry;
+	}
+
+	inline VkAccelerationStructureGeometryKHR acceleration_structure_geometry_khr(VkAccelerationStructureGeometryInstancesDataKHR instances)
+	{
+		VkAccelerationStructureGeometryKHR geometry{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR };
+		geometry.geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR;
+		geometry.geometry.instances = instances;
+
+		return geometry;
+	}
+
+	inline VkAccelerationStructureBuildRangeInfoKHR acceleration_structure_build_range_info_khr(u32 primitive_count, u32 primitive_offset)
+	{
+		VkAccelerationStructureBuildRangeInfoKHR range_info{};
+		range_info.firstVertex = 0;
+		range_info.primitiveCount = primitive_count;
+		range_info.primitiveOffset = primitive_offset;
+		range_info.transformOffset = 0;
+		return range_info;
+	}
+
+	inline VkAccelerationStructureBuildGeometryInfoKHR acceleration_structure_build_geometry_info_khr(
+		VkBuildAccelerationStructureFlagsKHR flags, 
+		u32 geometry_count, VkAccelerationStructureGeometryKHR* geometries,
+		VkBuildAccelerationStructureModeKHR mode, VkAccelerationStructureTypeKHR type,
+		VkAccelerationStructureKHR src_acceleration_structure = VK_NULL_HANDLE)
+	{
+		VkAccelerationStructureBuildGeometryInfoKHR build_info{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR };
+		build_info.flags = flags;
+		build_info.geometryCount = geometry_count;
+		build_info.pGeometries = geometries;
+		build_info.mode = mode;
+		build_info.type = type;
+		build_info.srcAccelerationStructure = src_acceleration_structure;
+		return build_info;
+	}
+
+	inline VkAccelerationStructureCreateInfoKHR acceleration_structure_create_info(VkAccelerationStructureTypeKHR type, VkDeviceSize size, VkBuffer buffer, VkDeviceSize offset = 0)
+	{
+		VkAccelerationStructureCreateInfoKHR create_info{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR };
+		create_info.type = type;
+		create_info.size = size;
+		create_info.buffer = buffer;
+		create_info.offset = offset;
+		return create_info;
+	}
+
+	inline VkAccelerationStructureGeometryInstancesDataKHR acceleration_structure_geometry_instance_data_khr(VkBool32 array_of_pointers, VkDeviceAddress device_address)
+	{
+		VkAccelerationStructureGeometryInstancesDataKHR instances_vk{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR };
+		instances_vk.arrayOfPointers = VK_FALSE;
+		instances_vk.data.deviceAddress = device_address;
+		return instances_vk;
+	}
 }

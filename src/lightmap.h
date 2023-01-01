@@ -30,7 +30,10 @@ struct Primitive
 {
 	Vk_Allocated_Buffer vertex_buffer;
 	Vk_Allocated_Buffer index_buffer;
+	u32 vertex_count;
 	u32 index_count;
+
+	VkAccelerationStructureKHR blas = 0;
 
 	Material* material;
 };
@@ -69,6 +72,8 @@ struct Lightmap_Renderer
 	std::vector<Texture2D> textures;
 	std::vector<Material> materials;
 	std::vector<Mesh> meshes;
+
+	VkAccelerationStructureKHR tlas = 0;
 
 	VkSampler default_sampler = 0;
 	VkSampler block_sampler = 0;
