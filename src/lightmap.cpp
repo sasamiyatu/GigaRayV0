@@ -403,31 +403,23 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
             );
         }
 
-        vkEndCommandBuffer(cmd);
-        VkSubmitInfo submit_info = vkinit::submit_info(1, &cmd);
-        vkQueueSubmit(ctx->graphics_queue, 1, &submit_info, 0);
-        vkQueueWaitIdle(ctx->graphics_queue);
+
 
         {
             // Create lightmap texture
             lightmap_texture = ctx->allocate_image({ atlas->width, atlas->height, 1 }, VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT);
-
-            VkCommandBuffer cmd = ctx->allocate_command_buffer();
-            VkCommandBufferBeginInfo cmd_info = vkinit::command_buffer_begin_info();
-            vkBeginCommandBuffer(cmd, &cmd_info);
 
             vkinit::vk_transition_layout(cmd, lightmap_texture.image,
                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
                 0, 0,
                 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT
             );
-
-            vkEndCommandBuffer(cmd);
-
-            VkSubmitInfo submit_info = vkinit::submit_info(1, &cmd);
-            vkQueueSubmit(ctx->graphics_queue, 1, &submit_info, 0);
-            vkQueueWaitIdle(ctx->graphics_queue);
         }
+
+        vkEndCommandBuffer(cmd);
+        VkSubmitInfo submit_info = vkinit::submit_info(1, &cmd);
+        vkQueueSubmit(ctx->graphics_queue, 1, &submit_info, 0);
+        vkQueueWaitIdle(ctx->graphics_queue);
 
         LOG_DEBUG("created atlas with %d meshes", atlas->meshCount);
     }
