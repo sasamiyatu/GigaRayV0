@@ -4,6 +4,7 @@
 #include "cgltf/cgltf.h"
 #include "xatlas.h"
 #include "ecs.h"
+#include "events.h"
 
 namespace lm 
 {
@@ -63,6 +64,29 @@ struct Vertex
 	glm::vec2 uv1;
 };
 
+struct Texel_Sample
+{
+	u32 mesh_index;
+	u32 primitive_index;
+	glm::vec2 barycentrics;
+};
+
+#define MAX_TEXEL_SAMPLES 8
+
+struct Texel_Sample_data
+{
+	u32 sample_count;
+	std::array<Texel_Sample, MAX_TEXEL_SAMPLES> samples;
+};
+
+struct GPU_Camera_Data
+{
+	glm::mat4 viewproj;
+	glm::mat4 view;
+	glm::mat4 inverse_view;
+	glm::mat4 proj;
+};
+
 struct Lightmap_Renderer
 {
 	Vk_Context* ctx;
@@ -73,13 +97,15 @@ struct Lightmap_Renderer
 	std::vector<Material> materials;
 	std::vector<Mesh> meshes;
 
+	std::vector<Texel_Sample_data> texel_samples;
+
 	VkAccelerationStructureKHR tlas = 0;
 
 	VkSampler default_sampler = 0;
 	VkSampler block_sampler = 0;
 	Vk_Pipeline pipeline = {};
 	Vk_Pipeline lightmap_gbuffer_pipeline = {};
-	Raytracing_Pipeline lightmap_rt_pipeline = {};
+	Raytracing_Pipeline lightmap_rt_vis_pipeline = {};
 	VkDescriptorSetLayout bindless_set_layout = 0;
 	VkDescriptorSet bindless_descriptor_set = 0;
 	VkDescriptorPool descriptor_pool;
@@ -90,6 +116,8 @@ struct Lightmap_Renderer
 	Render_Target lightmap_target;
 	Render_Target normal_target;
 	Render_Target position_target;
+
+	GPU_Buffer camera_data;
 
 	u32 window_width = 0;
 	u32 window_height = 0;

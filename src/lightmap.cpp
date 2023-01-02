@@ -8,6 +8,7 @@
 #include "stb/stb_image_write.h"
 #include "logging.h"
 #include "shaders.h"
+#include "sampling.h"
 
 constexpr u32 MAX_BINDLESS_RESOURCES = 16384;
 
@@ -22,15 +23,39 @@ struct Image
     u8* data;
 };
 
+bool ray_trace_vis = false;
+
+enum class Render_Mode
+{
+    View_3D = 0,
+    Lightmap,
+    Mode_Count
+};
+
+enum class Vis_Mode
+{
+    Charts = 0,
+    Lightmap,
+    Normals,
+    Position,
+    Vis_Count
+};
+
+static Render_Mode render_mode;
+static Vis_Mode vis_mode;
+
 static void load_textures(Vk_Context* ctx, const char* basepath, cgltf_image* images, u32 image_count, std::vector<Vk_Allocated_Image>& out_images);
 static xatlas::MeshDecl create_mesh_decl(cgltf_data* data, cgltf_primitive* prim);
 static void render_debug_atlas(xatlas::Atlas* atlas, const char* filename);
-static void fill_triangle(Image* img, glm::vec2 uvs[3], glm::vec3 color);
+static void fill_triangle(Image* img, glm::vec2 uvs[3], glm::vec3 color, int texel_size);
 static int orient2d(glm::vec2 a, glm::vec2 b, glm::vec2 c);
+static float orient2d_float(glm::vec2 a, glm::vec2 b, glm::vec2 c);
 static void draw_triangle(Image* img, glm::vec2 uvs[3], glm::vec3 color);
 static void draw_line(int x0, int y0, int x1, int y1, Image* img, glm::vec3 color);
 static void set_pixel(Image* img, int x, int y, glm::vec3 color);
 static void write_image(Image* img, const char* filename);
+static void test_sampling(const char* filename, bool flip_y = false);
+static bool key_event_callback(Event& ev);
 
 Lightmap_Renderer::Lightmap_Renderer(Vk_Context* context, u32 window_width, u32 window_height)
     : ctx(context), 
@@ -40,6 +65,7 @@ Lightmap_Renderer::Lightmap_Renderer(Vk_Context* context, u32 window_width, u32 
     window_height(window_height),
     aspect_ratio(float(window_width) / float(window_height))
 {
+    g_event_system->register_listener(Event_Type::KEY_PRESS, key_event_callback);
 }
 
 Lightmap_Renderer::~Lightmap_Renderer()
@@ -236,6 +262,26 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
             }
         }
 
+        test_sampling("sampling_test2.png", true);
+        // Generate samples for lightmap texels
+        for (u32 h = 0; h < atlas->height; ++h)
+        {
+            for (u32 w = 0; w < atlas->width; ++w)
+            {
+                // Test if texel overlaps any triangles
+                for (u32 m = 0; m < atlas->meshCount; ++m)
+                {
+                    const xatlas::Mesh* mesh = &atlas->meshes[m];
+                    for (u32 tri = 0; tri < mesh->indexCount / 3; ++tri)
+                    {
+                        glm::vec2 uv0 = glm::make_vec2(mesh->vertexArray[mesh->indexArray[tri * 3 + 0]].uv);
+                        glm::vec2 uv1 = glm::make_vec2(mesh->vertexArray[mesh->indexArray[tri * 3 + 1]].uv);
+                        glm::vec2 uv2 = glm::make_vec2(mesh->vertexArray[mesh->indexArray[tri * 3 + 2]].uv);
+                    }
+                }
+            }
+        }
+
         // Get transforms from nodes
         for (u32 i = 0; i < data->nodes_count; ++i)
         {
@@ -302,9 +348,6 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
                 );
             }
         }
-
-
-
 
         vkinit::memory_barrier2(cmd,
             VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR, 
@@ -424,7 +467,7 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
         vkQueueSubmit(ctx->graphics_queue, 1, &submit_info, 0);
         vkQueueWaitIdle(ctx->graphics_queue);
 
-        LOG_DEBUG("created atlas with %d meshes", atlas->meshCount);
+        LOG_DEBUG("Created lightmap atlas with %d meshes\n", atlas->meshCount);
     }
 
     {
@@ -473,7 +516,7 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
             VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT_EXT
             | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT_EXT;
 
-        VkDescriptorBindingFlags flags2[5] = { bindless_flags, bindless_flags, bindless_flags, 0, bindless_flags };
+        VkDescriptorBindingFlags flags2[] = { bindless_flags, bindless_flags};
 
         VkDescriptorSetLayoutBindingFlagsCreateInfoEXT extended_info{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO_EXT, nullptr };
         extended_info.bindingCount = (u32)std::size(bindless_bindings);
@@ -492,19 +535,19 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
         VK_CHECK(vkAllocateDescriptorSets(ctx->device, &alloc_info, &bindless_descriptor_set));
 
         Shader rgen_shader, rmiss_shader, rchit_shader;
-        load_shader_from_file(&rgen_shader, ctx->device, "shaders/spirv/lightmap.rgen.spv");
+        load_shader_from_file(&rgen_shader, ctx->device, "shaders/spirv/lightmap_vis.rgen.spv");
         load_shader_from_file(&rmiss_shader, ctx->device, "shaders/spirv/lightmap.rmiss.spv");
         load_shader_from_file(&rchit_shader, ctx->device, "shaders/spirv/lightmap.rchit.spv");
 
         VkDescriptorSetLayout push_desc_layout = ctx->create_descriptor_set_layout(1, &rgen_shader);
         VkDescriptorSetLayout layouts[] = { push_desc_layout, bindless_set_layout };
-        lightmap_rt_pipeline = ctx->create_raytracing_pipeline(rgen_shader.shader, rmiss_shader.shader, rchit_shader.shader, layouts, (int)std::size(layouts));
+        lightmap_rt_vis_pipeline = ctx->create_raytracing_pipeline(rgen_shader.shader, rmiss_shader.shader, rchit_shader.shader, layouts, (int)std::size(layouts));
 
         vkDestroyShaderModule(ctx->device, rgen_shader.shader, nullptr);
         vkDestroyShaderModule(ctx->device, rmiss_shader.shader, nullptr);
         vkDestroyShaderModule(ctx->device, rchit_shader.shader, nullptr);
 
-        lightmap_rt_pipeline.pipeline.update_template = ctx->create_descriptor_update_template(1, &rgen_shader, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, lightmap_rt_pipeline.pipeline.layout);
+        lightmap_rt_vis_pipeline.pipeline.update_template = ctx->create_descriptor_update_template(1, &rgen_shader, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, lightmap_rt_vis_pipeline.pipeline.layout);
     }
 
     {
@@ -573,6 +616,8 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
         vkQueueSubmit(ctx->graphics_queue, 1, &submit_info, 0);
         vkQueueWaitIdle(ctx->graphics_queue);
     }
+
+    camera_data = ctx->create_gpu_buffer(sizeof(GPU_Camera_Data), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
 }
 
 void Lightmap_Renderer::set_camera(Camera_Component* camera)
@@ -596,6 +641,17 @@ void Lightmap_Renderer::render()
 
     VkCommandBufferBeginInfo begin_info = vkinit::command_buffer_begin_info();
     vkBeginCommandBuffer(cmd, &begin_info);
+
+    GPU_Camera_Data cam_data{};
+    cam_data.view = camera ? camera->get_view_matrix() : glm::mat4(1.0f);
+    cam_data.proj = camera ? camera->get_projection_matrix(aspect_ratio, 0.01f, 1000.f) : glm::mat4(1.0f);
+    cam_data.inverse_view = glm::inverse(cam_data.view);
+    cam_data.viewproj = cam_data.proj * cam_data.view;
+
+    camera_data.update_staging_buffer(ctx->allocator, current_frame_index, &cam_data, sizeof(cam_data));
+    camera_data.upload(cmd, current_frame_index);
+
+    vkinit::memory_barrier2(cmd, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT);
     
     vkinit::vk_transition_layout(cmd, color_target.image.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
         0, VK_ACCESS_SHADER_WRITE_BIT,
@@ -644,21 +700,27 @@ void Lightmap_Renderer::render()
 
         vkCmdSetScissor(cmd, 0, 1, &render_area);
 
-        glm::mat4 view_proj = camera ? camera->get_projection_matrix(aspect_ratio, 0.01f, 1000.f) * camera->get_view_matrix() : glm::mat4(1.0f);
-
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.pipeline);
-        vkCmdPushConstants(cmd, pipeline.layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(view_proj), &view_proj);
 
+        struct 
+        {
+            u32 output_mode;
+            u32 uv_space;
+        } mode;
+        mode.uv_space = render_mode == Render_Mode::Lightmap ? 1 : 0;
+        mode.output_mode = (u32)vis_mode;
+        vkCmdPushConstants(cmd, pipeline.layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, sizeof(glm::mat4), sizeof(mode), &mode);
         for (const auto& m : meshes)
         {
             for (const auto& p : m.primitives)
             {
                 vkCmdBindIndexBuffer(cmd, p.index_buffer.buffer, 0, VK_INDEX_TYPE_UINT32);
-                vkCmdPushConstants(cmd, pipeline.layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, sizeof(glm::mat4), sizeof(glm::mat4), &m.xform);
+                vkCmdPushConstants(cmd, pipeline.layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(glm::mat4), &m.xform);
                 Descriptor_Info descs[] = {
                     Descriptor_Info(p.vertex_buffer.buffer, 0, VK_WHOLE_SIZE),
                     Descriptor_Info(default_sampler, lightmap_texture.image_view, VK_IMAGE_LAYOUT_GENERAL),
                     Descriptor_Info(block_sampler, lightmap_texture.image_view, VK_IMAGE_LAYOUT_GENERAL),
+                    Descriptor_Info(camera_data.gpu_buffer.buffer, 0, VK_WHOLE_SIZE)
                 };
                 vkCmdPushDescriptorSetWithTemplateKHR(cmd, pipeline.update_template, pipeline.layout, 0, &descs);
                 vkCmdDrawIndexed(cmd, p.index_count, 1, 0, 0, 0);
@@ -732,7 +794,7 @@ void Lightmap_Renderer::render()
     normal_target.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     position_target.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-#if 0
+    if (ray_trace_vis)
     {
         vkinit::vk_transition_layout(cmd, color_target.image.image, color_target.layout, VK_IMAGE_LAYOUT_GENERAL,
             VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
@@ -740,35 +802,31 @@ void Lightmap_Renderer::render()
             1, VK_IMAGE_ASPECT_COLOR_BIT);
 
         // Raytrace lightmaps
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, lightmap_rt_pipeline.pipeline.pipeline);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, lightmap_rt_pipeline.pipeline.layout, 1, 1, &bindless_descriptor_set, 0, 0);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, lightmap_rt_vis_pipeline.pipeline.pipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, lightmap_rt_vis_pipeline.pipeline.layout, 1, 1, &bindless_descriptor_set, 0, 0);
         Descriptor_Info descs[] = {
             Descriptor_Info(0, color_target.image.image_view, VK_IMAGE_LAYOUT_GENERAL),
-            Descriptor_Info(default_sampler, normal_target.image.image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
-            Descriptor_Info(default_sampler, position_target.image.image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
-            Descriptor_Info(tlas)
+            Descriptor_Info(tlas),
+            Descriptor_Info(camera_data.gpu_buffer.buffer),
+            Descriptor_Info(block_sampler, lightmap_texture.image_view, VK_IMAGE_LAYOUT_GENERAL)
         };
-
-        vkCmdPushDescriptorSetWithTemplateKHR(cmd, lightmap_rt_pipeline.pipeline.update_template, lightmap_rt_pipeline.pipeline.layout, 0, descs);
 
         struct
         {
-            glm::mat4 inverse_view;
-            glm::mat4 projection;
-        } push_constants;
-        static_assert(sizeof(push_constants) <= 128);
-        push_constants.inverse_view = glm::inverse(camera->get_view_matrix());
-        push_constants.projection = camera->get_projection_matrix(aspect_ratio, 0.01f, 1000.f);
-        vkCmdPushConstants(cmd, lightmap_rt_pipeline.pipeline.layout, VK_SHADER_STAGE_RAYGEN_BIT_KHR, 0, (u32)sizeof(push_constants), &push_constants);
+            u32 mode;
+        } pc;
+        pc.mode = (u32)vis_mode;
+        vkCmdPushConstants(cmd, lightmap_rt_vis_pipeline.pipeline.layout, VK_SHADER_STAGE_RAYGEN_BIT_KHR, 0, sizeof(pc), &pc);
 
+        vkCmdPushDescriptorSetWithTemplateKHR(cmd, lightmap_rt_vis_pipeline.pipeline.update_template, lightmap_rt_vis_pipeline.pipeline.layout, 0, descs);
 
         //printf("Trace rays cmd at: %f\n", timer->get_current_time());
         vkCmdTraceRaysKHR(
             cmd,
-            &lightmap_rt_pipeline.shader_binding_table.raygen_region,
-            &lightmap_rt_pipeline.shader_binding_table.miss_region,
-            &lightmap_rt_pipeline.shader_binding_table.chit_region,
-            &lightmap_rt_pipeline.shader_binding_table.callable_region,
+            &lightmap_rt_vis_pipeline.shader_binding_table.raygen_region,
+            &lightmap_rt_vis_pipeline.shader_binding_table.miss_region,
+            &lightmap_rt_vis_pipeline.shader_binding_table.chit_region,
+            &lightmap_rt_vis_pipeline.shader_binding_table.callable_region,
             window_width, window_height, 1
         );
 
@@ -777,7 +835,6 @@ void Lightmap_Renderer::render()
             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
             1, VK_IMAGE_ASPECT_COLOR_BIT);
     }
-#endif
 
     Render_Target display_rt = color_target;
     //Render_Target display_rt = lightmap_target;
@@ -839,13 +896,13 @@ void Lightmap_Renderer::shutdown()
 
     vkDestroyDescriptorSetLayout(ctx->device, lightmap_gbuffer_pipeline.desc_sets[0], nullptr);
     vkDestroyDescriptorUpdateTemplate(ctx->device, lightmap_gbuffer_pipeline.update_template, nullptr);
-    vkDestroyPipelineLayout(ctx->device, lightmap_rt_pipeline.pipeline.layout, nullptr);
-    vkDestroyPipeline(ctx->device, lightmap_rt_pipeline.pipeline.pipeline, nullptr);
+    vkDestroyPipelineLayout(ctx->device, lightmap_rt_vis_pipeline.pipeline.layout, nullptr);
+    vkDestroyPipeline(ctx->device, lightmap_rt_vis_pipeline.pipeline.pipeline, nullptr);
 
     vkDestroyDescriptorPool(ctx->device, descriptor_pool, nullptr);
-    vkDestroyDescriptorSetLayout(ctx->device, lightmap_rt_pipeline.pipeline.desc_sets[0], nullptr);
+    vkDestroyDescriptorSetLayout(ctx->device, lightmap_rt_vis_pipeline.pipeline.desc_sets[0], nullptr);
     vkDestroyDescriptorSetLayout(ctx->device, bindless_set_layout, nullptr);
-    vkDestroyDescriptorUpdateTemplate(ctx->device, lightmap_rt_pipeline.pipeline.update_template, nullptr);
+    vkDestroyDescriptorUpdateTemplate(ctx->device, lightmap_rt_vis_pipeline.pipeline.update_template, nullptr);
 
     vkDestroyAccelerationStructureKHR(ctx->device, tlas, nullptr);
     for (auto& m : meshes)
@@ -954,14 +1011,34 @@ static xatlas::MeshDecl create_mesh_decl(cgltf_data* data, cgltf_primitive* prim
 
 static void render_debug_atlas(xatlas::Atlas* atlas, const char* filename)
 {
+    const int target_width = 1024;
 
     Image img{};
-    img.w = atlas->width;
-    img.h = atlas->height;
+
+    int scale = target_width / atlas->width;
+    img.w = atlas->width * scale;
+    img.h = atlas->height * scale;
 
     img.data = (u8*)malloc(img.w * img.h * 3);
     assert(img.data);
     memset(img.data, 0, img.w * img.h * 3);
+
+    for (u32 y = 0; y < img.h; ++y)
+    {
+        for (u32 x = 0; x < img.w; ++x)
+        {
+            glm::ivec2 scaled = glm::ivec2(x, y) / scale;
+            glm::vec3 col = (scaled.x ^ scaled.y) & 1 ? glm::vec3(0.05f) : glm::vec3(0.1f);
+            set_pixel(&img, x, y, col);
+        }
+    }
+
+    const u32 n_samples = 8;
+    std::vector<glm::vec2> sample_points(n_samples);
+    for (u32 i = 0; i < n_samples; ++i)
+    {
+        sample_points[i] = radical_inverse_vec2<2, 3>(i);
+    }
 
     for (uint32_t m = 0; m < atlas->meshCount; ++m)
     {
@@ -976,18 +1053,68 @@ static void render_debug_atlas(xatlas::Atlas* atlas, const char* filename)
             for (uint32_t i = 0; i < 3; ++i)
             {
                 uint32_t index = mesh->indexArray[tri * 3 + i];
-                uvs[i].x = mesh->vertexArray[index].uv[0];
-                uvs[i].y = mesh->vertexArray[index].uv[1];
+                uvs[i].x = mesh->vertexArray[index].uv[0] * scale;
+                uvs[i].y = mesh->vertexArray[index].uv[1] * scale;
             }
-            fill_triangle(&img, uvs, color);
+            fill_triangle(&img, uvs, color, scale);
             draw_triangle(&img, uvs, glm::vec3(1.0));
         }
     }
 
+    for (u32 y = 0; y < atlas->height; ++y)
+    {
+        for (u32 x = 0; x < atlas->width; ++x)
+        {
+            for (u32 sample = 0; sample < n_samples; ++sample)
+            {
+                glm::vec2 p = glm::vec2(x, y) + sample_points[sample];
+                bool in_triangle = false;
+                for (uint32_t m = 0; m < atlas->meshCount; ++m)
+                {
+                    if (in_triangle) break;
+                    xatlas::Mesh* mesh = &atlas->meshes[m];
+
+                    for (uint32_t tri = 0; tri < mesh->indexCount / 3; ++tri)
+                    {
+                        glm::vec2 uvs[3];
+                        int chart_index = mesh->vertexArray[mesh->indexArray[tri * 3]].chartIndex;
+                        glm::vec3 color = math::random_vector((u64)chart_index + 1337);
+                        for (uint32_t i = 0; i < 3; ++i)
+                        {
+                            uint32_t index = mesh->indexArray[tri * 3 + i];
+                            uvs[i].x = mesh->vertexArray[index].uv[0];
+                            uvs[i].y = mesh->vertexArray[index].uv[1];
+                        }
+                        glm::vec2 v0 = uvs[0];
+                        glm::vec2 v1 = uvs[1];
+                        glm::vec2 v2 = uvs[2];
+                        float w0 = orient2d_float(v1, v2, p);
+                        float w1 = orient2d_float(v2, v0, p);
+                        float w2 = orient2d_float(v0, v1, p);
+
+                        // If p is on or inside all edges, render pixel.
+                        if ((w0 > 0.f && w1 > 0.f && w2 > 0.f) || (w0 < 0.f && w1 < 0.f && w2 < 0.f))
+                        {
+                            in_triangle = true;
+                            float w_sum = w0 + w1 + w2;
+                            glm::vec2 v = (w0 * v0 + w1 * v1 + w2 * v2) / w_sum;
+                            glm::vec2 diff = p - v;
+                            assert(glm::dot(diff, diff) < 0.0001f);
+                            break;
+                        }
+                    }
+                }
+                glm::vec3 c = in_triangle ? glm::vec3(0.0, 0.0, 1.0) : glm::vec3(1.0, 0.0, 0.0);
+                set_pixel(&img, (int)std::roundf(p.x * scale), (int)std::roundf(p.y * scale), c);
+            }
+        }
+    }
+
+
     write_image(&img, filename);
 }
 
-static void fill_triangle(Image* img, glm::vec2 uvs[3], glm::vec3 color)
+static void fill_triangle(Image* img, glm::vec2 uvs[3], glm::vec3 color, int texel_size)
 {
     glm::vec2 v0 = uvs[0];
     glm::vec2 v1 = uvs[1];
@@ -1009,15 +1136,20 @@ static void fill_triangle(Image* img, glm::vec2 uvs[3], glm::vec3 color)
     for (p.y = minY; p.y <= maxY; p.y++) {
         for (p.x = minX; p.x <= maxX; p.x++) {
             // Determine barycentric coordinates
-            int w0 = orient2d(v1, v2, p);
+            int w0 = orient2d(v1, v2, p); 
             int w1 = orient2d(v2, v0, p);
             int w2 = orient2d(v0, v1, p);
 
+            glm::vec3 c = color;
+            glm::ivec2 scaled_p = p / texel_size;
+            if ((scaled_p.x ^ scaled_p.y) & 1)
+                c *= 0.5f;
+
             // If p is on or inside all edges, render pixel.
             if (w0 >= 0 && w1 >= 0 && w2 >= 0)
-                set_pixel(img, (int)p.x, (int)p.y, color);
-            if (w0 <= 0 && w1 <= 0 && w2 <= 0)
-                set_pixel(img, (int)p.x, (int)p.y, color);
+                set_pixel(img, (int)p.x, (int)p.y, c);
+            else if (w0 <= 0 && w1 <= 0 && w2 <= 0)
+                set_pixel(img, (int)p.x, (int)p.y, c);
         }
     }
 }
@@ -1085,9 +1217,64 @@ static int orient2d(glm::vec2 a, glm::vec2 b, glm::vec2 c)
     return (int)((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x));
 }
 
+static float orient2d_float(glm::vec2 a, glm::vec2 b, glm::vec2 c)
+{
+    return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+}
+
 static void write_image(Image* img, const char* filename)
 {
     stbi_write_png(filename, img->w, img->h, 3, img->data, 0);
+}
+
+static void test_sampling(const char* filename, bool flip_y)
+{
+    Image img{};
+    u32 w = 256;
+    u32 h = 256;
+    img.data = (u8*)malloc(w * h * 3);
+    memset(img.data, 0xFF, w * h * 3);
+    img.w = w;
+    img.h = h;
+
+    const u32 sample_count = 216;
+    for (u32 i = 0; i < sample_count; ++i)
+    {
+        float s0 = radical_inverse<2>(i);
+        float s1 = radical_inverse<3>(i);
+        s1 = flip_y ? 1.0f - s1 : s1;
+
+        int x = (int)(s0 * img.w);
+        int y = (int)(s1 * img.h);
+        set_pixel(&img, x, y, glm::vec3(0.0));
+    }
+    write_image(&img, filename);
+}
+
+bool key_event_callback(Event& ev)
+{
+    assert(ev.type == KEY_PRESS);
+    if (ev.event.key_event.type == SDL_KEYDOWN && !ev.event.key_event.repeat)
+    {
+        SDL_Scancode sc = ev.event.key_event.scancode;
+        LOG_DEBUG("key: %d\n", sc);
+        switch (sc)
+        {
+        case SDL_SCANCODE_L:
+            render_mode = (Render_Mode)(((int)render_mode + 1) % (int)Render_Mode::Mode_Count);
+            LOG_DEBUG("Render_mode: %d\n", render_mode);
+            break;
+        case SDL_SCANCODE_G:
+            vis_mode = (Vis_Mode)(((int)vis_mode + 1) % (int)Vis_Mode::Vis_Count);
+            LOG_DEBUG("Vis_mode: %d\n", vis_mode);
+            break;
+        case SDL_SCANCODE_R:
+            ray_trace_vis = !ray_trace_vis;
+            LOG_DEBUG("Ray tracing: %s\n", ray_trace_vis ? "ON" : "OFF");
+            break;
+        }
+    }
+    return false;
 }
 
 } //namespace lm

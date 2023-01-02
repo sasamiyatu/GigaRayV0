@@ -9,12 +9,21 @@ enum Event_Type
 	KEY_PRESS = 0,
 };
 
+struct Key_Event
+{
+	SDL_Scancode scancode;
+	u32 type;
+	u8 repeat;
+};
+
 struct Event
 {
 	Event_Type type;
 
-	u32 n_args;
-	void* args[MAX_ARGS];
+	union
+	{
+		Key_Event key_event;
+	} event;
 };
 
 typedef bool event_handler(Event& e);

@@ -40,6 +40,8 @@ add_executable(GigaRayV0
     r_mesh.cpp
     r_vulkan.h 
     r_vulkan.cpp
+    sampling.h
+    sampling.cpp
     shaders.h 
     shaders.cpp
     timer.h 

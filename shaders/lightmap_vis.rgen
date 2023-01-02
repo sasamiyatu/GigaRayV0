@@ -9,43 +9,23 @@
 #include "lightmap.glsl"
 #include "random.glsl"
 
-layout(binding = 0, set = 0, rgba32f) uniform image2D output_image;
-layout(binding = 1, set = 0) uniform sampler2D in_normal;
-layout(binding = 2, set = 0) uniform sampler2D in_position;
-layout(binding = 3, set = 0) uniform accelerationStructureEXT scene;
-
-struct Index_Data
-{
-    uvec3 index;
-};
-
-struct Vertex
-{
-	vec3 position;
-	vec3 normal;
-	vec3 color;
-	vec4 tangent;
-	vec2 uv0;
-	vec2 uv1;
-};
-
-layout (set = 1, binding = 0, scalar) readonly buffer vertex_buffer_array_t
-{
-    Vertex verts[];
-} vertex_buffer_array[];
-
-layout (set = 1, binding = 1, scalar) readonly buffer index_buffer_array_t
-{
-    Index_Data indices[];
-} index_buffer_array[];
-
 layout(location = 0) rayPayloadEXT Ray_Payload pay;
+
+layout(binding = 0, set = 0, rgba32f) uniform image2D output_image;
+layout(binding = 1, set = 0) uniform accelerationStructureEXT scene;
+layout(binding = 2, set = 0) readonly buffer camera_buffer
+{
+    mat4 viewproj;
+	mat4 view;
+	mat4 inverse_view;
+	mat4 proj;
+};
+layout(binding = 3, set = 0) uniform sampler2D lightmap_tex;
 
 layout(push_constant) uniform constants
 {
-    mat4 inverse_view;
-    mat4 projection;
-};
+    uint output_mode;
+} control;
 
 Vertex get_interpolated_vertex(uint instance_id, uint primitive_id, vec2 barycentrics)
 {
@@ -76,8 +56,8 @@ void main()
     vec2 uv = ((p + 0.5f) / vec2(gl_LaunchSizeEXT.xy)) * 2.f - 1.f;
 
     vec3 ro = inverse_view[3].xyz;
-    float aspect = projection[1][1] / projection[0][0];
-    float tan_half_fov_y = 1.f / projection[1][1];
+    float aspect = proj[1][1] / proj[0][0];
+    float tan_half_fov_y = 1.f / proj[1][1];
     vec3 rd = normalize(
         (uv.x * inverse_view[0].xyz * tan_half_fov_y * aspect) - 
         (uv.y * inverse_view[1].xyz * tan_half_fov_y) -
@@ -107,12 +87,31 @@ void main()
         seed = pcg4d(seed);
         color = vec3(seed.xyz) * ldexp(1.0, -32);
         Vertex v = get_interpolated_vertex(pay.instance_id, pay.prim_id, pay.barycentrics);
-        vec3 world_normal = normalize(vec3(vec4(v.normal, 0) * pay.object_to_world));
-        color = world_normal * 0.5 + 0.5;
+        vec3 world_normal = normalize(vec3(vec4(v.normal, 0) * pay.world_to_object));
+        ivec2 pixelcoord = ivec2(textureSize(lightmap_tex, 0) * v.uv1);
+        int odd = (pixelcoord.x ^ pixelcoord.y) & 1;
+        vec3 c = odd == 1 ? vec3(0.25) : vec3(0.5);
+        vec3 lm = texture(lightmap_tex, v.uv0).rgb;
+        vec3 pos = vec3(pay.object_to_world * vec4(v.position, 1.0));
+        switch (control.output_mode)
+        {
+        case 0:
+            color = c * v.color;
+            break;
+        case 1:
+            color = lm;
+            break;
+        case 2:
+            color = world_normal * 0.5 + 0.5;
+            break;
+        case 3:
+            color = pos;
+            break;
+        case 4:
+            color = vec3(seed.xyz) * ldexp(1.0, -32);
+            break;
+        }
     }
 
-
-    vec3 normal = texelFetch(in_normal, p, 0).rgb;
-    //imageStore(output_image, p, vec4(normal * 0.5 + 0.5, 1.0));
     imageStore(output_image, p, vec4(color, 1.0));
 }

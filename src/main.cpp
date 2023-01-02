@@ -22,15 +22,9 @@
 #include "shaders.h"
 #include "lightmap.h"
 #include "events.h"
+#include "sampling.h"
 constexpr int WINDOW_WIDTH = 1280;
 constexpr int WINDOW_HEIGHT = 720;
-
-bool event_test_func(Event& ev)
-{
-	if (!*(bool*)(ev.args[2]) && *(SDL_EventType*)ev.args[1] == SDL_KEYDOWN)
-		printf("event test: %d\n", *(u32*)ev.args[0]);
-	return false;
-}
 
 int main(int argc, char** argv)
 {
@@ -42,6 +36,7 @@ int main(int argc, char** argv)
 	Resource_Manager<Texture> texture_manager;
 	Resource_Manager<Material> material_manager;
 	Renderer renderer(&ctx, &platform, &mesh_manager, &texture_manager, &material_manager, &timer);
+
 
 	lm::Lightmap_Renderer lightmap_renderer(&ctx, (u32)WINDOW_WIDTH, (u32)WINDOW_HEIGHT);
 	//lightmap_renderer.init_scene("data/cube/Cube.gltf");
@@ -63,7 +58,7 @@ int main(int argc, char** argv)
 	i32 material_id = material_manager.register_resource(test_mat, "test");
 	//meshes.push_back(create_sphere(16));
 	//meshes[0].material_id = material_id;
-	g_event_system->register_listener(Event_Type::KEY_PRESS, event_test_func);
+
 	ECS ecs{};
 	Transform_Component c{};
 	c.pos = glm::vec3(0.0, 2.2, 0.0);
@@ -114,9 +109,9 @@ int main(int argc, char** argv)
 			{
 				Event ev{};
 				ev.type = KEY_PRESS;
-				ev.args[0] = &event.key.keysym.scancode;
-				ev.args[1] = &event.type;
-				ev.args[2] = &event.key.repeat;
+				ev.event.key_event.scancode = event.key.keysym.scancode;
+				ev.event.key_event.type = event.type;
+				ev.event.key_event.repeat = event.key.repeat;
 				g_event_system->fire_event(ev);
 				if (event.key.keysym.scancode == SDL_SCANCODE_ESCAPE)
 					goto here;
