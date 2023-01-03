@@ -6,8 +6,12 @@
 #extension GL_EXT_scalar_block_layout : enable
 #extension GL_EXT_nonuniform_qualifier : enable
 
+#define M_PI 3.14159265359
 #include "random.glsl"
 #include "lightmap.glsl"
+#include "sampling.glsl"
+#include "random.glsl"
+#include "math.glsl"
 
 layout(location = 0) rayPayloadEXT Ray_Payload pay;
 
@@ -33,6 +37,12 @@ struct Transform_Data
     mat4 inverse_model;
 };
 
+layout(push_constant) uniform constants
+{
+    uint frame_number;
+    uint frames_accumulated;
+} control;
+
 layout(binding = 0, set = 0, rgba32f) uniform image2D lightmap;
 layout(binding = 1, set = 0) uniform accelerationStructureEXT scene;
 layout(binding = 2, set = 0, scalar) readonly buffer sample_buffer_t
@@ -48,77 +58,87 @@ layout(binding = 4, set = 0, scalar) readonly buffer material_buffer_t
     Material materials[];
 } material_buffer;
 
-Vertex get_interpolated_vertex(uint instance_id, uint primitive_id, vec3 barycentrics)
-{
-    uvec3 indices = index_buffer_array[instance_id].indices[primitive_id].index;
-    Vertex v0 = vertex_buffer_array[instance_id].verts[indices.x];
-    Vertex v1 = vertex_buffer_array[instance_id].verts[indices.y];
-    Vertex v2 = vertex_buffer_array[instance_id].verts[indices.z];
-
-    Vertex vert;
-	vert.position = v0.position * barycentrics.x + v1.position * barycentrics.y + v2.position * barycentrics.z;
-	vert.normal = v0.normal * barycentrics.x + v1.normal * barycentrics.y + v2.normal * barycentrics.z;
-	vert.color = v0.color * barycentrics.x + v1.color * barycentrics.y + v2.color * barycentrics.z;
-	vert.tangent = v0.tangent * barycentrics.x + v1.tangent * barycentrics.y + v2.tangent * barycentrics.z;
-	vert.uv0 = v0.uv0 * barycentrics.x + v1.uv0 * barycentrics.y + v2.uv0 * barycentrics.z;
-	vert.uv1 = v0.uv1 * barycentrics.x + v1.uv1 * barycentrics.y + v2.uv1 * barycentrics.z;
-
-    return vert;
-}
+#define MAX_BOUNCES 4
 
 void main()
 {
     ivec2 p = ivec2(gl_LaunchIDEXT.xy);
 
-    Texel_Sample_Data d0 = sample_buffer.samples[p.x];
-    Texel_Sample_Data d1 = sample_buffer.samples[1];
-#if 0
-    if (p.xy == ivec2(0, 0))
+    Texel_Sample_Data data = sample_buffer.samples[p.x];
+    uint sample_index = control.frame_number % 8;
+    if (sample_index >= data.sample_count) return;
+
+    Texel_Sample s = data.samples[sample_index];
+    ivec2 texel = ivec2(s.texel);
+    vec3 ro;
+    vec3 rd;
+    uvec4 seed = uvec4(texel.xy, control.frame_number, sample_index);
     {
-        debugPrintfEXT(
-            "mesh: %d, prim: %d, texel: %d %d, bary: %f %f %f", 
-            d0.samples[0].mesh_index, d0.samples[0].primitive_index,
-            d0.samples[0].texel.x, d0.samples[0].texel.y,
-            d0.samples[0].barycentrics.x, d0.samples[0].barycentrics.y, d0.samples[0].barycentrics.z
-        );
-        debugPrintfEXT(
-            "mesh: %d, prim: %d, texel: %d %d, bary: %f %f %f", 
-            d1.samples[0].mesh_index, d1.samples[0].primitive_index, 
-            d1.samples[0].texel.x, d1.samples[0].texel.y,
-            d1.samples[0].barycentrics.x, d1.samples[0].barycentrics.y, d1.samples[0].barycentrics.z
-        );
+        Vertex v = get_interpolated_vertex2(s.mesh_index, s.primitive_index, s.barycentrics);
+
+        mat4 model = mesh_transform_buffer.transforms[s.mesh_index].model;
+        mat4 inverse_model = mesh_transform_buffer.transforms[s.mesh_index].inverse_model;
+        vec3 world_normal = v.normal * mat3(inverse_model);
+        vec3 world_pos = vec3(model * vec4(v.position, 1.0)); 
+        //imageStore(lightmap, texel, vec4(world_pos, 1.0)); return;
+        ro = offset_ray(world_pos, world_normal);
+        vec4 rand = vec4(pcg4d(seed)) * ldexp(1.0, -32);
+        mat3 tbn = create_tangent_space(world_normal);
+        rd = tbn * random_cosine_hemisphere(rand.xy);
     }
-#endif
 
-    ivec2 texel = ivec2(d0.samples[0].texel);
-
-    vec3 c = vec3(vec2(texel.xy) / vec2(imageSize(lightmap)), 0.0);
-
-
-    Vertex v = get_interpolated_vertex(d0.samples[0].mesh_index, d0.samples[0].primitive_index, d0.samples[0].barycentrics);
-
-
-    mat4 model = mesh_transform_buffer.transforms[d0.samples[0].mesh_index].model;
-    mat4 inverse_model = mesh_transform_buffer.transforms[d0.samples[0].mesh_index].inverse_model;
-    vec3 world_normal = v.normal * mat3(inverse_model);
-    c = world_normal * 0.5 + 0.5;
-
-    Material mat = material_buffer.materials[d0.samples[0].mesh_index];
-    c = mat.base_color_factor.rgb;
-
-    uvec4 seed = uvec4(d0.samples[0].mesh_index, 0, 42, 1337);
-    seed = pcg4d(seed);
-    //c = vec3(seed.xyz) * ldexp(1.0, -32);
-
-    if (p.x == 300)
+    vec3 radiance = vec3(0.0);
+    vec3 throughput = vec3(1.0);
+    
+    for (int i = 0; i < MAX_BOUNCES; ++i)
     {
-        debugPrintfEXT(
-            "mesh: %d, prim: %d, texel: %d %d, bary: %f %f %f", 
-            d0.samples[0].mesh_index, d0.samples[0].primitive_index,
-            d0.samples[0].texel.x, d0.samples[0].texel.y,
-            d0.samples[0].barycentrics.x, d0.samples[0].barycentrics.y, d0.samples[0].barycentrics.z
+        traceRayEXT(
+            scene,
+            gl_RayFlagsOpaqueEXT,
+            0xFF,
+            0,
+            0,
+            0,
+            ro,
+            0.0,
+            rd,
+            100000.0,
+            0
         );
+        
+        if (pay.instance_id != -1)
+        {
+            // Hit
+            Material mat = material_buffer.materials[pay.instance_id];
+            radiance += throughput * mat.emissive_factor * 20.0;
+            
+            Vertex v = get_interpolated_vertex(pay.instance_id, pay.prim_id, pay.barycentrics);
+            vec3 world_normal = normalize(vec3(vec4(v.normal, 0) * pay.world_to_object));
+            if (dot(world_normal, -rd) < 0.0) world_normal = -world_normal;
+            vec3 world_pos = vec3(pay.object_to_world * vec4(v.position, 1.0));
+
+            vec4 rand = vec4(pcg4d(seed)) * ldexp(1.0, -32);
+            mat3 tbn = create_tangent_space(world_normal);
+            ro = offset_ray(world_pos, world_normal);
+            rd = tbn * random_cosine_hemisphere(rand.xy);
+
+            throughput *= mat.base_color_factor.rgb;
+            //if (mat.base_color_factor.r > 0.0) debugPrintfEXT("rgb: %f %f %f", mat.base_color_factor.r, mat.base_color_factor.g, mat.base_color_factor.b);
+        }
+        else
+        {
+            break;
+        }
     }
-    imageStore(lightmap, texel, vec4(c, 1.0));
+
+    vec3 out_color = radiance.rgb;
+    if (control.frames_accumulated != 0)
+    {
+        vec4 prev_color = imageLoad(lightmap, texel.xy);
+        float total = control.frames_accumulated + 1.0;
+        out_color = mix(out_color.rgb, prev_color.rgb, float(control.frames_accumulated) / total);
+    }
+    //out_color = vec3(pcg4d(seed)) * ldexp(1.0, -32);
+    imageStore(lightmap, texel, vec4(out_color.rgb, 1.0));
     //imageStore(lightmap, p, vec4(1.0, 0.0, 1.0, 1.0));
 }

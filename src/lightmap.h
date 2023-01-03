@@ -145,6 +145,7 @@ struct Lightmap_Renderer
 	float aspect_ratio = 1.0f;
 
 	u64 frame_counter = 0;
+	u64 lightmap_frames_accumulated = 0;
 
 	cgltf_data* scene_data;
 

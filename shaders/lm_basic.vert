@@ -43,6 +43,7 @@ layout (location = 1) out vec2 texcoord0;
 layout (location = 2) out vec2 texcoord1;
 layout (location = 3) out vec3 normal;
 layout (location = 4) out vec3 pos;
+layout (location = 5) out flat uint material_index;
 
 void main()
 {
@@ -57,6 +58,7 @@ void main()
     normal = vec3(control.model * vec4(v.normal, 0.0));
     texcoord0 = v.uv0;
     texcoord1 = v.uv1;
+    material_index = gl_InstanceIndex;
     //gl_Position = control.viewproj * vec4(verts[gl_VertexIndex], 1.0);
     //texcoord = uvs[gl_VertexIndex];
     //color = vec3(1.0, 0.0, 0.0);

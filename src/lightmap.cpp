@@ -39,7 +39,8 @@ enum class Vis_Mode
     Lightmap,
     Normals,
     Position,
-    Bonus,
+    Albedo,
+    Lit_Albedo,
     Vis_Count
 };
 
@@ -292,7 +293,6 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
                             {
                                 glm::vec2 uvs[3];
                                 int chart_index = mesh->vertexArray[mesh->indexArray[tri * 3]].chartIndex;
-                                glm::vec3 color = math::random_vector((u64)chart_index + 1337);
                                 for (uint32_t i = 0; i < 3; ++i)
                                 {
                                     uint32_t index = mesh->indexArray[tri * 3 + i];
@@ -841,6 +841,15 @@ void Lightmap_Renderer::render()
         };
         vkCmdPushDescriptorSetWithTemplateKHR(cmd, lightmap_trace_pipeline.pipeline.update_template, lightmap_trace_pipeline.pipeline.layout, 0, &descs);
 
+        struct
+        {
+            u32 frame_counter;
+            u32 frames_accumulated;
+        } pc;
+        pc.frame_counter = (u32)frame_counter;
+        pc.frames_accumulated = (u32)(lightmap_frames_accumulated++);
+        vkCmdPushConstants(cmd, lightmap_trace_pipeline.pipeline.layout, VK_SHADER_STAGE_RAYGEN_BIT_KHR, 0, sizeof(pc), &pc);
+
         vkCmdTraceRaysKHR(
             cmd,
             &lightmap_trace_pipeline.shader_binding_table.raygen_region,
@@ -850,8 +859,11 @@ void Lightmap_Renderer::render()
             (u32)lm_texel_samples.size(), 1, 1
         );
 
-        vkinit::memory_barrier2(cmd, VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT, 
-            VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
+        vkinit::memory_barrier2(cmd, 0, 0, 
+            VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+        
+        if (lightmap_frames_accumulated % 1000 == 0)
+            LOG_DEBUG("%d lightmap frames accumulated\n", lightmap_frames_accumulated);
     }
 
     {
@@ -894,6 +906,7 @@ void Lightmap_Renderer::render()
         mode.uv_space = render_mode == Render_Mode::Lightmap ? 1 : 0;
         mode.output_mode = (u32)vis_mode;
         vkCmdPushConstants(cmd, pipeline.layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, sizeof(glm::mat4), sizeof(mode), &mode);
+        u32 instance = 0;
         for (const auto& m : meshes)
         {
             for (const auto& p : m.primitives)
@@ -904,10 +917,11 @@ void Lightmap_Renderer::render()
                     Descriptor_Info(p.vertex_buffer.buffer, 0, VK_WHOLE_SIZE),
                     Descriptor_Info(default_sampler, lightmap_texture.image_view, VK_IMAGE_LAYOUT_GENERAL),
                     Descriptor_Info(block_sampler, lightmap_texture.image_view, VK_IMAGE_LAYOUT_GENERAL),
-                    Descriptor_Info(camera_data.gpu_buffer.buffer, 0, VK_WHOLE_SIZE)
+                    Descriptor_Info(camera_data.gpu_buffer.buffer, 0, VK_WHOLE_SIZE),
+                    Descriptor_Info(material_data.buffer)
                 };
                 vkCmdPushDescriptorSetWithTemplateKHR(cmd, pipeline.update_template, pipeline.layout, 0, &descs);
-                vkCmdDrawIndexed(cmd, p.index_count, 1, 0, 0, 0);
+                vkCmdDrawIndexed(cmd, p.index_count, 1, 0, 0, instance++);
             }
         }
 
@@ -999,8 +1013,10 @@ void Lightmap_Renderer::render()
         struct
         {
             u32 mode;
+            u32 frame_number;
         } pc;
         pc.mode = (u32)vis_mode;
+        pc.frame_number = (u32)frame_counter;
         vkCmdPushConstants(cmd, lightmap_rt_vis_pipeline.pipeline.layout, VK_SHADER_STAGE_RAYGEN_BIT_KHR, 0, sizeof(pc), &pc);
 
         vkCmdPushDescriptorSetWithTemplateKHR(cmd, lightmap_rt_vis_pipeline.pipeline.update_template, lightmap_rt_vis_pipeline.pipeline.layout, 0, descs);
@@ -1061,8 +1077,10 @@ void Lightmap_Renderer::render()
         1, &ctx->frame_objects[current_frame_index].render_finished_sem,
         1, &ctx->swapchain, &swapchain_image_index
     );
-        
+       
     vkQueuePresentKHR(ctx->graphics_queue, &present_info);
+
+    ++frame_counter;
 }
 
 void Lightmap_Renderer::shutdown()

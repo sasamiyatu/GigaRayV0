@@ -32,29 +32,10 @@ layout(binding = 4, set = 0, scalar) readonly buffer material_buffer_t
 layout(push_constant) uniform constants
 {
     uint output_mode;
+    uint frame_number;
 } control;
 
-Vertex get_interpolated_vertex(uint instance_id, uint primitive_id, vec2 barycentrics)
-{
-    uvec3 indices = index_buffer_array[instance_id].indices[primitive_id].index;
-    Vertex v0 = vertex_buffer_array[instance_id].verts[indices.x];
-    Vertex v1 = vertex_buffer_array[instance_id].verts[indices.y];
-    Vertex v2 = vertex_buffer_array[instance_id].verts[indices.z];
-
-    float u = barycentrics.x;
-    float v = barycentrics.y;
-    float w = 1.0 - barycentrics.x - barycentrics.y;
-
-    Vertex vert;
-	vert.position = v0.position * w + v1.position * u + v2.position * v;
-	vert.normal = v0.normal * w + v1.normal * u + v2.normal * v;
-	vert.color = v0.color * w + v1.color * u + v2.color * v;
-	vert.tangent = v0.tangent * w + v1.tangent * u + v2.tangent * v;
-	vert.uv0 = v0.uv0 * w + v1.uv0 * u + v2.uv0 * v;
-	vert.uv1 = v0.uv1 * w + v1.uv1 * u + v2.uv1 * v;
-
-    return vert;
-}
+#define MAX_BOUNCES 4
 
 void main()
 {
@@ -73,21 +54,54 @@ void main()
 
     pay.instance_id = -1;
 
-    traceRayEXT(
-        scene,
-        gl_RayFlagsOpaqueEXT,
-        0xFF,
-        0,
-        0,
-        0,
-        ro,
-        0.0,
-        rd,
-        100000.0,
-        0
-    );
+    vec3 radiance = vec3(0.0);
+    vec3 throughput = vec3(1.0);
 
-    vec3 color = vec3(0.0);
+    uvec4 seed = uvec4(gl_LaunchIDEXT.xy, control.frame_number, 1);
+
+    for (int bounce = 0; bounce < MAX_BOUNCES; ++bounce)
+    {
+        traceRayEXT(
+            scene,
+            gl_RayFlagsOpaqueEXT,
+            0xFF,
+            0,
+            0,
+            0,
+            ro,
+            0.0,
+            rd,
+            100000.0,
+            0
+        );
+
+        if (pay.instance_id != -1)
+        {
+            // Hit
+            Material mat = material_buffer.materials[pay.instance_id];
+            radiance += throughput * mat.emissive_factor;
+            
+            Vertex v = get_interpolated_vertex(pay.instance_id, pay.prim_id, pay.barycentrics);
+            vec3 world_normal = normalize(vec3(vec4(v.normal, 0) * pay.world_to_object));
+            vec3 world_pos = vec3(pay.object_to_world * vec4(v.position, 1.0));
+            if (dot(world_normal, -rd) < 0.0) world_normal = -world_normal;
+
+            vec4 rand = vec4(pcg4d(seed)) * ldexp(1.0, -32);
+            mat3 tbn = create_tangent_space(world_normal);
+            ro = offset_ray(world_pos, world_normal);
+            rd = tbn * random_cosine_hemisphere(rand.xy);
+
+            throughput *= mat.base_color_factor.rgb;
+        }
+        else
+        {
+            break;
+        }
+    }
+
+
+    vec3 color = radiance;
+#if 0
     if (pay.instance_id != -1)
     {
         uvec4 seed = uvec4(pay.instance_id, 0, 42, 1337);
@@ -102,6 +116,8 @@ void main()
         vec3 lm = texture(lightmap_tex, v.uv1).rgb;
         vec3 pos = vec3(pay.object_to_world * vec4(v.position, 1.0));
         Material mat = material_buffer.materials[pay.instance_id];
+        if (mat.emissive_factor.r > 0.0)
+            mat.base_color_factor = vec4(1.0, 0.0, 1.0, 1.0);
         switch (control.output_mode)
         {
         case 0:
@@ -121,6 +137,7 @@ void main()
             break;
         }
     }
+#endif
 
     imageStore(output_image, p, vec4(color, 1.0));
 }
