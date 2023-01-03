@@ -6,15 +6,119 @@
 #extension GL_EXT_scalar_block_layout : enable
 #extension GL_EXT_nonuniform_qualifier : enable
 
+#include "random.glsl"
 #include "lightmap.glsl"
 
 layout(location = 0) rayPayloadEXT Ray_Payload pay;
 
+struct Texel_Sample
+{
+	uint mesh_index;
+	uint primitive_index;
+    uvec2 texel;
+	vec3 barycentrics;
+};
+
+#define MAX_TEXEL_SAMPLES 8
+
+struct Texel_Sample_Data
+{
+	uint sample_count;
+	Texel_Sample samples[MAX_TEXEL_SAMPLES];
+};
+
+struct Transform_Data
+{
+    mat4 model;
+    mat4 inverse_model;
+};
+
 layout(binding = 0, set = 0, rgba32f) uniform image2D lightmap;
 layout(binding = 1, set = 0) uniform accelerationStructureEXT scene;
+layout(binding = 2, set = 0, scalar) readonly buffer sample_buffer_t
+{
+    Texel_Sample_Data samples[];
+} sample_buffer;
+layout(binding = 3, set = 0) readonly buffer mesh_transform_buffer_t
+{
+    Transform_Data transforms[];
+} mesh_transform_buffer;
+layout(binding = 4, set = 0, scalar) readonly buffer material_buffer_t
+{
+    Material materials[];
+} material_buffer;
+
+Vertex get_interpolated_vertex(uint instance_id, uint primitive_id, vec3 barycentrics)
+{
+    uvec3 indices = index_buffer_array[instance_id].indices[primitive_id].index;
+    Vertex v0 = vertex_buffer_array[instance_id].verts[indices.x];
+    Vertex v1 = vertex_buffer_array[instance_id].verts[indices.y];
+    Vertex v2 = vertex_buffer_array[instance_id].verts[indices.z];
+
+    Vertex vert;
+	vert.position = v0.position * barycentrics.x + v1.position * barycentrics.y + v2.position * barycentrics.z;
+	vert.normal = v0.normal * barycentrics.x + v1.normal * barycentrics.y + v2.normal * barycentrics.z;
+	vert.color = v0.color * barycentrics.x + v1.color * barycentrics.y + v2.color * barycentrics.z;
+	vert.tangent = v0.tangent * barycentrics.x + v1.tangent * barycentrics.y + v2.tangent * barycentrics.z;
+	vert.uv0 = v0.uv0 * barycentrics.x + v1.uv0 * barycentrics.y + v2.uv0 * barycentrics.z;
+	vert.uv1 = v0.uv1 * barycentrics.x + v1.uv1 * barycentrics.y + v2.uv1 * barycentrics.z;
+
+    return vert;
+}
 
 void main()
 {
     ivec2 p = ivec2(gl_LaunchIDEXT.xy);
-    imageStore(lightmap, p, vec4(1.0, 0.0, 1.0, 1.0));
+
+    Texel_Sample_Data d0 = sample_buffer.samples[p.x];
+    Texel_Sample_Data d1 = sample_buffer.samples[1];
+#if 0
+    if (p.xy == ivec2(0, 0))
+    {
+        debugPrintfEXT(
+            "mesh: %d, prim: %d, texel: %d %d, bary: %f %f %f", 
+            d0.samples[0].mesh_index, d0.samples[0].primitive_index,
+            d0.samples[0].texel.x, d0.samples[0].texel.y,
+            d0.samples[0].barycentrics.x, d0.samples[0].barycentrics.y, d0.samples[0].barycentrics.z
+        );
+        debugPrintfEXT(
+            "mesh: %d, prim: %d, texel: %d %d, bary: %f %f %f", 
+            d1.samples[0].mesh_index, d1.samples[0].primitive_index, 
+            d1.samples[0].texel.x, d1.samples[0].texel.y,
+            d1.samples[0].barycentrics.x, d1.samples[0].barycentrics.y, d1.samples[0].barycentrics.z
+        );
+    }
+#endif
+
+    ivec2 texel = ivec2(d0.samples[0].texel);
+
+    vec3 c = vec3(vec2(texel.xy) / vec2(imageSize(lightmap)), 0.0);
+
+
+    Vertex v = get_interpolated_vertex(d0.samples[0].mesh_index, d0.samples[0].primitive_index, d0.samples[0].barycentrics);
+
+
+    mat4 model = mesh_transform_buffer.transforms[d0.samples[0].mesh_index].model;
+    mat4 inverse_model = mesh_transform_buffer.transforms[d0.samples[0].mesh_index].inverse_model;
+    vec3 world_normal = v.normal * mat3(inverse_model);
+    c = world_normal * 0.5 + 0.5;
+
+    Material mat = material_buffer.materials[d0.samples[0].mesh_index];
+    c = mat.base_color_factor.rgb;
+
+    uvec4 seed = uvec4(d0.samples[0].mesh_index, 0, 42, 1337);
+    seed = pcg4d(seed);
+    //c = vec3(seed.xyz) * ldexp(1.0, -32);
+
+    if (p.x == 300)
+    {
+        debugPrintfEXT(
+            "mesh: %d, prim: %d, texel: %d %d, bary: %f %f %f", 
+            d0.samples[0].mesh_index, d0.samples[0].primitive_index,
+            d0.samples[0].texel.x, d0.samples[0].texel.y,
+            d0.samples[0].barycentrics.x, d0.samples[0].barycentrics.y, d0.samples[0].barycentrics.z
+        );
+    }
+    imageStore(lightmap, texel, vec4(c, 1.0));
+    //imageStore(lightmap, p, vec4(1.0, 0.0, 1.0, 1.0));
 }

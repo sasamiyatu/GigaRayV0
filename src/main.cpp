@@ -35,12 +35,13 @@ int main(int argc, char** argv)
 	Resource_Manager<Mesh> mesh_manager;
 	Resource_Manager<Texture> texture_manager;
 	Resource_Manager<Material> material_manager;
-	Renderer renderer(&ctx, &platform, &mesh_manager, &texture_manager, &material_manager, &timer);
+	Path_Tracer renderer(&ctx, &platform, &mesh_manager, &texture_manager, &material_manager, &timer);
 
 
 	lm::Lightmap_Renderer lightmap_renderer(&ctx, (u32)WINDOW_WIDTH, (u32)WINDOW_HEIGHT);
 	//lightmap_renderer.init_scene("data/cube/Cube.gltf");
-	lightmap_renderer.init_scene("data/cornellbox/scene.gltf");
+	//lightmap_renderer.init_scene("data/cornellbox/scene.gltf");
+	lightmap_renderer.init_scene("data/cornellbox_emissive/cornellbox.gltf");
 	//lightmap_renderer.init_scene("data/sphere/sphere.gltf");
 
 	//Mesh2 gltf = load_gltf_from_file("data/cube/Cube.gltf", &ctx, &texture_manager, &material_manager);
@@ -117,15 +118,15 @@ int main(int argc, char** argv)
 					goto here;
 				if (event.key.keysym.scancode == SDL_SCANCODE_F1 && !event.key.repeat && event.type == SDL_KEYDOWN)
 				{
-					if (renderer.render_mode == Renderer::PATH_TRACER)
-						renderer.render_mode = Renderer::RASTER;
+					if (renderer.render_mode == Path_Tracer::PATH_TRACER)
+						renderer.render_mode = Path_Tracer::RASTER;
 					else
-						renderer.render_mode = Renderer::PATH_TRACER;
+						renderer.render_mode = Path_Tracer::PATH_TRACER;
 
 					renderer.frames_accumulated = 0;
 				}
 				if (event.key.keysym.scancode == SDL_SCANCODE_F2 && !event.key.repeat && event.type == SDL_KEYDOWN)
-					renderer.render_mode = Renderer::SIDE_BY_SIDE;
+					renderer.render_mode = Path_Tracer::SIDE_BY_SIDE;
 				if (!event.key.repeat)
 					handle_key_event(event);
 			}

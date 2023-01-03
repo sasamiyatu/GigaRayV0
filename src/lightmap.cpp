@@ -24,6 +24,7 @@ struct Image
 };
 
 static bool ray_trace_vis = false;
+static bool path_trace_ref = false;
 
 enum class Render_Mode
 {
@@ -38,6 +39,7 @@ enum class Vis_Mode
     Lightmap,
     Normals,
     Position,
+    Bonus,
     Vis_Count
 };
 
@@ -46,7 +48,7 @@ static Vis_Mode vis_mode;
 
 static void load_textures(Vk_Context* ctx, const char* basepath, cgltf_image* images, u32 image_count, std::vector<Vk_Allocated_Image>& out_images);
 static xatlas::MeshDecl create_mesh_decl(cgltf_data* data, cgltf_primitive* prim);
-static void render_debug_atlas(xatlas::Atlas* atlas, const char* filename);
+static void render_debug_atlas(xatlas::Atlas* atlas, const char* filename, const std::vector<Texel_Sample_Data>& samples);
 static void fill_triangle(Image* img, glm::vec2 uvs[3], glm::vec3 color, int texel_size);
 static int orient2d(glm::vec2 a, glm::vec2 b, glm::vec2 c);
 static float orient2d_float(glm::vec2 a, glm::vec2 b, glm::vec2 c);
@@ -121,6 +123,7 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
         new_mat.base_color_factor = glm::make_vec4(mat->pbr_metallic_roughness.base_color_factor);
         new_mat.roughness_factor = mat->pbr_metallic_roughness.roughness_factor;
         new_mat.metallic_factor = mat->pbr_metallic_roughness.metallic_factor;
+        new_mat.emissive_factor = glm::make_vec3(mat->emissive_factor);
 
         new_mat.base_color_tex = mat->pbr_metallic_roughness.base_color_texture.texture ? &textures[get_index(data->textures, mat->pbr_metallic_roughness.base_color_texture.texture)] : nullptr;
         new_mat.metallic_roughness_tex = mat->pbr_metallic_roughness.metallic_roughness_texture.texture ? &textures[get_index(data->textures, mat->pbr_metallic_roughness.metallic_roughness_texture.texture)] : nullptr;
@@ -146,7 +149,6 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
         xatlas::PackOptions pack_opts{};
         pack_opts.texelsPerUnit = 4.0;
         xatlas::Generate(atlas, chart_opts, pack_opts);
-        render_debug_atlas(atlas, "test_atlas.png");
 
         // Generate UVs and create vertex / index buffers
         u32 atlas_mesh_index = 0;
@@ -262,25 +264,96 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
             }
         }
 
-        test_sampling("sampling_test2.png", true);
+        //test_sampling("sampling_test2.png", true);
         // Generate samples for lightmap texels
-        for (u32 h = 0; h < atlas->height; ++h)
         {
-            for (u32 w = 0; w < atlas->width; ++w)
+            const u32 n_samples = 216;
+            std::vector<glm::vec2> sample_points(n_samples);
+            for (u32 i = 0; i < n_samples; ++i)
             {
-                // Test if texel overlaps any triangles
-                for (u32 m = 0; m < atlas->meshCount; ++m)
+                sample_points[i] = radical_inverse_vec2<2, 3>(i + 1); // +1 to skip first sample since it's always 0 for every base of the Halton sequence
+            }
+            for (u32 h = 0; h < atlas->height; ++h)
+            {
+                for (u32 w = 0; w < atlas->width; ++w)
                 {
-                    const xatlas::Mesh* mesh = &atlas->meshes[m];
-                    for (u32 tri = 0; tri < mesh->indexCount / 3; ++tri)
+                    Texel_Sample_Data texel_samples{};
+                    texel_samples.sample_count = 0;
+                    for (u32 sample = 0; sample < n_samples && texel_samples.sample_count < MAX_TEXEL_SAMPLES; ++sample)
                     {
-                        glm::vec2 uv0 = glm::make_vec2(mesh->vertexArray[mesh->indexArray[tri * 3 + 0]].uv);
-                        glm::vec2 uv1 = glm::make_vec2(mesh->vertexArray[mesh->indexArray[tri * 3 + 1]].uv);
-                        glm::vec2 uv2 = glm::make_vec2(mesh->vertexArray[mesh->indexArray[tri * 3 + 2]].uv);
+                        bool valid = false;
+                        glm::vec2 p = glm::vec2(w, h) + sample_points[sample];
+                        for (uint32_t m = 0; m < atlas->meshCount; ++m)
+                        {
+                            if (valid) break;
+                            xatlas::Mesh* mesh = &atlas->meshes[m];
+
+                            for (uint32_t tri = 0; tri < mesh->indexCount / 3; ++tri)
+                            {
+                                glm::vec2 uvs[3];
+                                int chart_index = mesh->vertexArray[mesh->indexArray[tri * 3]].chartIndex;
+                                glm::vec3 color = math::random_vector((u64)chart_index + 1337);
+                                for (uint32_t i = 0; i < 3; ++i)
+                                {
+                                    uint32_t index = mesh->indexArray[tri * 3 + i];
+                                    uvs[i].x = mesh->vertexArray[index].uv[0];
+                                    uvs[i].y = mesh->vertexArray[index].uv[1];
+                                }
+                                glm::vec2 v0 = uvs[0];
+                                glm::vec2 v1 = uvs[1];
+                                glm::vec2 v2 = uvs[2];
+                                float w0 = orient2d_float(v1, v2, p);
+                                float w1 = orient2d_float(v2, v0, p);
+                                float w2 = orient2d_float(v0, v1, p);
+
+                                // If p is on or inside all edges, render pixel.
+                                if ((w0 >= 0.f && w1 >= 0.f && w2 >= 0.f) || (w0 <= 0.f && w1 <= 0.f && w2 <= 0.f))
+                                {
+                                    float w_sum = w0 + w1 + w2;
+                                    glm::vec2 v = (w0 * v0 + w1 * v1 + w2 * v2) / w_sum;
+                                    glm::vec2 diff = p - v;
+                                    assert(glm::dot(diff, diff) < 0.0001f);
+                                    Texel_Sample ts{};
+                                    ts.primitive_index = tri;
+                                    ts.mesh_index = m;
+                                    ts.texel = glm::uvec2(w, h);
+                                    ts.barycentrics = glm::vec3(w0, w1, w2) / w_sum;
+                                    texel_samples.samples[texel_samples.sample_count++] = ts;
+                                    valid = true;
+                                    break;
+                                }
+                            }
+                        }
                     }
+                    if (texel_samples.sample_count > 0)
+                        lm_texel_samples.push_back(texel_samples);
                 }
             }
         }
+
+
+        {
+            // Upload samples to GPU
+            
+            u32 size = (u32)(lm_texel_samples.size() * sizeof(lm_texel_samples[0]));
+            lightmap_sample_data = ctx->allocate_buffer(size,
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0);
+
+            Vk_Allocated_Buffer scratch = ctx->allocate_buffer(size,
+                VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_AUTO,
+                VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT, 0);
+
+            void* mapped;
+            vmaMapMemory(ctx->allocator, scratch.allocation, &mapped);
+            memcpy(mapped, lm_texel_samples.data(), size);
+            vmaUnmapMemory(ctx->allocator, scratch.allocation);
+
+            VkBufferCopy copy = vkinit::buffer_copy(size, 0, 0);
+            vkCmdCopyBuffer(cmd, scratch.buffer, lightmap_sample_data.buffer, 1, &copy);
+        }
+
+        //render_debug_atlas(atlas, "test_atlas2.png", lm_texel_samples);
 
         // Get transforms from nodes
         for (u32 i = 0; i < data->nodes_count; ++i)
@@ -291,6 +364,75 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
                 size_t mesh_index = get_index(data->meshes, n->mesh);
                 cgltf_node_transform_world(n, (float*)&meshes[mesh_index].xform);
             }
+        }
+
+        // Get transform matrices for GPU 
+        {
+            std::vector<glm::mat4> transforms;
+            u32 mesh_index = 0;
+            for (const auto& m : meshes)
+                for (const auto& p : m.primitives)
+                {
+                    transforms.push_back(m.xform);
+                    transforms.push_back(glm::inverse(m.xform));
+                }
+
+            u32 size = (u32)(transforms.size() * sizeof(transforms[0]));
+            mesh_transform_data = ctx->allocate_buffer(size,
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0);
+
+            Vk_Allocated_Buffer scratch = ctx->allocate_buffer(size,
+                VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_AUTO,
+                VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT, 0);
+
+            void* mapped;
+            vmaMapMemory(ctx->allocator, scratch.allocation, &mapped);
+            memcpy(mapped, transforms.data(), size);
+            vmaUnmapMemory(ctx->allocator, scratch.allocation);
+
+            VkBufferCopy copy = vkinit::buffer_copy(size, 0, 0);
+            vkCmdCopyBuffer(cmd, scratch.buffer, mesh_transform_data.buffer, 1, &copy);
+        }
+
+        {
+            // Upload material data for each mesh
+            // TODO: Duplicating this for each mesh is redundant and should be fixed
+            std::vector<GPU_Material> mats;
+            for (const auto& m : meshes)
+            {
+                for (const auto& p : m.primitives)
+                {
+                    GPU_Material mat{};
+                    mat.base_color_factor = p.material->base_color_factor;
+                    mat.metallic_factor = p.material->metallic_factor;
+                    mat.roughness_factor = p.material->roughness_factor;
+                    mat.emissive_factor = p.material->emissive_factor;
+                    
+                    mat.base_color_tex = p.material->base_color_tex ? (int)get_index(p.material->base_color_tex, textures.data()) : -1;
+                    mat.metallic_roughness_tex = p.material->metallic_roughness_tex ? (int)get_index(p.material->metallic_roughness_tex, textures.data()) : -1;
+                    mat.normal_map_tex = p.material->normal_map_tex ? (int)get_index(p.material->normal_map_tex, textures.data()) : -1;
+                    mat.emissive_tex = p.material->emissive_tex ? (int)get_index(p.material->emissive_tex, textures.data()) : -1;
+                    mats.push_back(mat);
+                }
+            }
+
+            u32 size = (u32)(mats.size() * sizeof(mats[0]));
+            material_data = ctx->allocate_buffer(size,
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0);
+
+            Vk_Allocated_Buffer scratch = ctx->allocate_buffer(size,
+                VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_AUTO,
+                VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT, 0);
+
+            void* mapped;
+            vmaMapMemory(ctx->allocator, scratch.allocation, &mapped);
+            memcpy(mapped, mats.data(), size);
+            vmaUnmapMemory(ctx->allocator, scratch.allocation);
+
+            VkBufferCopy copy = vkinit::buffer_copy(size, 0, 0);
+            vkCmdCopyBuffer(cmd, scratch.buffer, material_data.buffer, 1, &copy);
         }
 
         vkinit::memory_barrier2(cmd,
@@ -689,10 +831,13 @@ void Lightmap_Renderer::render()
     {
         // Trace lightmaps
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, lightmap_trace_pipeline.pipeline.pipeline);
-
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, lightmap_trace_pipeline.pipeline.layout, 1, 1, &bindless_descriptor_set, 0, 0);
         Descriptor_Info descs[] = {
             Descriptor_Info(0, lightmap_texture.image_view, VK_IMAGE_LAYOUT_GENERAL),
-            Descriptor_Info(tlas)
+            Descriptor_Info(tlas),
+            Descriptor_Info(lightmap_sample_data.buffer),
+            Descriptor_Info(mesh_transform_data.buffer),
+            Descriptor_Info(material_data.buffer)
         };
         vkCmdPushDescriptorSetWithTemplateKHR(cmd, lightmap_trace_pipeline.pipeline.update_template, lightmap_trace_pipeline.pipeline.layout, 0, &descs);
 
@@ -702,7 +847,7 @@ void Lightmap_Renderer::render()
             &lightmap_trace_pipeline.shader_binding_table.miss_region,
             &lightmap_trace_pipeline.shader_binding_table.chit_region,
             &lightmap_trace_pipeline.shader_binding_table.callable_region,
-            atlas->width, atlas->height, 1
+            (u32)lm_texel_samples.size(), 1, 1
         );
 
         vkinit::memory_barrier2(cmd, VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT, 
@@ -847,7 +992,8 @@ void Lightmap_Renderer::render()
             Descriptor_Info(0, color_target.image.image_view, VK_IMAGE_LAYOUT_GENERAL),
             Descriptor_Info(tlas),
             Descriptor_Info(camera_data.gpu_buffer.buffer),
-            Descriptor_Info(block_sampler, lightmap_texture.image_view, VK_IMAGE_LAYOUT_GENERAL)
+            Descriptor_Info(block_sampler, lightmap_texture.image_view, VK_IMAGE_LAYOUT_GENERAL),
+            Descriptor_Info(material_data.buffer)
         };
 
         struct
@@ -1052,7 +1198,7 @@ static xatlas::MeshDecl create_mesh_decl(cgltf_data* data, cgltf_primitive* prim
     return decl;
 }
 
-static void render_debug_atlas(xatlas::Atlas* atlas, const char* filename)
+static void render_debug_atlas(xatlas::Atlas* atlas, const char* filename, const std::vector<Texel_Sample_Data>& samples)
 {
     const int target_width = 1024;
 
@@ -1104,52 +1250,74 @@ static void render_debug_atlas(xatlas::Atlas* atlas, const char* filename)
         }
     }
 
-    for (u32 y = 0; y < atlas->height; ++y)
+    //for (u32 y = 0; y < atlas->height; ++y)
+    //{
+    //    for (u32 x = 0; x < atlas->width; ++x)
+    //    {
+    //        for (u32 sample = 0; sample < n_samples; ++sample)
+    //        {
+    //            glm::vec2 p = glm::vec2(x, y) + sample_points[sample];
+    //            bool in_triangle = false;
+    //            for (uint32_t m = 0; m < atlas->meshCount; ++m)
+    //            {
+    //                if (in_triangle) break;
+    //                xatlas::Mesh* mesh = &atlas->meshes[m];
+
+    //                for (uint32_t tri = 0; tri < mesh->indexCount / 3; ++tri)
+    //                {
+    //                    glm::vec2 uvs[3];
+    //                    int chart_index = mesh->vertexArray[mesh->indexArray[tri * 3]].chartIndex;
+    //                    glm::vec3 color = math::random_vector((u64)chart_index + 1337);
+    //                    for (uint32_t i = 0; i < 3; ++i)
+    //                    {
+    //                        uint32_t index = mesh->indexArray[tri * 3 + i];
+    //                        uvs[i].x = mesh->vertexArray[index].uv[0];
+    //                        uvs[i].y = mesh->vertexArray[index].uv[1];
+    //                    }
+    //                    glm::vec2 v0 = uvs[0];
+    //                    glm::vec2 v1 = uvs[1];
+    //                    glm::vec2 v2 = uvs[2];
+    //                    float w0 = orient2d_float(v1, v2, p);
+    //                    float w1 = orient2d_float(v2, v0, p);
+    //                    float w2 = orient2d_float(v0, v1, p);
+
+    //                    // If p is on or inside all edges, render pixel.
+    //                    if ((w0 > 0.f && w1 > 0.f && w2 > 0.f) || (w0 < 0.f && w1 < 0.f && w2 < 0.f))
+    //                    {
+    //                        in_triangle = true;
+    //                        float w_sum = w0 + w1 + w2;
+    //                        glm::vec2 v = (w0 * v0 + w1 * v1 + w2 * v2) / w_sum;
+    //                        glm::vec2 diff = p - v;
+    //                        assert(glm::dot(diff, diff) < 0.0001f);
+    //                        break;
+    //                    }
+    //                }
+    //            }
+    //            glm::vec3 c = in_triangle ? glm::vec3(0.0, 0.0, 1.0) : glm::vec3(1.0, 0.0, 0.0);
+    //            set_pixel(&img, (int)std::roundf(p.x * scale), (int)std::roundf(p.y * scale), c);
+    //        }
+    //    }
+    //}
+
+    for (const auto& s : samples)
     {
-        for (u32 x = 0; x < atlas->width; ++x)
+        for (u32 i = 0; i < MAX_TEXEL_SAMPLES; ++i)
         {
-            for (u32 sample = 0; sample < n_samples; ++sample)
-            {
-                glm::vec2 p = glm::vec2(x, y) + sample_points[sample];
-                bool in_triangle = false;
-                for (uint32_t m = 0; m < atlas->meshCount; ++m)
-                {
-                    if (in_triangle) break;
-                    xatlas::Mesh* mesh = &atlas->meshes[m];
-
-                    for (uint32_t tri = 0; tri < mesh->indexCount / 3; ++tri)
-                    {
-                        glm::vec2 uvs[3];
-                        int chart_index = mesh->vertexArray[mesh->indexArray[tri * 3]].chartIndex;
-                        glm::vec3 color = math::random_vector((u64)chart_index + 1337);
-                        for (uint32_t i = 0; i < 3; ++i)
-                        {
-                            uint32_t index = mesh->indexArray[tri * 3 + i];
-                            uvs[i].x = mesh->vertexArray[index].uv[0];
-                            uvs[i].y = mesh->vertexArray[index].uv[1];
-                        }
-                        glm::vec2 v0 = uvs[0];
-                        glm::vec2 v1 = uvs[1];
-                        glm::vec2 v2 = uvs[2];
-                        float w0 = orient2d_float(v1, v2, p);
-                        float w1 = orient2d_float(v2, v0, p);
-                        float w2 = orient2d_float(v0, v1, p);
-
-                        // If p is on or inside all edges, render pixel.
-                        if ((w0 > 0.f && w1 > 0.f && w2 > 0.f) || (w0 < 0.f && w1 < 0.f && w2 < 0.f))
-                        {
-                            in_triangle = true;
-                            float w_sum = w0 + w1 + w2;
-                            glm::vec2 v = (w0 * v0 + w1 * v1 + w2 * v2) / w_sum;
-                            glm::vec2 diff = p - v;
-                            assert(glm::dot(diff, diff) < 0.0001f);
-                            break;
-                        }
-                    }
-                }
-                glm::vec3 c = in_triangle ? glm::vec3(0.0, 0.0, 1.0) : glm::vec3(1.0, 0.0, 0.0);
-                set_pixel(&img, (int)std::roundf(p.x * scale), (int)std::roundf(p.y * scale), c);
-            }
+            const Texel_Sample& ts = s.samples[i];
+            const xatlas::Mesh& mesh = atlas->meshes[ts.mesh_index];
+            u32 first_index = ts.primitive_index * 3;
+            assert(first_index < mesh.indexCount);
+            glm::uvec3 triangle = glm::uvec3(
+                mesh.indexArray[first_index + 0],
+                mesh.indexArray[first_index + 1],
+                mesh.indexArray[first_index + 2]
+            );
+            glm::vec2 v0 = glm::make_vec2(mesh.vertexArray[triangle.x].uv);
+            glm::vec2 v1 = glm::make_vec2(mesh.vertexArray[triangle.y].uv);
+            glm::vec2 v2 = glm::make_vec2(mesh.vertexArray[triangle.z].uv);
+            
+            glm::vec2 p = ts.barycentrics.x * v0 + ts.barycentrics.y * v1 + ts.barycentrics.z * v2;
+            set_pixel(&img, (int)std::roundf(p.x * scale), (int)std::roundf(p.y * scale), glm::vec3(0.0, 1.0, 0.0));
         }
     }
 
@@ -1314,6 +1482,9 @@ bool key_event_callback(Event& ev)
         case SDL_SCANCODE_R:
             ray_trace_vis = !ray_trace_vis;
             LOG_DEBUG("Ray tracing: %s\n", ray_trace_vis ? "ON" : "OFF");
+            break;
+        case SDL_SCANCODE_P:
+            path_trace_ref = !path_trace_ref;
             break;
         }
     }

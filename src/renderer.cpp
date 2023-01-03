@@ -22,7 +22,7 @@ static void vk_begin_command_buffer(VkCommandBuffer cmd);
 constexpr u32 MAX_INDIRECT_DRAWS = 1'000'000;
 constexpr int MAX_BINDLESS_RESOURCES = 16536;
 // FIXME: We're gonna need more stuff than this 
-void Renderer::create_bindless_descriptor_set_layout()
+void Path_Tracer::create_bindless_descriptor_set_layout()
 {
 	VkShaderStageFlags flags = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
 	// Bindless stuff
@@ -70,7 +70,7 @@ void Renderer::create_bindless_descriptor_set_layout()
 	// NOTE: No descriptor pools because we are using push descriptors for now!!
 }
 
-VkDescriptorSetLayout Renderer::create_descriptor_set_layout(Shader* shader)
+VkDescriptorSetLayout Path_Tracer::create_descriptor_set_layout(Shader* shader)
 {
 	VkDescriptorSetLayoutCreateInfo cinfo{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
 	assert(shader->resource_mask != 0);
@@ -102,7 +102,7 @@ VkDescriptorSetLayout Renderer::create_descriptor_set_layout(Shader* shader)
 
 
 // FIXME: Hardcoded shaders and hitgroups
-Vk_Pipeline Renderer::vk_create_rt_pipeline()
+Vk_Pipeline Path_Tracer::vk_create_rt_pipeline()
 {
 	Shader rgen_shader, rmiss_shader, rchit_shader;
 	load_shader_from_file(&rgen_shader, context->device, "shaders/spirv/test.rgen.spv");
@@ -124,7 +124,7 @@ Vk_Pipeline Renderer::vk_create_rt_pipeline()
 	return rt_pp.pipeline;
 }
 
-Raytracing_Pipeline Renderer::create_gbuffer_rt_pipeline()
+Raytracing_Pipeline Path_Tracer::create_gbuffer_rt_pipeline()
 {
 	constexpr char* rgen_src = "shaders/spirv/primary_ray.rgen.spv";
 	constexpr char* rmiss_src = "shaders/spirv/primary_ray.rmiss.spv";
@@ -201,7 +201,7 @@ Raytracing_Pipeline Renderer::create_gbuffer_rt_pipeline()
 	return rt_pp;
 }
 
-Vk_Pipeline Renderer::create_raster_pipeline()
+Vk_Pipeline Path_Tracer::create_raster_pipeline()
 {
 	Shader vertex_shader, fragment_shader;
 	bool success = load_shader_from_file(&vertex_shader, context->device, "shaders/spirv/basic.vert.spv");
@@ -235,7 +235,7 @@ Vk_Pipeline Renderer::create_raster_pipeline()
 	return pp;
 }
 
-void Renderer::create_samplers()
+void Path_Tracer::create_samplers()
 {
 	VkSamplerCreateInfo cinfo{ VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
 	cinfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
@@ -256,7 +256,7 @@ void Renderer::create_samplers()
 }
 
 
-Renderer::Renderer(Vk_Context* context, Platform* platform,
+Path_Tracer::Path_Tracer(Vk_Context* context, Platform* platform,
 	Resource_Manager<Mesh>* mesh_manager,
 	Resource_Manager<Texture>* texture_manager,
 	Resource_Manager<Material>* material_manager,
@@ -273,7 +273,7 @@ Renderer::Renderer(Vk_Context* context, Platform* platform,
 }
 
 
-void Renderer::initialize()
+void Path_Tracer::initialize()
 {
 	create_descriptor_pools();
 	create_bindless_descriptor_set_layout();
@@ -303,12 +303,12 @@ void Renderer::initialize()
 	initialized = true;
 }
 
-VkCommandBuffer Renderer::get_current_frame_command_buffer()
+VkCommandBuffer Path_Tracer::get_current_frame_command_buffer()
 {
 	return context->frame_objects[current_frame_index].cmd;
 }
 
-void Renderer::create_descriptor_pools()
+void Path_Tracer::create_descriptor_pools()
 {
 	VkDescriptorPoolCreateInfo cinfo{ VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
 	VkDescriptorPoolSize pool_sizes_bindless[] =
@@ -329,7 +329,7 @@ void Renderer::create_descriptor_pools()
 		}, Garbage_Collector::SHUTDOWN);
 }
 
-void Renderer::vk_command_buffer_single_submit(VkCommandBuffer cmd)
+void Path_Tracer::vk_command_buffer_single_submit(VkCommandBuffer cmd)
 {
 	VkSubmitInfo submit_info{};
 	submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -339,7 +339,7 @@ void Renderer::vk_command_buffer_single_submit(VkCommandBuffer cmd)
 	vkQueueSubmit(context->graphics_queue, 1, &submit_info, VK_NULL_HANDLE);
 }
 
-void Renderer::do_frame(ECS* ecs)
+void Path_Tracer::do_frame(ECS* ecs)
 {
 	pre_frame();
 	begin_frame();
@@ -348,7 +348,7 @@ void Renderer::do_frame(ECS* ecs)
 }
 
 // Loads the meshes from the scene and creates the acceleration structures
-void Renderer::init_scene(ECS* ecs)
+void Path_Tracer::init_scene(ECS* ecs)
 {
 	constexpr char* envmap_src = "D:/envmaps/piazza_bologni_4k.hdr";
 	//constexpr char* envmap_src = "data/kloppenheim_06_puresky_4k.hdr";
@@ -574,7 +574,7 @@ void full_barrier(VkCommandBuffer cmd)
 	vkCmdPipelineBarrier2(cmd, &dep_info);
 }
 
-void Renderer::pre_frame()
+void Path_Tracer::pre_frame()
 {
 	g_garbage_collector->collect();
 
@@ -591,7 +591,7 @@ void Renderer::pre_frame()
 	gpu_camera_data.update_staging_buffer(context->allocator, current_frame_index, &scene.current_frame_camera, sizeof(GPU_Camera_Data));
 }
 
-void Renderer::begin_frame()
+void Path_Tracer::begin_frame()
 {
 	cpu_frame_begin = timer->get_current_time();
 
@@ -642,7 +642,7 @@ void Renderer::begin_frame()
 	);
 }
 
-void Renderer::render_gbuffer()
+void Path_Tracer::render_gbuffer()
 {
 	VkCommandBuffer cmd = get_current_frame_command_buffer();
 
@@ -651,7 +651,7 @@ void Renderer::render_gbuffer()
 
 }
 
-void Renderer::trace_primary_rays()
+void Path_Tracer::trace_primary_rays()
 {
 	VkCommandBuffer cmd = get_current_frame_command_buffer();
 	// Bind pipeline
@@ -661,7 +661,7 @@ void Renderer::trace_primary_rays()
 	// Trace rays
 }
 
-void Renderer::end_frame()
+void Path_Tracer::end_frame()
 {
 	VkCommandBuffer cmd = get_current_frame_command_buffer();
 
@@ -730,7 +730,7 @@ void Renderer::end_frame()
 	current_frame_index = (current_frame_index + 1) % FRAMES_IN_FLIGHT;
 }
 
-void Renderer::draw(ECS* ecs)
+void Path_Tracer::draw(ECS* ecs)
 {
 	VkCommandBuffer cmd = get_current_frame_command_buffer();
 
@@ -751,7 +751,7 @@ void Renderer::draw(ECS* ecs)
 	frames_accumulated++;
 }
 
-void Renderer::trace_rays(VkCommandBuffer cmd)
+void Path_Tracer::trace_rays(VkCommandBuffer cmd)
 {
 	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, rt_pipeline.pipeline);
 
@@ -818,7 +818,7 @@ void Renderer::trace_rays(VkCommandBuffer cmd)
 	);
 }
 
-void Renderer::tonemap(VkCommandBuffer cmd)
+void Path_Tracer::tonemap(VkCommandBuffer cmd)
 {
 	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, compute_pp.pipeline);
 	// Go for groupsize 8x8?
@@ -857,7 +857,7 @@ void Renderer::tonemap(VkCommandBuffer cmd)
 		0, nullptr);
 }
 
-void Renderer::rasterize(VkCommandBuffer cmd, ECS* ecs)
+void Path_Tracer::rasterize(VkCommandBuffer cmd, ECS* ecs)
 {
 
 	VkClearValue clear_value{};
@@ -946,7 +946,7 @@ void Renderer::rasterize(VkCommandBuffer cmd, ECS* ecs)
 	);
 }
 
-void Renderer::cleanup()
+void Path_Tracer::cleanup()
 {
 	for (int i = 0; i < FRAMES_IN_FLIGHT; ++i)
 		vkDestroyQueryPool(context->device, query_pools[i], nullptr);
@@ -957,7 +957,7 @@ void Renderer::cleanup()
 }
 
 
-void Renderer::transition_swapchain_images(VkCommandBuffer cmd)
+void Path_Tracer::transition_swapchain_images(VkCommandBuffer cmd)
 {
 	for (int i = 0; i < context->swapchain_images.size(); ++i)
 	{
@@ -980,7 +980,7 @@ static void vk_begin_command_buffer(VkCommandBuffer cmd)
 	vkBeginCommandBuffer(cmd, &begin_info);
 }
 
-void Renderer::vk_create_render_targets(VkCommandBuffer cmd)
+void Path_Tracer::vk_create_render_targets(VkCommandBuffer cmd)
 {
 	framebuffer.render_targets.resize(MAX);
 	i32 w, h;
@@ -1132,7 +1132,7 @@ static bool check_extensions(const std::vector<const char*>& device_exts, const 
 }
 
 
-void Renderer::create_vertex_buffer(Mesh* mesh, VkCommandBuffer cmd)
+void Path_Tracer::create_vertex_buffer(Mesh* mesh, VkCommandBuffer cmd)
 {
 	u32 buffer_size = mesh->get_vertex_buffer_size();
 	mesh->vertex_buffer = context->allocate_buffer(buffer_size,
@@ -1165,7 +1165,7 @@ void Renderer::create_vertex_buffer(Mesh* mesh, VkCommandBuffer cmd)
 	vkCmdCopyBuffer(cmd, tmp_staging_buffer.buffer, mesh->vertex_buffer.buffer, 1, &copy_region);
 }
 
-void Renderer::create_index_buffer(Mesh* mesh, VkCommandBuffer cmd)
+void Path_Tracer::create_index_buffer(Mesh* mesh, VkCommandBuffer cmd)
 {
 	u32 buffer_size = mesh->get_index_buffer_size();
 	mesh->index_buffer = context->allocate_buffer(buffer_size,
@@ -1198,7 +1198,7 @@ void Renderer::create_index_buffer(Mesh* mesh, VkCommandBuffer cmd)
 	vkCmdCopyBuffer(cmd, tmp_staging_buffer.buffer, mesh->index_buffer.buffer, 1, &copy_region);
 }
 
-void Renderer::create_bottom_level_acceleration_structure(Mesh* mesh)
+void Path_Tracer::create_bottom_level_acceleration_structure(Mesh* mesh)
 {
 	u32 prim_count = (u32)mesh->primitives.size();
 
@@ -1279,7 +1279,7 @@ void Renderer::create_bottom_level_acceleration_structure(Mesh* mesh)
 }
 
 
-void Renderer::build_bottom_level_acceleration_structure(Mesh* mesh, VkCommandBuffer cmd)
+void Path_Tracer::build_bottom_level_acceleration_structure(Mesh* mesh, VkCommandBuffer cmd)
 {
 	u32 prim_count = (u32)mesh->primitives.size();
 
@@ -1329,7 +1329,7 @@ void Renderer::build_bottom_level_acceleration_structure(Mesh* mesh, VkCommandBu
 	}
 }
 
-void Renderer::create_top_level_acceleration_structure(ECS* ecs, VkCommandBuffer cmd)
+void Path_Tracer::create_top_level_acceleration_structure(ECS* ecs, VkCommandBuffer cmd)
 {
 	std::vector<VkAccelerationStructureInstanceKHR> instances;
 
@@ -1482,7 +1482,7 @@ void Renderer::create_top_level_acceleration_structure(ECS* ecs, VkCommandBuffer
 	scene.tlas = scene_tlas;
 }
 
-Vk_Allocated_Image Renderer::prefilter_envmap(VkCommandBuffer cmd, Vk_Allocated_Image envmap)
+Vk_Allocated_Image Path_Tracer::prefilter_envmap(VkCommandBuffer cmd, Vk_Allocated_Image envmap)
 {
 	constexpr int mip_levels = 5;
 	VkExtent3D image_extent{};
@@ -1553,7 +1553,7 @@ Vk_Allocated_Image Renderer::prefilter_envmap(VkCommandBuffer cmd, Vk_Allocated_
 	return prefiltered;
 }
 
-void Renderer::create_lookup_textures()
+void Path_Tracer::create_lookup_textures()
 {
 	Vk_Pipeline pipeline = context->create_compute_pipeline("shaders/spirv/create_brdf_lut.comp.spv");
 	

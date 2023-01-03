@@ -492,4 +492,6 @@ namespace vkinit
 		write.pBufferInfo = buffer_info;
 		return write;
 	}
+
+
 }

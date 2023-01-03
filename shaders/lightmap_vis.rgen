@@ -6,8 +6,11 @@
 #extension GL_EXT_scalar_block_layout : enable
 #extension GL_EXT_nonuniform_qualifier : enable
 
+#define M_PI 3.14159
 #include "lightmap.glsl"
 #include "random.glsl"
+#include "sampling.glsl"
+#include "math.glsl"
 
 layout(location = 0) rayPayloadEXT Ray_Payload pay;
 
@@ -21,6 +24,10 @@ layout(binding = 2, set = 0) readonly buffer camera_buffer
 	mat4 proj;
 };
 layout(binding = 3, set = 0) uniform sampler2D lightmap_tex;
+layout(binding = 4, set = 0, scalar) readonly buffer material_buffer_t
+{
+    Material materials[];
+} material_buffer;
 
 layout(push_constant) uniform constants
 {
@@ -88,11 +95,13 @@ void main()
         color = vec3(seed.xyz) * ldexp(1.0, -32);
         Vertex v = get_interpolated_vertex(pay.instance_id, pay.prim_id, pay.barycentrics);
         vec3 world_normal = normalize(vec3(vec4(v.normal, 0) * pay.world_to_object));
+        world_normal = v.normal;
         ivec2 pixelcoord = ivec2(textureSize(lightmap_tex, 0) * v.uv1);
         int odd = (pixelcoord.x ^ pixelcoord.y) & 1;
         vec3 c = odd == 1 ? vec3(0.25) : vec3(0.5);
-        vec3 lm = texture(lightmap_tex, v.uv0).rgb;
+        vec3 lm = texture(lightmap_tex, v.uv1).rgb;
         vec3 pos = vec3(pay.object_to_world * vec4(v.position, 1.0));
+        Material mat = material_buffer.materials[pay.instance_id];
         switch (control.output_mode)
         {
         case 0:
@@ -108,7 +117,7 @@ void main()
             color = pos;
             break;
         case 4:
-            color = vec3(seed.xyz) * ldexp(1.0, -32);
+            color = mat.base_color_factor.rgb;
             break;
         }
     }

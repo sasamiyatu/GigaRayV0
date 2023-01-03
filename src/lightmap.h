@@ -20,12 +20,28 @@ struct Material
 	Texture2D* base_color_tex;
 	Texture2D* metallic_roughness_tex;
 	Texture2D* normal_map_tex;
+	Texture2D* emissive_tex;
 
 	glm::vec4 base_color_factor;
 	float roughness_factor;
 	float metallic_factor;
+
+	glm::vec3 emissive_factor;
 };
 
+struct GPU_Material
+{
+	int base_color_tex = -1;
+	int metallic_roughness_tex = -1;
+	int normal_map_tex = -1;
+	int emissive_tex = -1;
+
+	glm::vec4 base_color_factor;
+	float roughness_factor;
+	float metallic_factor;
+
+	glm::vec3 emissive_factor;
+};
 
 struct Primitive
 {
@@ -68,15 +84,16 @@ struct Texel_Sample
 {
 	u32 mesh_index;
 	u32 primitive_index;
-	glm::vec2 barycentrics;
+	glm::uvec2 texel;
+	glm::vec3 barycentrics;
 };
 
 #define MAX_TEXEL_SAMPLES 8
 
-struct Texel_Sample_data
+struct Texel_Sample_Data
 {
 	u32 sample_count;
-	std::array<Texel_Sample, MAX_TEXEL_SAMPLES> samples;
+	Texel_Sample samples[MAX_TEXEL_SAMPLES];
 };
 
 struct GPU_Camera_Data
@@ -97,7 +114,7 @@ struct Lightmap_Renderer
 	std::vector<Material> materials;
 	std::vector<Mesh> meshes;
 
-	std::vector<Texel_Sample_data> texel_samples;
+	std::vector<Texel_Sample_Data> lm_texel_samples;
 
 	VkAccelerationStructureKHR tlas = 0;
 
@@ -119,6 +136,9 @@ struct Lightmap_Renderer
 	Render_Target position_target;
 
 	GPU_Buffer camera_data;
+	Vk_Allocated_Buffer mesh_transform_data;
+	Vk_Allocated_Buffer lightmap_sample_data;
+	Vk_Allocated_Buffer material_data;
 
 	u32 window_width = 0;
 	u32 window_height = 0;

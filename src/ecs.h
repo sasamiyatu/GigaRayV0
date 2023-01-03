@@ -21,7 +21,7 @@
 
 struct Renderable_Component
 {
-	Renderer* renderer;
+	Path_Tracer* renderer;
 	bool render_ready;
 };
 

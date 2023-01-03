@@ -99,7 +99,7 @@ enum Render_Targets
 	MAX
 };
 
-struct Renderer
+struct Path_Tracer
 {
 	enum Render_Mode {
 		PATH_TRACER = 0,
@@ -154,7 +154,7 @@ struct Renderer
 
 	Gbuffer gbuffer;
 
-	Renderer(Vk_Context* context, Platform* platform, 
+	Path_Tracer(Vk_Context* context, Platform* platform, 
 		Resource_Manager<Mesh>* mesh_manager, 
 		Resource_Manager<Texture>* texture_manager,
 		Resource_Manager<Material>* material_manager,
