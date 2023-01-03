@@ -6,7 +6,7 @@
 #include "shaders.h"
 
 #define VSYNC 1
-#define DEBUG_VERBOSE
+//#define DEBUG_VERBOSE
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL debug_callback(
 	VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,

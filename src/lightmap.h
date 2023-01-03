@@ -106,6 +106,7 @@ struct Lightmap_Renderer
 	Vk_Pipeline pipeline = {};
 	Vk_Pipeline lightmap_gbuffer_pipeline = {};
 	Raytracing_Pipeline lightmap_rt_vis_pipeline = {};
+	Raytracing_Pipeline lightmap_trace_pipeline = {};
 	VkDescriptorSetLayout bindless_set_layout = 0;
 	VkDescriptorSet bindless_descriptor_set = 0;
 	VkDescriptorPool descriptor_pool;

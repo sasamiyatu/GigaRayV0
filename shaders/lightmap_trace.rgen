@@ -6,9 +6,15 @@
 #extension GL_EXT_scalar_block_layout : enable
 #extension GL_EXT_nonuniform_qualifier : enable
 
+#include "lightmap.glsl"
+
 layout(location = 0) rayPayloadEXT Ray_Payload pay;
+
+layout(binding = 0, set = 0, rgba32f) uniform image2D lightmap;
+layout(binding = 1, set = 0) uniform accelerationStructureEXT scene;
 
 void main()
 {
-
+    ivec2 p = ivec2(gl_LaunchIDEXT.xy);
+    imageStore(lightmap, p, vec4(1.0, 0.0, 1.0, 1.0));
 }

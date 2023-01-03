@@ -23,7 +23,7 @@ struct Image
     u8* data;
 };
 
-bool ray_trace_vis = false;
+static bool ray_trace_vis = false;
 
 enum class Render_Mode
 {
@@ -534,20 +534,36 @@ void Lightmap_Renderer::init_scene(const char* gltf_path)
 
         VK_CHECK(vkAllocateDescriptorSets(ctx->device, &alloc_info, &bindless_descriptor_set));
 
-        Shader rgen_shader, rmiss_shader, rchit_shader;
-        load_shader_from_file(&rgen_shader, ctx->device, "shaders/spirv/lightmap_vis.rgen.spv");
+        Shader rmiss_shader, rchit_shader;
         load_shader_from_file(&rmiss_shader, ctx->device, "shaders/spirv/lightmap.rmiss.spv");
         load_shader_from_file(&rchit_shader, ctx->device, "shaders/spirv/lightmap.rchit.spv");
+        {
+            Shader rgen_shader;
+            load_shader_from_file(&rgen_shader, ctx->device, "shaders/spirv/lightmap_vis.rgen.spv");
+            VkDescriptorSetLayout push_desc_layout = ctx->create_descriptor_set_layout(1, &rgen_shader);
+            VkDescriptorSetLayout layouts[] = { push_desc_layout, bindless_set_layout };
 
-        VkDescriptorSetLayout push_desc_layout = ctx->create_descriptor_set_layout(1, &rgen_shader);
-        VkDescriptorSetLayout layouts[] = { push_desc_layout, bindless_set_layout };
-        lightmap_rt_vis_pipeline = ctx->create_raytracing_pipeline(rgen_shader.shader, rmiss_shader.shader, rchit_shader.shader, layouts, (int)std::size(layouts));
+            lightmap_rt_vis_pipeline = ctx->create_raytracing_pipeline(rgen_shader.shader, rmiss_shader.shader, rchit_shader.shader, layouts, (int)std::size(layouts));
+            lightmap_rt_vis_pipeline.pipeline.update_template = ctx->create_descriptor_update_template(1, &rgen_shader, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, lightmap_rt_vis_pipeline.pipeline.layout);
 
-        vkDestroyShaderModule(ctx->device, rgen_shader.shader, nullptr);
+            vkDestroyShaderModule(ctx->device, rgen_shader.shader, nullptr);
+        }
+        
+        {
+            Shader rgen_shader;
+            load_shader_from_file(&rgen_shader, ctx->device, "shaders/spirv/lightmap_trace.rgen.spv");
+            VkDescriptorSetLayout push_desc_layout = ctx->create_descriptor_set_layout(1, &rgen_shader);
+            VkDescriptorSetLayout layouts[] = { push_desc_layout, bindless_set_layout };
+
+            lightmap_trace_pipeline = ctx->create_raytracing_pipeline(rgen_shader.shader, rmiss_shader.shader, rchit_shader.shader, layouts, (int)std::size(layouts));
+            lightmap_trace_pipeline.pipeline.update_template = ctx->create_descriptor_update_template(1, &rgen_shader, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, lightmap_trace_pipeline.pipeline.layout);
+
+            vkDestroyShaderModule(ctx->device, rgen_shader.shader, nullptr);
+        }
+
         vkDestroyShaderModule(ctx->device, rmiss_shader.shader, nullptr);
         vkDestroyShaderModule(ctx->device, rchit_shader.shader, nullptr);
 
-        lightmap_rt_vis_pipeline.pipeline.update_template = ctx->create_descriptor_update_template(1, &rgen_shader, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, lightmap_rt_vis_pipeline.pipeline.layout);
     }
 
     {
@@ -669,6 +685,29 @@ void Lightmap_Renderer::render()
         VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
         1, VK_IMAGE_ASPECT_COLOR_BIT);
     position_target.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    {
+        // Trace lightmaps
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, lightmap_trace_pipeline.pipeline.pipeline);
+
+        Descriptor_Info descs[] = {
+            Descriptor_Info(0, lightmap_texture.image_view, VK_IMAGE_LAYOUT_GENERAL),
+            Descriptor_Info(tlas)
+        };
+        vkCmdPushDescriptorSetWithTemplateKHR(cmd, lightmap_trace_pipeline.pipeline.update_template, lightmap_trace_pipeline.pipeline.layout, 0, &descs);
+
+        vkCmdTraceRaysKHR(
+            cmd,
+            &lightmap_trace_pipeline.shader_binding_table.raygen_region,
+            &lightmap_trace_pipeline.shader_binding_table.miss_region,
+            &lightmap_trace_pipeline.shader_binding_table.chit_region,
+            &lightmap_trace_pipeline.shader_binding_table.callable_region,
+            atlas->width, atlas->height, 1
+        );
+
+        vkinit::memory_barrier2(cmd, VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT, 
+            VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
+    }
 
     {
         // Render 3D view
@@ -898,11 +937,15 @@ void Lightmap_Renderer::shutdown()
     vkDestroyDescriptorUpdateTemplate(ctx->device, lightmap_gbuffer_pipeline.update_template, nullptr);
     vkDestroyPipelineLayout(ctx->device, lightmap_rt_vis_pipeline.pipeline.layout, nullptr);
     vkDestroyPipeline(ctx->device, lightmap_rt_vis_pipeline.pipeline.pipeline, nullptr);
+    vkDestroyPipelineLayout(ctx->device, lightmap_trace_pipeline.pipeline.layout, nullptr);
+    vkDestroyPipeline(ctx->device, lightmap_trace_pipeline.pipeline.pipeline, nullptr);
 
     vkDestroyDescriptorPool(ctx->device, descriptor_pool, nullptr);
     vkDestroyDescriptorSetLayout(ctx->device, lightmap_rt_vis_pipeline.pipeline.desc_sets[0], nullptr);
+    vkDestroyDescriptorSetLayout(ctx->device, lightmap_trace_pipeline.pipeline.desc_sets[0], nullptr);
     vkDestroyDescriptorSetLayout(ctx->device, bindless_set_layout, nullptr);
     vkDestroyDescriptorUpdateTemplate(ctx->device, lightmap_rt_vis_pipeline.pipeline.update_template, nullptr);
+    vkDestroyDescriptorUpdateTemplate(ctx->device, lightmap_trace_pipeline.pipeline.update_template, nullptr);
 
     vkDestroyAccelerationStructureKHR(ctx->device, tlas, nullptr);
     for (auto& m : meshes)
