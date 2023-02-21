@@ -37,16 +37,15 @@ int main(int argc, char** argv)
 	Resource_Manager<Material> material_manager;
 	Path_Tracer renderer(&ctx, &platform, &mesh_manager, &texture_manager, &material_manager, &timer);
 
-
-	lm::Lightmap_Renderer lightmap_renderer(&ctx, (u32)WINDOW_WIDTH, (u32)WINDOW_HEIGHT);
+	//lm::Lightmap_Renderer lightmap_renderer(&ctx, (u32)WINDOW_WIDTH, (u32)WINDOW_HEIGHT);
 	//lightmap_renderer.init_scene("data/cube/Cube.gltf");
 	//lightmap_renderer.init_scene("data/cornellbox/scene.gltf");
-	lightmap_renderer.init_scene("data/cornellbox_emissive/cornellbox.gltf");
+	//lightmap_renderer.init_scene("data/cornellbox_emissive/cornellbox.gltf");
 	//lightmap_renderer.init_scene("data/sphere/sphere.gltf");
 
 	//Mesh2 gltf = load_gltf_from_file("data/cube/Cube.gltf", &ctx, &texture_manager, &material_manager);
-	//Mesh2 gltf = load_gltf_from_file("data/sponza/Sponza.gltf", &ctx, &texture_manager, &material_manager);
-	Mesh2 gltf = load_gltf_from_file("data/cornellbox/scene.gltf", &ctx, &texture_manager, &material_manager, true);
+	Mesh2 gltf = load_gltf_from_file("data/sponza/Sponza.gltf", &ctx, &texture_manager, &material_manager);
+	//Mesh2 gltf = load_gltf_from_file("data/cornellbox/scene.gltf", &ctx, &texture_manager, &material_manager, true);
 	std::vector<Mesh> meshes(gltf.meshes.size());
 	create_from_mesh2(&gltf, (u32)gltf.meshes.size(), meshes.data());
 	Mesh combined_mesh{};
@@ -93,8 +92,8 @@ int main(int argc, char** argv)
 		ecs.get_component<Camera_Component>(game_state.player_entity)->set_transform(xform);
 	}
 
-	lightmap_renderer.set_camera(ecs.get_component<Camera_Component>(game_state.player_entity));
-	//renderer.init_scene(&ecs);
+	//lightmap_renderer.set_camera(ecs.get_component<Camera_Component>(game_state.player_entity));
+	renderer.init_scene(&ecs);
 
 	bool quit = false;
 	while (!quit)
@@ -139,14 +138,14 @@ int main(int argc, char** argv)
 		float dt = timer.update();
 		
 		game_state.simulate(dt);
-		//renderer.do_frame(&ecs);
-		lightmap_renderer.render();
+		renderer.do_frame(&ecs);
+		//lightmap_renderer.render();
 
 		double end = timer.get_current_time();
 	}
 here:
 	vkDeviceWaitIdle(ctx.device);
-	lightmap_renderer.shutdown();
+	//lightmap_renderer.shutdown();
 	renderer.cleanup();
 	g_garbage_collector->shutdown();
 
