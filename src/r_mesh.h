@@ -62,3 +62,4 @@ void merge_meshes(u32 num_meshes, Mesh* meshes, Mesh* out);
 Mesh* get_mesh(ECS* ecs, uint32_t entity_id);
 
 Mesh create_sphere(u32 subdivision);
+Mesh create_box(float x_scale = 1.0f, float y_scale = 1.0f, float z_scale = 1.0f);

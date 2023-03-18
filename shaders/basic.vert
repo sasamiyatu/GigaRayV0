@@ -4,14 +4,6 @@
 #extension GL_EXT_nonuniform_qualifier : enable
 #include "scene.glsl"
 
-
-
-vec3 verts[] = {
-    vec3(0.0, 0.5, 0.0),
-    vec3(-0.5, -0.5, 0.0),
-    vec3(0.5, -0.5, 0.0)
-};
-
 layout (location = 0) out vec3 normal;
 layout (location = 1) out vec3 base_color;
 layout (location = 2) out vec2 texcoord;
@@ -24,7 +16,6 @@ void main()
 {
     int geom_id = int((gl_InstanceIndex) & 0x3FFF);
     int material_id = int((gl_InstanceIndex >> 14) & 0x3FF);
-    geom_id = 0;
     mat = material_array.materials[material_id];
 
     Material mat = material_array.materials[material_id];

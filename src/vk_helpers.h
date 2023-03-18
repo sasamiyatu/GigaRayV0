@@ -36,8 +36,8 @@ namespace vkinit
 		range.aspectMask = aspect;
 		range.baseArrayLayer = 0;
 		range.baseMipLevel = 0;
-		range.layerCount = 1;
-		range.levelCount = mip_levels;
+		range.layerCount = VK_REMAINING_ARRAY_LAYERS;
+		range.levelCount = VK_REMAINING_MIP_LEVELS;
 
 		VkImageMemoryBarrier img_barrier{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
 		img_barrier.oldLayout = src_layout;
@@ -99,7 +99,7 @@ namespace vkinit
 		vkCmdPipelineBarrier2(cmd, &dep_info);
 	}
 
-	inline VkImageViewCreateInfo image_view_create_info(VkImage image, VkImageViewType type, VkFormat format, int mip_level = 0)
+	inline VkImageViewCreateInfo image_view_create_info(VkImage image, VkImageViewType type, VkFormat format, int mip_level = 0, int level_count = 1, int base_layer = 0, int layer_count = 1)
 	{
 		VkImageViewCreateInfo cinfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
 		cinfo.image = image;
@@ -108,9 +108,9 @@ namespace vkinit
 		VkImageSubresourceRange range{};
 		range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
 		range.baseMipLevel = mip_level;
-		range.levelCount = 1;
-		range.baseArrayLayer = 0;
-		range.layerCount = 1;
+		range.levelCount = level_count;
+		range.baseArrayLayer = base_layer;
+		range.layerCount = layer_count;
 		cinfo.subresourceRange = range;
 
 		return cinfo;

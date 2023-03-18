@@ -35,7 +35,7 @@ int main(int argc, char** argv)
 	Resource_Manager<Mesh> mesh_manager;
 	Resource_Manager<Texture> texture_manager;
 	Resource_Manager<Material> material_manager;
-	Path_Tracer renderer(&ctx, &platform, &mesh_manager, &texture_manager, &material_manager, &timer);
+	Renderer renderer(&ctx, &platform, &mesh_manager, &texture_manager, &material_manager, &timer);
 
 	//lm::Lightmap_Renderer lightmap_renderer(&ctx, (u32)WINDOW_WIDTH, (u32)WINDOW_HEIGHT);
 	//lightmap_renderer.init_scene("data/cube/Cube.gltf");
@@ -49,6 +49,8 @@ int main(int argc, char** argv)
 	std::vector<Mesh> meshes(gltf.meshes.size());
 	create_from_mesh2(&gltf, (u32)gltf.meshes.size(), meshes.data());
 	Mesh combined_mesh{};
+	//Mesh test_mesh = create_box();
+	Mesh test_mesh = create_sphere(16);
 	merge_meshes((u32)meshes.size(), meshes.data(), &combined_mesh);
 	//std::vector<Mesh> meshes;
 	Material test_mat;
@@ -56,6 +58,7 @@ int main(int argc, char** argv)
 	test_mat.metallic_factor = 1.0f;
 	test_mat.roughness_factor = 0.25f;
 	i32 material_id = material_manager.register_resource(test_mat, "test");
+	test_mesh.primitives[0].material_id = material_id;
 	//meshes.push_back(create_sphere(16));
 	//meshes[0].material_id = material_id;
 
@@ -78,7 +81,8 @@ int main(int argc, char** argv)
 	}
 #else
 	{
-		i32 mesh_id = mesh_manager.register_resource(combined_mesh, "combined");
+		//i32 mesh_id = mesh_manager.register_resource(combined_mesh, "combined");
+		i32 mesh_id = mesh_manager.register_resource(test_mesh, "combined");
 		Static_Mesh_Component meshcomp = { &mesh_manager, mesh_id };
 		ecs.add_entity(Transform_Component(), meshcomp);
 	}
@@ -117,15 +121,15 @@ int main(int argc, char** argv)
 					goto here;
 				if (event.key.keysym.scancode == SDL_SCANCODE_F1 && !event.key.repeat && event.type == SDL_KEYDOWN)
 				{
-					if (renderer.render_mode == Path_Tracer::PATH_TRACER)
-						renderer.render_mode = Path_Tracer::RASTER;
+					if (renderer.render_mode == Renderer::PATH_TRACER)
+						renderer.render_mode = Renderer::RASTER;
 					else
-						renderer.render_mode = Path_Tracer::PATH_TRACER;
+						renderer.render_mode = Renderer::PATH_TRACER;
 
 					renderer.frames_accumulated = 0;
 				}
 				if (event.key.keysym.scancode == SDL_SCANCODE_F2 && !event.key.repeat && event.type == SDL_KEYDOWN)
-					renderer.render_mode = Path_Tracer::SIDE_BY_SIDE;
+					renderer.render_mode = Renderer::SIDE_BY_SIDE;
 				if (!event.key.repeat)
 					handle_key_event(event);
 			}

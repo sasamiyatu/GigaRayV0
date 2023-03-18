@@ -79,7 +79,7 @@ Mesh create_sphere(u32 subdivision)
 				}
 				v.pos = pos * 10.f;
 				float theta = acosf(-pos.y);
-				float phi = atan2f(-pos.z, pos.x) + M_PI;
+				float phi = atan2f(-pos.z, pos.x) + (float)M_PI;
 				glm::vec2 uv = glm::vec2(phi / (2.0f * M_PI), theta / M_PI);
 				v.texcoord = uv;
 				v.normal = pos;
@@ -105,6 +105,91 @@ Mesh create_sphere(u32 subdivision)
 		}
 		start_index += verts_per_face;
 	}
+
+	Mesh_Primitive prim = {};
+	prim.material_id = 0;
+	prim.vertex_count = (u32)mesh.indices.size();
+	prim.vertex_offset = 0;
+	mesh.primitives.push_back(prim);
+
+	return mesh;
+}
+
+Mesh create_box(float x_scale, float y_scale, float z_scale)
+{
+	Mesh mesh;
+
+	for (u32 face = 0; face < 6; ++face)
+	{
+		for (int i = 0; i < 2; ++i)
+		{
+			for (int j = 0; j < 2; ++j)
+			{
+				float x = -1.f + 2.0f * j;
+				float y = -1.f + 2.0f * i;
+				float z = 1.f;
+				Vertex v{};
+				glm::vec3 pos;
+				glm::vec3 normal;
+				switch (face)
+				{
+				case 0:
+					pos = normalize(glm::vec3(-x, y, z));
+					normal = glm::vec3(0.0f, 0.0f, 1.0f);
+					break;
+				case 1:
+					pos = normalize(glm::vec3(x, y, -z));
+					normal = glm::vec3(0.0f, 0.0f, -1.0f);
+
+					break;
+				case 2:
+					pos = normalize(glm::vec3(z, -x, y));
+					normal = glm::vec3(1.0f, 0.0f, 0.0f);
+
+					break;
+				case 3:
+					pos = normalize(glm::vec3(-z, x, y));
+					normal = glm::vec3(-1.0f, 0.0f, 0.0f);
+
+					break;
+				case 4:
+					pos = normalize(glm::vec3(x, z, y));
+					normal = glm::vec3(0.0f, 1.0f, 0.0f);
+
+					break;
+				case 5:
+					pos = normalize(glm::vec3(-x, -z, y));
+					normal = glm::vec3(0.0f, -1.0f, 0.0f);
+
+					break;
+				default:
+					assert(false);
+					break;
+				}
+				v.pos = pos;
+				v.texcoord = glm::vec2(x * 0.5f + 0.5f, y * 0.5f + 0.5f);
+				v.normal = normal;
+				mesh.vertices.push_back(v);
+			}
+		}
+	}
+
+	u32 start_index = 0;
+	for (u32 face = 0; face < 6; ++face)
+	{
+		glm::ivec3 first_triangle = glm::ivec3(0, 2, 3) + glm::ivec3(start_index);
+		glm::ivec3 second_triangle = glm::ivec3(0, 3, 1) + glm::ivec3(start_index);
+		for (int ii = 0; ii < 3; ++ii)
+			mesh.indices.push_back(first_triangle[ii]);
+		for (int ii = 0; ii < 3; ++ii)
+			mesh.indices.push_back(second_triangle[ii]);
+		start_index += 4;
+	}
+
+	Mesh_Primitive prim{};
+	prim.vertex_count = (u32)mesh.indices.size();
+	prim.vertex_offset = 0;
+	mesh.primitives.push_back(prim);
 
 	return mesh;
 }

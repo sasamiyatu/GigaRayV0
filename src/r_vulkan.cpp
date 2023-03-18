@@ -6,7 +6,7 @@
 #include "shaders.h"
 
 #define VSYNC 1
-#define VALIDATION_VERBOSE
+//#define VALIDATION_VERBOSE
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL debug_callback(
 	VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
@@ -492,10 +492,10 @@ Vk_Allocated_Buffer Vk_Context::allocate_buffer(uint32_t size, VkBufferUsageFlag
 	return buffer;
 }
 
-Vk_Allocated_Image Vk_Context::allocate_image(VkExtent3D extent, VkFormat format, VkImageUsageFlags usage, VkImageAspectFlags aspect, VkImageTiling tiling, int mip_levels)
+Vk_Allocated_Image Vk_Context::allocate_image(VkExtent3D extent, VkFormat format, VkImageUsageFlags usage, VkImageAspectFlags aspect, VkImageTiling tiling, int mip_levels, VkImageCreateFlags flags, int layers)
 {
 	VkImageCreateInfo cinfo{ VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
-	cinfo.arrayLayers = 1;
+	cinfo.arrayLayers = layers;
 	cinfo.extent = extent;
 	cinfo.format = format;
 	cinfo.imageType = extent.depth == 1 ? VK_IMAGE_TYPE_2D : VK_IMAGE_TYPE_3D;
@@ -504,6 +504,7 @@ Vk_Allocated_Image Vk_Context::allocate_image(VkExtent3D extent, VkFormat format
 	cinfo.samples = VK_SAMPLE_COUNT_1_BIT;
 	cinfo.usage = usage; //VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 	cinfo.tiling = tiling;
+	cinfo.flags = flags;
 
 	VmaAllocationCreateInfo allocinfo{};
 	allocinfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
@@ -736,6 +737,10 @@ VkDescriptorSetLayout Vk_Context::create_descriptor_set_layout(u32 num_shaders, 
 				bindings[i].descriptorCount = 1;
 				bindings[i].descriptorType = shader->descriptor_types[i];
 				bindings[i].stageFlags |= shader->shader_stage;
+			}
+			else
+			{
+				bindings[i].binding = i;
 			}
 		}
 	}
@@ -1164,6 +1169,42 @@ VkCommandBuffer Vk_Context::allocate_command_buffer()
 	VkCommandBuffer cmd = 0;
 	vkAllocateCommandBuffers(device, &info, &cmd);
 	return cmd;
+}
+
+Cubemap Vk_Context::create_cubemap(u32 size, VkFormat format)
+{
+	Cubemap cubemap{};
+
+	cubemap.size = size;
+	cubemap.image = allocate_image({ size, size, 1 }, format,
+		VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+		VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_TILING_OPTIMAL,
+		1, VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT,
+		6 /*layers*/
+	);
+
+	{
+		// Create an image view to use for sampling the cubemap 
+		VkImageViewCreateInfo create_info = vkinit::image_view_create_info(cubemap.image.image, VK_IMAGE_VIEW_TYPE_CUBE, format, 0, 1, 0, 6);
+		vkCreateImageView(device, &create_info, nullptr, &cubemap.view);
+
+		g_garbage_collector->push([=]()
+			{
+				vkDestroyImageView(device, cubemap.view, nullptr);
+			}, Garbage_Collector::SHUTDOWN);
+	}
+
+	// Create views for the 6 faces for rendering to the cubemap
+	for (int face = 0; face < 6; ++face)
+	{
+		VkImageViewCreateInfo create_info = vkinit::image_view_create_info(cubemap.image.image, VK_IMAGE_VIEW_TYPE_2D, format, 0, 1, face, 1);
+		vkCreateImageView(device, &create_info, nullptr, &cubemap.image_views[face]);
+		g_garbage_collector->push([=]()
+			{
+				vkDestroyImageView(device, cubemap.image_views[face], nullptr);
+			}, Garbage_Collector::SHUTDOWN);
+	}
+	return cubemap;
 }
 
 void Vk_Context::save_screenshot(Vk_Allocated_Image image, const char* filename)

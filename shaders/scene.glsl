@@ -1,6 +1,9 @@
 #ifndef SCENE_GLSL
 #define SCENE_GLSL
 
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_nonuniform_qualifier : require
+
 #include "test.glsl"
 
 layout(set = 0, binding = 2, scalar) uniform camera_buffer{
@@ -13,6 +16,7 @@ layout(set = 0, binding = 2, scalar) uniform camera_buffer{
 layout(binding = 1, set = 0) uniform accelerationStructureEXT scene;
 #endif
 layout(binding = 3, set = 0) uniform sampler2D environment_map;
+layout(binding = 4, set = 0) uniform samplerCube envmap_cube;
 
 layout (set = 1, binding = 0) uniform sampler2D textures[];
 layout (set = 1, binding = 1, scalar) readonly buffer vertex_buffer_array_t

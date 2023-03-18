@@ -106,6 +106,14 @@ struct Async_Upload
 	u64 timeline_semaphore_value;
 };
 
+struct Cubemap
+{
+	Vk_Allocated_Image image;
+	std::array<VkImageView, 6> image_views; // A view for each face
+	VkImageView view; // Cubemap view
+	u32 size;
+};
+
 struct Vk_Context
 {
 	struct Per_Frame_Objects
@@ -149,11 +157,18 @@ struct Vk_Context
 	void create_swapchain(Platform* platform);
 	void create_sync_objects();
 	VkQueryPool create_query_pool();
+
 	Vk_Allocated_Buffer allocate_buffer(uint32_t size,
 		VkBufferUsageFlags usage, VmaMemoryUsage memory_usage, VmaAllocationCreateFlags flags, u64 alignment = 0);
-	Vk_Allocated_Image allocate_image(VkExtent3D extent, VkFormat format, VkImageUsageFlags usage, VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT, VkImageTiling tiling = VK_IMAGE_TILING_OPTIMAL, int mip_levels = 1);
+	Vk_Allocated_Image allocate_image(VkExtent3D extent, VkFormat format, 
+		VkImageUsageFlags usage, VkImageAspectFlags aspect = 
+		VK_IMAGE_ASPECT_COLOR_BIT, VkImageTiling tiling = VK_IMAGE_TILING_OPTIMAL, int mip_levels = 1, VkImageCreateFlags flags = 0,
+		int layers = 1
+	);
 	void free_image(Vk_Allocated_Image img);
 	void free_buffer(Vk_Allocated_Buffer buffer);
+
+
 	Vk_Allocated_Buffer create_buffer(VkCommandBuffer cmd, size_t size, void* data, VkBufferUsageFlags usage);
 	VkDeviceAddress get_buffer_device_address(const Vk_Allocated_Buffer& buf);
 	VkShaderModule create_shader_module_from_file(const char* filepath);
@@ -168,6 +183,7 @@ struct Vk_Context
 	Vk_Allocated_Image load_texture_hdri(const char* filepath, VkImageUsageFlags usage = (VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT));
 	Vk_Allocated_Image load_texture(const char* filepath);
 	Vk_Allocated_Image load_texture_async(const char* filepath, u64* timeline_semaphore_value);
+	Cubemap create_cubemap(u32 size, VkFormat format);
 	VkDescriptorSetLayout create_descriptor_set_layout(u32 num_shaders, struct Shader* shaders);
 	Raytracing_Pipeline create_raytracing_pipeline(
 		VkShaderModule rgen, VkShaderModule rmiss, VkShaderModule rchit,

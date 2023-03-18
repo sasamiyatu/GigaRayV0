@@ -32,6 +32,7 @@ void main()
     vec3 N = normal;
     vec3 V = normalize(camera_pos - frag_pos);
     vec3 R = reflect(-V, normal);
+    vec3 envmap_sample = texture(envmap_cube, R).rgb;
     vec2 uv = equirectangular_to_uv(R);
     float lod = roughness * 4.0;
     vec3 env = textureLod(prefiltered_envmap, uv, lod).rgb;
@@ -76,4 +77,5 @@ void main()
     //ckRoughness(NdotV, SILVER, roughness);
     //vec3 specular = env * (specular_color * t.x + t.y);
     color = vec4(total, 1.0);
+    color = vec4(envmap_sample, 1.0);
 }
