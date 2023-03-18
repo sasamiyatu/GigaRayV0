@@ -45,3 +45,21 @@ target_include_directories(tinyobjloader PUBLIC tinyobjloader)
 target_include_directories(xatlas PUBLIC xatlas/source/xatlas)
 
 target_link_libraries(sdl2 INTERFACE SDL2 SDL2main)
+
+add_library(imgui STATIC)
+
+target_include_directories(imgui PUBLIC imgui)
+
+target_sources(imgui PRIVATE
+    "imgui/imgui.h"
+    "imgui/imgui.cpp"
+
+    "imgui/imgui_demo.cpp"
+    "imgui/imgui_draw.cpp"
+    "imgui/imgui_widgets.cpp"
+
+    "imgui/backends/imgui_impl_vulkan.cpp"
+    "imgui/backends/imgui_impl_sdl2.cpp"
+)
+
+target_link_libraries(imgui PUBLIC Vulkan::Vulkan sdl2)
