@@ -8,9 +8,9 @@
 #define SQUARE_ROUGHNESS
 #define MAX_BOUNCES 4
 #define RAY_TRACING
-//#define NEE
+#define NEE
 #define USE_ENVMAP
-#define WHITE_ENVMAP
+//#define WHITE_ENVMAP
 #define OWN_BRDF
 
 #include "test.glsl"
@@ -164,7 +164,7 @@ void main()
             if (dot(v.geometric_normal, -rd) < 0.0) v.geometric_normal *= -1.0;
             //if (dot(v.geometric_normal, v.normal) < 0.0) v.normal *= -1.0;
 
-            v.normal = v.geometric_normal;
+            //v.normal = v.geometric_normal;
             vec3 normal = v.normal;
             vec3 albedo = v.material.base_color;
 
@@ -235,12 +235,12 @@ void main()
             vec3 brdf_weight;
             vec3 new_dir;
 #ifdef OWN_BRDF
-            if (!eval_indirect_combined_brdf(rand.yz, v.geometric_normal, v.geometric_normal, -rd, v.material, brdf_type, new_dir, brdf_weight))
+            if (!eval_indirect_combined_brdf(rand.yz, v.normal, v.geometric_normal, -rd, v.material, brdf_type, new_dir, brdf_weight))
             {
                 break;
             }
 #else
-            if (!evalIndirectCombinedBRDF(rand.yz, v.geometric_normal, v.geometric_normal, -rd, mat_props, brdf_type, new_dir, brdf_weight))
+            if (!evalIndirectCombinedBRDF(rand.yz, v.normal, v.geometric_normal, -rd, mat_props, brdf_type, new_dir, brdf_weight))
             {
                 break;
             }

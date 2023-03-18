@@ -721,10 +721,11 @@ void Path_Tracer::end_frame()
 
 	cpu_frame_end = timer->get_current_time();
 
+	//vkDeviceWaitIdle(context->device); // Synchronization debugging
+
 	char title[256];
 	sprintf(title, "cpu time: %.2f ms, gpu time: %.2f ms, mode: %s", (cpu_frame_end - cpu_frame_begin) * 1000.0, current_frame_gpu_time * 1e-6, render_mode == PATH_TRACER ? "path tracing" : "raster");
 	SDL_SetWindowTitle(platform->window.window, title);
-
 
 	frame_counter++;
 	current_frame_index = (current_frame_index + 1) % FRAMES_IN_FLIGHT;
@@ -758,7 +759,7 @@ void Path_Tracer::trace_rays(VkCommandBuffer cmd)
 	// Update descriptor set
 	u32 frame_index = frame_counter % FRAMES_IN_FLIGHT;
 	u32 aligned_size = vkinit::aligned_size(
-		sizeof(Camera_Component),
+		sizeof(GPU_Camera_Data),
 		(u32)context->physical_device_properties.properties.limits.minUniformBufferOffsetAlignment
 	);
 
@@ -901,9 +902,10 @@ void Path_Tracer::rasterize(VkCommandBuffer cmd, ECS* ecs)
 
 	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, raster_pipeline.pipeline);
 	u32 aligned_size = vkinit::aligned_size(
-		sizeof(Camera_Component),
+		sizeof(GPU_Camera_Data),
 		(u32)context->physical_device_properties.properties.limits.minUniformBufferOffsetAlignment
 	);
+
 	{
 		Descriptor_Info descriptor_info[] =
 		{

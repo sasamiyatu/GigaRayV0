@@ -1,5 +1,6 @@
 #pragma once
 #include "defines.h"
+#include "logging.h"
 
 // Common helper functions used everywhere
 

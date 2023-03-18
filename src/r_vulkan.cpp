@@ -6,7 +6,7 @@
 #include "shaders.h"
 
 #define VSYNC 1
-#define DEBUG_VERBOSE
+#define VALIDATION_VERBOSE
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL debug_callback(
 	VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
@@ -15,7 +15,7 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debug_callback(
 	void* pUserData) {
 
 	printf("validation layer: %s\n", pCallbackData->pMessage);
-#ifndef DEBUG_VERBOSE
+#ifndef VALIDATION_VERBOSE
 	assert(false);
 #endif
 	return VK_FALSE;
@@ -87,7 +87,7 @@ void Vk_Context::create_instance(Platform_Window* window)
 	{
 		VkDebugUtilsMessengerCreateInfoEXT ci{ VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT };
 		ci.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT; 
-#ifdef DEBUG_VERBOSE
+#ifdef VALIDATION_VERBOSE
 		ci.messageSeverity |= VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT;
 #endif
 		ci.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT;// | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
@@ -115,13 +115,21 @@ void Vk_Context::find_physical_device()
 		VK_KHR_SHADER_NON_SEMANTIC_INFO_EXTENSION_NAME
 	};
 
+	// Additional extensions that will be used if they exist but are not required
+	std::vector<const char*> optional_preferred_exts = {
+		VK_KHR_RAY_QUERY_EXTENSION_NAME
+	};
+
+	std::vector<const char*> preferred_extensions = device_exts;
+	preferred_extensions.insert(preferred_extensions.end(), optional_preferred_exts.begin(), optional_preferred_exts.end());
+
 	uint32_t count;
 	vkEnumeratePhysicalDevices(instance, &count, nullptr);
 	assert(count != 0);
 	std::vector<VkPhysicalDevice> devices(count);
 	vkEnumeratePhysicalDevices(instance, &count, devices.data());
 
-	// Find first device with required extensions
+	// Find first device with optional and required extensions
 	for (VkPhysicalDevice d : devices)
 	{
 		uint32_t ext_count;
@@ -130,10 +138,30 @@ void Vk_Context::find_physical_device()
 		std::vector<VkExtensionProperties> ext_props(ext_count);
 		vkEnumerateDeviceExtensionProperties(d, nullptr, &ext_count, ext_props.data());
 
-		if (check_extensions(device_exts, ext_props))
+		if (check_extensions(preferred_extensions, ext_props))
 		{
 			physical_device = d;
 			break;
+		}
+	}
+
+	if (physical_device == VK_NULL_HANDLE)
+	{
+		LOG_DEBUG("Not all optional Vulkan extensions were present, falling back to required extensions.");
+		// Fall back to required extensions
+		for (VkPhysicalDevice d : devices)
+		{
+			uint32_t ext_count;
+			vkEnumerateDeviceExtensionProperties(d, nullptr, &ext_count, nullptr);
+
+			std::vector<VkExtensionProperties> ext_props(ext_count);
+			vkEnumerateDeviceExtensionProperties(d, nullptr, &ext_count, ext_props.data());
+
+			if (check_extensions(device_exts, ext_props))
+			{
+				physical_device = d;
+				break;
+			}
 		}
 	}
 	assert(physical_device != VK_NULL_HANDLE);
@@ -245,6 +273,8 @@ void Vk_Context::find_physical_device()
 	volkLoadDevice(dev);
 
 	device = dev;
+
+	LOG_DEBUG("Selecting physical device: %s", phys_dev_props.properties.deviceName);
 
 	vkGetDeviceQueue(device, graphics_idx, 0, &graphics_queue);
 	vkGetDeviceQueue(device, graphics_idx, 1, &async_upload.upload_queue);
