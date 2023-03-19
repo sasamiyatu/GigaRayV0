@@ -255,6 +255,17 @@ void Renderer::create_cubemap_from_envmap()
 		{128.0f / 255.0f,   0.0f / 255.0f,  32.0f / 255.0f}
 	};
 
+	glm::mat4 view_matrices[6] = {
+		glm::lookAt(glm::vec3(0.0), glm::vec3(-1.0, 0.0, 0.0), glm::vec3(0.0, 1.0, 0.0)),
+		glm::lookAt(glm::vec3(0.0), glm::vec3(1.0, 0.0, 0.0), glm::vec3(0.0, 1.0, 0.0)),
+		glm::lookAt(glm::vec3(0.0), glm::vec3(0.0, 1.0, 0.0), glm::vec3(0.0, 0.0, -1.0)),
+		glm::lookAt(glm::vec3(0.0), glm::vec3(0.0, -1.0, 0.0), glm::vec3(0.0, 0.0, 1.0)),
+		glm::lookAt(glm::vec3(0.0), glm::vec3(0.0, 0.0, 1.0), glm::vec3(0.0, 1.0, 0.0)),
+		glm::lookAt(glm::vec3(0.0), glm::vec3(0.0, 0.0, -1.0), glm::vec3(0.0, 1.0, 0.0))
+	};
+
+	glm::mat4 proj = glm::perspective(glm::radians(90.0f), 1.0f, 0.1f, 10.0f);
+
 	for (u32 face = 0; face < 6; ++face)
 	{
 		VkRenderingAttachmentInfo attachment_info = vkinit::rendering_attachment_info(cubemap.image_views[face], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE, colors[face]);
@@ -262,28 +273,35 @@ void Renderer::create_cubemap_from_envmap()
 		VkRenderingInfo rendering_info = vkinit::rendering_info(render_area, 1, &attachment_info);
 		vkCmdBeginRendering(cmd, &rendering_info);
 
-		VkViewport viewport{ 0.0f, 0.0f, (float)cubemap.size, (float)cubemap.size, 0.0f, 1.0f };
+		VkViewport viewport{ 0.0f, (float)cubemap.size, (float)cubemap.size, -(float)cubemap.size, 0.0f, 1.0f };
+
 
 		vkCmdSetViewport(cmd, 0, 1, &viewport);
 		vkCmdSetScissor(cmd, 0, 1, &render_area);
 
+		//struct {
+		//	glm::uvec2 size;
+		//	u32 face_index;
+		//} pc;
+		//pc.size = glm::uvec2(cubemap.size);
+		//pc.face_index = face;
+
 		struct {
-			glm::uvec2 size;
-			u32 face_index;
+			glm::mat4 viewproj;
 		} pc;
-		pc.size = glm::uvec2(cubemap.size);
-		pc.face_index = face;
+		pc.viewproj = proj * view_matrices[face];
 
 		Descriptor_Info descriptor_info[] =
 		{
 			Descriptor_Info(bilinear_sampler, environment_map.image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
 		};
 
-		vkCmdPushDescriptorSetWithTemplateKHR(cmd, pipelines[GENERATE_CUBEMAP_PIPELINE].update_template, pipelines[GENERATE_CUBEMAP_PIPELINE].layout, 0, descriptor_info);
+		vkCmdPushDescriptorSetWithTemplateKHR(cmd, pipelines[GENERATE_CUBEMAP_PIPELINE2].update_template, pipelines[GENERATE_CUBEMAP_PIPELINE2].layout, 0, descriptor_info);
 
-		vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines[GENERATE_CUBEMAP_PIPELINE].pipeline);
-		vkCmdPushConstants(cmd, pipelines[GENERATE_CUBEMAP_PIPELINE].layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
-		vkCmdDraw(cmd, 6, 1, 0, 0);
+		vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines[GENERATE_CUBEMAP_PIPELINE2].pipeline);
+		vkCmdPushConstants(cmd, pipelines[GENERATE_CUBEMAP_PIPELINE2].layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+		//vkCmdDraw(cmd, 6, 1, 0, 0);
+		vkCmdDraw(cmd, 36, 1, 0, 0);
 
 		vkCmdEndRendering(cmd);
 	}
@@ -311,7 +329,9 @@ void Renderer::initialize()
 	pipelines[CUBEMAP_PIPELINE] = create_raster_graphics_pipeline("shaders/spirv/cube_test.vert.spv", "shaders/spirv/cube_test.frag.spv", true);
 	Raster_Options opt;
 	opt.color_formats[0] = VK_FORMAT_R16G16B16A16_SFLOAT;
-	pipelines[GENERATE_CUBEMAP_PIPELINE] = create_raster_graphics_pipeline("shaders/spirv/fullscreen_quad.vert.spv", "shaders/spirv/equirectangular_to_cubemap.frag.spv", false, opt);
+	//pipelines[GENERATE_CUBEMAP_PIPELINE] = create_raster_graphics_pipeline("shaders/spirv/fullscreen_quad.vert.spv", "shaders/spirv/equirectangular_to_cubemap.frag.spv", false, opt);
+	pipelines[GENERATE_CUBEMAP_PIPELINE2] = create_raster_graphics_pipeline("shaders/spirv/generate_cubemap.vert.spv", "shaders/spirv/equirectangular_to_cubemap.frag.spv", false, opt);
+
 	opt.depth_write_enable = VK_FALSE;
 	opt.color_formats[0] = VK_FORMAT_R32G32B32A32_SFLOAT;
 	pipelines[SKYBOX_PIPELINE] = create_raster_graphics_pipeline("shaders/spirv/skybox.vert.spv", "shaders/spirv/skybox.frag.spv", false, opt);
@@ -383,7 +403,8 @@ void Renderer::do_frame(ECS* ecs)
 // Loads the meshes from the scene and creates the acceleration structures
 void Renderer::init_scene(ECS* ecs)
 {
-	constexpr char* envmap_src = "D:/envmaps/piazza_bologni_4k.hdr";
+	//constexpr char* envmap_src = "D:/envmaps/piazza_bologni_4k.hdr";
+	constexpr char* envmap_src = "data/golf_course_sunrise_4k.hdr";
 	//constexpr char* envmap_src = "data/kloppenheim_06_puresky_4k.hdr";
 	environment_map = context->load_texture_hdri(
 		envmap_src,

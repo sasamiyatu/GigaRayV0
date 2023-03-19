@@ -259,7 +259,8 @@ void main()
 #ifdef WHITE_ENVMAP
             radiance += throughput;
 #else
-            radiance += throughput * sample_environment_map(rd, environment_map);
+            //radiance += throughput * sample_environment_map(rd, environment_map);
+            radiance += throughput * texture(envmap_cube, rd).rgb;
 #endif
 #endif
             break;
