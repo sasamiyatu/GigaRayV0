@@ -1,4 +1,3 @@
-#define VK_NO_PROTOTYPES
 #include "SDL.h"
 #include "SDL_vulkan.h"
 #define VOLK_IMPLEMENTATION
@@ -23,6 +22,11 @@
 #include "lightmap.h"
 #include "events.h"
 #include "sampling.h"
+#include "imgui/imgui.h"
+#include "imgui/imgui_impl_sdl2.h"
+#include "imgui/imgui_impl_vulkan.h"
+
+
 constexpr int WINDOW_WIDTH = 1280;
 constexpr int WINDOW_HEIGHT = 720;
 
@@ -54,9 +58,12 @@ int main(int argc, char** argv)
 	merge_meshes((u32)meshes.size(), meshes.data(), &combined_mesh);
 	//std::vector<Mesh> meshes;
 	Material test_mat;
-	test_mat.base_color_factor = glm::vec4(0.95, 0.93, 0.88, 1.0);
-	test_mat.metallic_factor = 1.0f;
-	test_mat.roughness_factor = 0.25f;
+	//test_mat.base_color_factor = glm::vec4(0.95, 0.93, 0.88, 1.0);
+	//test_mat.metallic_factor = 1.0f;
+	//test_mat.roughness_factor = 0.25f;
+	test_mat.base_color_factor = glm::vec4(1.0);
+	test_mat.metallic_factor = 0.0f;
+	test_mat.roughness_factor = 1.0;
 	i32 material_id = material_manager.register_resource(test_mat, "test");
 	test_mesh.primitives[0].material_id = material_id;
 	//meshes.push_back(create_sphere(16));
@@ -107,6 +114,8 @@ int main(int argc, char** argv)
 		SDL_Event event;
 		while (SDL_PollEvent(&event))
 		{
+			ImGui_ImplSDL2_ProcessEvent(&event);
+
 			if (event.type == SDL_QUIT)
 				goto here;
 			if (event.type == SDL_KEYDOWN || event.type == SDL_KEYUP)
@@ -142,6 +151,15 @@ int main(int argc, char** argv)
 		float dt = timer.update();
 		
 		game_state.simulate(dt);
+
+		//imgui new frame
+		ImGui_ImplVulkan_NewFrame();
+		ImGui_ImplSDL2_NewFrame(platform.window.window);
+
+		ImGui::NewFrame();
+
+		ImGui::ShowDemoWindow();
+
 		renderer.do_frame(&ecs);
 		//lightmap_renderer.render();
 

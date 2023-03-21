@@ -146,6 +146,8 @@ struct Vk_Context
 
 	std::array<Per_Frame_Objects, FRAMES_IN_FLIGHT> frame_objects;
 
+	Platform* platform;
+
 	// Constructor
 	Vk_Context(Platform* window);
 
@@ -168,6 +170,7 @@ struct Vk_Context
 	void free_image(Vk_Allocated_Image img);
 	void free_buffer(Vk_Allocated_Buffer buffer);
 
+	void init_imgui();
 
 	Vk_Allocated_Buffer create_buffer(VkCommandBuffer cmd, size_t size, void* data, VkBufferUsageFlags usage);
 	VkDeviceAddress get_buffer_device_address(const Vk_Allocated_Buffer& buf);
@@ -181,7 +184,7 @@ struct Vk_Context
 	Vk_Pipeline create_compute_pipeline(const char* shaderpath);
 	VkDescriptorSetLayout create_layout_from_spirv(u8* bytecode, u32 size);
 	Vk_Allocated_Image load_texture_hdri(const char* filepath, VkImageUsageFlags usage = (VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT));
-	Vk_Allocated_Image load_texture(const char* filepath);
+	Vk_Allocated_Image load_texture(const char* filepath, bool flip_y = false);
 	Vk_Allocated_Image load_texture_async(const char* filepath, u64* timeline_semaphore_value);
 	Cubemap create_cubemap(u32 size, VkFormat format);
 	VkDescriptorSetLayout create_descriptor_set_layout(u32 num_shaders, struct Shader* shaders);

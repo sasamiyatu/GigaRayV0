@@ -10,7 +10,7 @@
 #include <functional>
 #include <array>
 #include <map>
-#define VK_NO_PROTOTYPES
+//#define VK_NO_PROTOTYPES
 #include "vulkan/vulkan.h"
 
 #define VK_CHECK(x)                                                 \

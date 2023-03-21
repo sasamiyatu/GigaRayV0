@@ -47,10 +47,23 @@ add_executable(GigaRayV0
     timer.h 
     timer.cpp
     vk_helpers.h
+    imgui/imconfig.h
+    imgui/imgui.cpp
+    imgui/imgui.h
+    imgui/imgui_demo.cpp
+    imgui/imgui_draw.cpp
+    imgui/imgui_impl_sdl2.cpp
+    imgui/imgui_impl_sdl2.h
+    imgui/imgui_impl_vulkan.cpp
+    imgui/imgui_impl_vulkan.h
+    imgui/imgui_internal.h
+    imgui/imgui_tables.cpp
+    imgui/imgui_widgets.cpp
 )
 
 set_property(TARGET GigaRayV0 PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
 
+add_compile_definitions(VK_NO_PROTOTYPES)
 target_include_directories(GigaRayV0 PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_include_directories(GigaRayV0 PRIVATE "${PROJECT_SOURCE_DIR}/external")
 target_include_directories(GigaRayV0 PRIVATE ${Vulkan_INCLUDE_DIRS}) 

@@ -1,7 +1,6 @@
 #pragma once
 #include "Volk/volk.h"
 #include "vma/vk_mem_alloc.h"
-#define VK_NO_PROTOTYPES
 #include "SDL.h"
 #include "SDL_vulkan.h"
 #include <vector>

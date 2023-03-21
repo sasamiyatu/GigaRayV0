@@ -4,6 +4,9 @@
 #include "stb/stb_image.h"
 #include "vk_helpers.h"
 #include "shaders.h"
+#include "imgui/imgui.h"
+#include "imgui/imgui_impl_sdl2.h"
+#include "imgui/imgui_impl_vulkan.h"
 
 #define VSYNC 1
 //#define VALIDATION_VERBOSE
@@ -24,6 +27,8 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debug_callback(
 static bool check_extensions(const std::vector<const char*>& device_exts, const std::vector<VkExtensionProperties>& props);
 
 Vk_Context::Vk_Context(Platform* platform)
+	: platform(platform)
+
 {
 	VK_CHECK(volkInitialize());
 
@@ -33,6 +38,7 @@ Vk_Context::Vk_Context(Platform* platform)
 	init_mem_allocator();
 	create_swapchain(platform);
 	create_sync_objects();
+	init_imgui();
 }
 
 void Vk_Context::create_instance(Platform_Window* window)
@@ -274,7 +280,7 @@ void Vk_Context::find_physical_device()
 
 	device = dev;
 
-	LOG_DEBUG("Selecting physical device: %s", phys_dev_props.properties.deviceName);
+	LOG_DEBUG("Selecting physical device: %s\n", phys_dev_props.properties.deviceName);
 
 	vkGetDeviceQueue(device, graphics_idx, 0, &graphics_queue);
 	vkGetDeviceQueue(device, graphics_idx, 1, &async_upload.upload_queue);
@@ -1207,6 +1213,90 @@ Cubemap Vk_Context::create_cubemap(u32 size, VkFormat format)
 	return cubemap;
 }
 
+void Vk_Context::init_imgui()
+{
+	//1: create descriptor pool for IMGUI
+	// the size of the pool is very oversize, but it's copied from imgui demo itself.
+	VkDescriptorPoolSize pool_sizes[] =
+	{
+		{ VK_DESCRIPTOR_TYPE_SAMPLER, 1000 },
+		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1000 },
+		{ VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1000 },
+		{ VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1000 },
+		{ VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, 1000 },
+		{ VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, 1000 },
+		{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1000 },
+		{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1000 },
+		{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1000 },
+		{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, 1000 },
+		{ VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 1000 }
+	};
+
+	VkDescriptorPoolCreateInfo pool_info = {};
+	pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+	pool_info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+	pool_info.maxSets = 1000;
+	pool_info.poolSizeCount = (u32)std::size(pool_sizes);
+	pool_info.pPoolSizes = pool_sizes;
+
+	VkDescriptorPool imguiPool;
+	VK_CHECK(vkCreateDescriptorPool(device, &pool_info, nullptr, &imguiPool));
+
+	// 2: initialize imgui library
+
+	//this initializes the core structures of imgui
+	ImGui::CreateContext();
+
+	//this initializes imgui for SDL
+	ImGui_ImplSDL2_InitForVulkan(platform->window.window);
+
+	////this initializes imgui for Vulkan
+	ImGui_ImplVulkan_InitInfo init_info = {};
+	init_info.Instance = instance;
+	init_info.PhysicalDevice = physical_device;
+	init_info.Device = device;
+	init_info.Queue = graphics_queue;
+	init_info.DescriptorPool = imguiPool;
+	init_info.MinImageCount = 3;
+	init_info.ImageCount = 3;
+	init_info.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+
+	ImGui_ImplVulkan_Init(&init_info, VK_NULL_HANDLE, VK_FORMAT_R32G32B32A32_SFLOAT, VK_FORMAT_D32_SFLOAT);
+	//execute a gpu command to upload imgui font textures
+	
+	VkCommandBufferAllocateInfo info{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+	info.commandBufferCount = 1;
+	info.commandPool = command_pool;
+	info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+	VkCommandBuffer cmd;
+	vkAllocateCommandBuffers(device, &info, &cmd);
+
+	VkCommandBufferBeginInfo begin_info{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
+	begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+	vkBeginCommandBuffer(cmd, &begin_info);
+
+	ImGui_ImplVulkan_CreateFontsTexture(cmd);
+
+	vkEndCommandBuffer(cmd);
+
+	VkSubmitInfo submit_info = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
+	submit_info.commandBufferCount = 1;
+	submit_info.pCommandBuffers = &cmd;
+	vkQueueSubmit(graphics_queue, 1, &submit_info, 0);
+	vkQueueWaitIdle(graphics_queue);
+
+	//clear font textures from cpu data
+	ImGui_ImplVulkan_DestroyFontUploadObjects();
+
+	//add the destroy the imgui created structures
+	g_garbage_collector->push([=]() {
+		vkDestroyDescriptorPool(device, imguiPool, nullptr);
+		ImGui_ImplVulkan_Shutdown();
+		}, Garbage_Collector::SHUTDOWN);
+
+	LOG_DEBUG("Initialized imgui\n");
+}
+
 void Vk_Context::save_screenshot(Vk_Allocated_Image image, const char* filename)
 {
 }
@@ -1233,13 +1323,14 @@ Vk_Pipeline Vk_Context::create_raster_pipeline(const char* vertex_shader, const 
 	return pipeline;
 }
 
-Vk_Allocated_Image Vk_Context::load_texture(const char* filepath)
+Vk_Allocated_Image Vk_Context::load_texture(const char* filepath, bool flip_y)
 {
 	constexpr int required_n_comps = 4; // GIVE ME 4 CHANNELS!!!
 
-	stbi_set_flip_vertically_on_load(0);
+	stbi_set_flip_vertically_on_load((int)flip_y);
 	int x, y, comp;
 	u8* data = stbi_load(filepath, &x, &y, &comp, required_n_comps);
+	assert(data);
 
 	u32 required_size = (x * y * required_n_comps) * sizeof(u8);
 	Vk_Allocated_Image img = allocate_image(

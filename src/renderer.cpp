@@ -7,6 +7,8 @@
 #include <array>
 #include <r_mesh.h>
 #include <ecs.h>
+#include "imgui/imgui.h"
+#include "imgui/imgui_impl_vulkan.h"
 
 using namespace vkinit;
 
@@ -324,7 +326,7 @@ void Renderer::initialize()
 	create_lookup_textures();
 
 	pipelines[PATH_TRACER_PIPELINE] = vk_create_rt_pipeline();
-	primary_ray_pipeline = create_gbuffer_rt_pipeline();
+	//primary_ray_pipeline = create_gbuffer_rt_pipeline();
 	pipelines[RASTER_PIPELINE] = create_raster_graphics_pipeline("shaders/spirv/basic.vert.spv", "shaders/spirv/basic.frag.spv", true);;
 	pipelines[CUBEMAP_PIPELINE] = create_raster_graphics_pipeline("shaders/spirv/cube_test.vert.spv", "shaders/spirv/cube_test.frag.spv", true);
 	Raster_Options opt;
@@ -404,7 +406,7 @@ void Renderer::do_frame(ECS* ecs)
 void Renderer::init_scene(ECS* ecs)
 {
 	//constexpr char* envmap_src = "D:/envmaps/piazza_bologni_4k.hdr";
-	constexpr char* envmap_src = "data/golf_course_sunrise_4k.hdr";
+	char* envmap_src = "data/golf_course_sunrise_4k.hdr";
 	//constexpr char* envmap_src = "data/kloppenheim_06_puresky_4k.hdr";
 	environment_map = context->load_texture_hdri(
 		envmap_src,
@@ -631,6 +633,8 @@ void full_barrier(VkCommandBuffer cmd)
 void Renderer::pre_frame()
 {
 	g_garbage_collector->collect();
+
+	ImGui::Render();
 
 	// Update cameras
 	if (scene.active_camera->dirty)
@@ -1050,6 +1054,8 @@ void Renderer::rasterize(VkCommandBuffer cmd, ECS* ecs)
 		vkCmdDrawIndexedIndirect(cmd, indirect_draw_buffer.gpu_buffer.buffer, 0, (u32)mesh->primitives.size(), sizeof(VkDrawIndexedIndirectCommand));
 	}
 end_rendering:
+
+	ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
 
 	vkCmdEndRendering(cmd);
 
