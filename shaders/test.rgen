@@ -212,6 +212,7 @@ void main()
             }
 #endif
             float spec_probability = get_specular_probability(v.material, -rd, normal);
+            spec_probability = 0.0f;
             vec4 rand = vec4(pcg4d(seed)) * ldexp(1.0, -32);
             int brdf_type;
             if (v.material.metallic == 1.0f && v.material.roughness == 0.0f) {

@@ -349,7 +349,6 @@ void Renderer::initialize()
 	
 	create_samplers();
 
-
 	for (int i = 0; i < FRAMES_IN_FLIGHT; ++i)
 		query_pools[i] = context->create_query_pool();
 
@@ -405,14 +404,24 @@ void Renderer::do_frame(ECS* ecs)
 // Loads the meshes from the scene and creates the acceleration structures
 void Renderer::init_scene(ECS* ecs)
 {
-	//constexpr char* envmap_src = "D:/envmaps/piazza_bologni_4k.hdr";
-	char* envmap_src = "data/golf_course_sunrise_4k.hdr";
+	constexpr char* envmap_src = "D:/envmaps/piazza_bologni_4k.hdr";
+	//char* envmap_src = "data/golf_course_sunrise_4k.hdr";
 	//constexpr char* envmap_src = "data/kloppenheim_06_puresky_4k.hdr";
 	environment_map = context->load_texture_hdri(
 		envmap_src,
 		VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
 
 	create_cubemap_from_envmap();
+
+	{
+		VkCommandBuffer cmd = get_current_frame_command_buffer();
+		probe_system.init(context);
+		vk_begin_command_buffer(get_current_frame_command_buffer());
+		probe_system.bake(cmd, &cubemap, bilinear_sampler_clamp);
+		vkEndCommandBuffer(cmd);
+		vk_command_buffer_single_submit(cmd);
+		vkQueueWaitIdle(context->graphics_queue);
+	}
 	
 	{
 		// Update bindless textures
@@ -1017,6 +1026,7 @@ void Renderer::rasterize(VkCommandBuffer cmd, ECS* ecs)
 			Descriptor_Info(gpu_camera_data.gpu_buffer.buffer, 0, VK_WHOLE_SIZE),
 			Descriptor_Info(bilinear_sampler, environment_map.image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
 			Descriptor_Info(bilinear_sampler_clamp, cubemap.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
+			Descriptor_Info(probe_system.probe_samples.buffer, 0, VK_WHOLE_SIZE),
 		};
 		vkCmdPushDescriptorSetWithTemplateKHR(cmd, pipelines[RASTER_PIPELINE].update_template, pipelines[RASTER_PIPELINE].layout, 0, descriptor_info);
 	}

@@ -13,6 +13,7 @@
 #include "material.h"
 #include "gbuffer.h"
 #include "timer.h"
+#include "sh.h"
 
 #define VK_CHECK(x)                                                 \
 	do                                                              \
@@ -170,6 +171,8 @@ struct Renderer
 	Resource_Manager<Mesh>* mesh_manager;
 	Resource_Manager<Texture>* texture_manager;
 	Resource_Manager<Material>* material_manager;
+
+	Probe_System probe_system;
 
 	Timer* timer;
 

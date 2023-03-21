@@ -41,6 +41,14 @@ vec3 random_cosine_hemisphere(vec2 u)
     return dir;
 }
 
+vec3 sample_uniform_sphere(vec2 u)
+{
+    float phi = 2.f * M_PI * u.x;
+    float theta = acos(1.f - 2.f * u.y);
+    vec3 L = vec3(-cos(phi) * sin(theta), -cos(theta), sin(phi) * sin(theta));
+	return L;
+}
+
 float pdf_cosine_hemisphere(float ndotl)
 {
     return ndotl / M_PI;

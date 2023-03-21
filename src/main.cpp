@@ -158,7 +158,7 @@ int main(int argc, char** argv)
 
 		ImGui::NewFrame();
 
-		ImGui::ShowDemoWindow();
+		//ImGui::ShowDemoWindow();
 
 		renderer.do_frame(&ecs);
 		//lightmap_renderer.render();

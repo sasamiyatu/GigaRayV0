@@ -5,9 +5,14 @@
 #include "math.glsl"
 #include "scene.glsl"
 #include "brdf.h"
+#include "sh.glsl"
 
 layout(set = 0, binding = 0) uniform sampler2D brdf_lut;
 layout(set = 0, binding = 1) uniform sampler2D prefiltered_envmap;
+layout(set = 0, binding = 5) buffer SH_sample_buffer
+{
+    SH_3 samples[];
+} SH_samples;
 
 layout(location = 0) in vec3 in_normal;
 layout(location = 1) in vec3 base_color;
@@ -23,6 +28,28 @@ vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness)
 {
     return F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }   
+
+vec3 eval_sh(SH_3 sh, vec3 n)
+{
+    vec3 sh_result[9];
+    sh_result[0] = 0.282095f * sh.coefs[0];
+    sh_result[1] = -0.488603f * n.y * sh.coefs[1];
+    sh_result[2] = 0.488603f * n.z * sh.coefs[2];
+    sh_result[3] = -0.488603f * n.x * sh.coefs[3];
+    sh_result[4] = 1.092548f * n.x * n.y * sh.coefs[4];
+    sh_result[5] = -1.092548f * n.y * n.z * sh.coefs[5];
+    sh_result[6] = 0.315392f * (3.0f * n.z * n.z - 1.0f) * sh.coefs[6];
+    sh_result[7] = -1.092548f * n.x * n.z * sh.coefs[7];
+    sh_result[8] = 0.54627f * (n.x * n.x - n.y * n.y) * sh.coefs[8];
+
+    vec3 col = vec3(0.0);
+    for (int i = 0; i < 9; ++i)
+    {
+        col += sh_result[i];
+    }
+    col = max(vec3(0.0), col);
+    return col;
+}
 
 layout(location = 0) out vec4 color;
 void main()
@@ -78,4 +105,7 @@ void main()
     //vec3 specular = env * (specular_color * t.x + t.y);
     color = vec4(total, 1.0);
     color = vec4(envmap_sample, 1.0);
+    SH_3 sh = SH_samples.samples[0];
+    vec3 evaluated_sh = eval_sh(sh, N);
+    color = vec4(evaluated_sh, 1.0);
 }
