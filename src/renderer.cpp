@@ -7,6 +7,8 @@
 #include <array>
 #include <r_mesh.h>
 #include <ecs.h>
+#include "imgui/imgui.h"
+#include "imgui/imgui_impl_vulkan.h"
 
 using namespace vkinit;
 
@@ -26,35 +28,18 @@ void Renderer::create_bindless_descriptor_set_layout()
 {
 	VkShaderStageFlags flags = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
 	// Bindless stuff
-	std::array<VkDescriptorSetLayoutBinding, 5> bindless_bindings{};
-	bindless_bindings[0].binding = 0;
-	bindless_bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-	bindless_bindings[0].descriptorCount = MAX_BINDLESS_RESOURCES;
-	bindless_bindings[0].stageFlags = flags;
 
-	bindless_bindings[1].binding = 1;
-	bindless_bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-	bindless_bindings[1].descriptorCount = MAX_BINDLESS_RESOURCES;
-	bindless_bindings[1].stageFlags = flags;
-
-	bindless_bindings[2].binding = 2;
-	bindless_bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-	bindless_bindings[2].descriptorCount = MAX_BINDLESS_RESOURCES;
-	bindless_bindings[2].stageFlags = flags;
-
-	bindless_bindings[3].binding = 3;
-	bindless_bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-	bindless_bindings[3].descriptorCount = 1;
-	bindless_bindings[3].stageFlags = flags;
-
-	bindless_bindings[4].binding = 4;
-	bindless_bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-	bindless_bindings[4].descriptorCount = MAX_BINDLESS_RESOURCES;
-	bindless_bindings[4].stageFlags = flags;
+	VkDescriptorSetLayoutBinding bindless_bindings[] = {
+	vkinit::descriptor_set_layout_binding(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, MAX_BINDLESS_RESOURCES, flags),
+	vkinit::descriptor_set_layout_binding(1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, MAX_BINDLESS_RESOURCES, flags),
+	vkinit::descriptor_set_layout_binding(2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, MAX_BINDLESS_RESOURCES, flags),
+	vkinit::descriptor_set_layout_binding(3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, flags),
+	vkinit::descriptor_set_layout_binding(4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, MAX_BINDLESS_RESOURCES, flags),
+	};
 
 	VkDescriptorSetLayoutCreateInfo layout_info = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
-	layout_info.bindingCount = uint32_t(bindless_bindings.size());
-	layout_info.pBindings = bindless_bindings.data();
+	layout_info.bindingCount = uint32_t(std::size(bindless_bindings));
+	layout_info.pBindings = bindless_bindings;
 	layout_info.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
 
 	VkDescriptorBindingFlags bindless_flags = 
@@ -64,7 +49,7 @@ void Renderer::create_bindless_descriptor_set_layout()
 	VkDescriptorBindingFlags flags2[5] = { bindless_flags, bindless_flags, bindless_flags, 0, bindless_flags };
 
 	VkDescriptorSetLayoutBindingFlagsCreateInfoEXT extended_info{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO_EXT, nullptr };
-	extended_info.bindingCount = (u32)bindless_bindings.size();
+	extended_info.bindingCount = (u32)std::size(bindless_bindings);
 	extended_info.pBindingFlags = flags2;
 	layout_info.pNext = &extended_info;
 
@@ -125,152 +110,20 @@ Vk_Pipeline Renderer::vk_create_rt_pipeline()
 	load_shader_from_file(&rgen_shader, context->device, "shaders/spirv/test.rgen.spv");
 	load_shader_from_file(&rmiss_shader, context->device, "shaders/spirv/test.rmiss.spv");
 	load_shader_from_file(&rchit_shader, context->device, "shaders/spirv/test.rchit.spv");
-
-	constexpr int n_rt_shader_stages = 3;
-	constexpr int n_rt_shader_groups = 3;
-
-	constexpr int raygen_index = 0;
-	constexpr int miss_index = 1;
-	constexpr int closest_hit_index = 2;
-
-	constexpr int raygen_group_index = 0;
-	constexpr int miss_group_index = 1;
-	constexpr int hit_group_index = 2;
-
-	std::array<VkPipelineShaderStageCreateInfo, n_rt_shader_stages> pssci{ };
-
-	pssci[raygen_index].sType = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
-	pssci[raygen_index].module = rgen_shader.shader;
-	pssci[raygen_index].pName = "main";
-	pssci[raygen_index].stage = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-
-	pssci[miss_index].sType = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
-	pssci[miss_index].module = rmiss_shader.shader;
-	pssci[miss_index].pName = "main";
-	pssci[miss_index].stage = VK_SHADER_STAGE_MISS_BIT_KHR;
-
-	pssci[closest_hit_index].sType = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
-	pssci[closest_hit_index].module = rchit_shader.shader;
-	pssci[closest_hit_index].pName = "main";
-	pssci[closest_hit_index].stage = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-
-	std::array<VkRayTracingShaderGroupCreateInfoKHR, n_rt_shader_groups> rtsgci{};
-	rtsgci[raygen_group_index].sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
-	rtsgci[raygen_group_index].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
-	rtsgci[raygen_group_index].generalShader = raygen_index;
-	rtsgci[raygen_group_index].closestHitShader = VK_SHADER_UNUSED_KHR;
-	rtsgci[raygen_group_index].anyHitShader = VK_SHADER_UNUSED_KHR;
-	rtsgci[raygen_group_index].intersectionShader = VK_SHADER_UNUSED_KHR;
-
-	rtsgci[miss_group_index] = rtsgci[raygen_group_index];
-	rtsgci[miss_group_index].sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
-	rtsgci[miss_group_index].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
-	rtsgci[miss_group_index].generalShader = miss_index;
-	rtsgci[miss_group_index].closestHitShader = VK_SHADER_UNUSED_KHR;
-	rtsgci[miss_group_index].anyHitShader = VK_SHADER_UNUSED_KHR;
-	rtsgci[miss_group_index].intersectionShader = VK_SHADER_UNUSED_KHR;
-
-	rtsgci[hit_group_index].sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
-	rtsgci[hit_group_index].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
-	rtsgci[hit_group_index].generalShader = VK_SHADER_UNUSED_KHR;
-	rtsgci[hit_group_index].closestHitShader = closest_hit_index;
-	rtsgci[hit_group_index].anyHitShader = VK_SHADER_UNUSED_KHR;
-	rtsgci[hit_group_index].intersectionShader = VK_SHADER_UNUSED_KHR;
-
+	
 	VkDescriptorSetLayout push_desc_layout = create_descriptor_set_layout(&rgen_shader);
-
-	// Create pipeline layout
-	VkPipelineLayoutCreateInfo cinfo{ VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
 	VkDescriptorSetLayout layouts[] = { push_desc_layout, bindless_set_layout };
-	cinfo.pSetLayouts = layouts;
-	cinfo.setLayoutCount = (u32)std::size(layouts);
-	VkPushConstantRange push_constant_range{};
-	push_constant_range.offset = 0;
-	push_constant_range.size = sizeof(u32);
-	push_constant_range.stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-	cinfo.pushConstantRangeCount = 1;
-	cinfo.pPushConstantRanges = &push_constant_range;
-	VkPipelineLayout layout;
-	vkCreatePipelineLayout(context->device, &cinfo, nullptr, &layout);
-	g_garbage_collector->push([=]()
-		{
-			vkDestroyPipelineLayout(context->device, layout, nullptr);
-		}, Garbage_Collector::SHUTDOWN);
+	Raytracing_Pipeline rt_pp = context->create_raytracing_pipeline(rgen_shader.shader, rmiss_shader.shader, rchit_shader.shader, layouts, (int)std::size(layouts));
 
-	VkRayTracingPipelineCreateInfoKHR rtpci{ VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR };
-	rtpci.stageCount = (uint32_t)pssci.size();
-	rtpci.pStages = pssci.data();
-	rtpci.groupCount = (uint32_t)rtsgci.size();
-	rtpci.pGroups = rtsgci.data();
-	rtpci.maxPipelineRayRecursionDepth = 4;
-	rtpci.layout = layout;
-
-	VkPipeline rt_pipeline;
-	VK_CHECK(vkCreateRayTracingPipelinesKHR(
-		context->device,
-		VK_NULL_HANDLE,
-		VK_NULL_HANDLE,
-		1, &rtpci,
-		nullptr,
-		&rt_pipeline));
-
-	g_garbage_collector->push([=]()
-		{
-			vkDestroyDescriptorSetLayout(context->device, push_desc_layout, nullptr);
-			vkDestroyPipeline(context->device, rt_pipeline, nullptr);
-		}, Garbage_Collector::SHUTDOWN);
-
-	Vk_Pipeline pl;
-	pl.layout = layout;
-	pl.pipeline = rt_pipeline;
-
-	uint32_t group_count = (uint32_t)rtsgci.size();
-	uint32_t group_handle_size = context->device_shader_group_handle_size;
-	uint32_t shader_group_base_alignment = context->device_sbt_alignment;
-	uint32_t group_size_aligned = (group_handle_size + shader_group_base_alignment - 1) & ~(shader_group_base_alignment - 1);
-
-	uint32_t sbt_size = group_count * group_size_aligned;
-
-	std::vector<uint8_t> shader_handle_storage(sbt_size);
-	VK_CHECK(vkGetRayTracingShaderGroupHandlesKHR(
-		context->device,
-		rt_pipeline,
-		0,
-		group_count,
-		sbt_size,
-		shader_handle_storage.data()
-	));
-
-	Vk_Allocated_Buffer rt_sbt_buffer = context->allocate_buffer(sbt_size,
-		VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-		VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-		VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR,
-		VMA_MEMORY_USAGE_AUTO,
-		VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
-	);
-
-
-	void* mapped;
-	vmaMapMemory(context->allocator, rt_sbt_buffer.allocation, &mapped);
-	uint8_t* pdata = (uint8_t*)mapped;
-	for (uint32_t g = 0; g < group_count; ++g)
-	{
-		memcpy(pdata, shader_handle_storage.data() + g * group_handle_size,
-			group_handle_size);
-		pdata += group_size_aligned;
-	}
-	vmaUnmapMemory(context->allocator, rt_sbt_buffer.allocation);
-
-	shader_binding_table = rt_sbt_buffer;
-	context->device_sbt_alignment = group_size_aligned;
+	shader_binding_table = rt_pp.shader_binding_table.sbt_data;
 
 	vkDestroyShaderModule(context->device, rgen_shader.shader, nullptr);
 	vkDestroyShaderModule(context->device, rmiss_shader.shader, nullptr);
 	vkDestroyShaderModule(context->device, rchit_shader.shader, nullptr);
 
-	descriptor_update_template = context->create_descriptor_update_template(1, &rgen_shader, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, pl.layout);
+	descriptor_update_template = context->create_descriptor_update_template(1, &rgen_shader, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, rt_pp.pipeline.layout);
 
-	return pl;
+	return rt_pp.pipeline;
 }
 
 Raytracing_Pipeline Renderer::create_gbuffer_rt_pipeline()
@@ -350,39 +203,6 @@ Raytracing_Pipeline Renderer::create_gbuffer_rt_pipeline()
 	return rt_pp;
 }
 
-Vk_Pipeline Renderer::create_raster_pipeline()
-{
-	Shader vertex_shader, fragment_shader;
-	bool success = load_shader_from_file(&vertex_shader, context->device, "shaders/spirv/basic.vert.spv");
-	assert(success);
-	success = load_shader_from_file(&fragment_shader, context->device, "shaders/spirv/basic.frag.spv");
-	assert(success);
-
-	Shader shaders[] = { vertex_shader, fragment_shader };
-
-	VkDescriptorSetLayout desc_0 = context->create_descriptor_set_layout((u32)std::size(shaders), shaders);
-
-	VkDescriptorSetLayout descriptor_set_layouts[] = { desc_0, bindless_set_layout };
-
-	Vk_Pipeline pp = context->create_raster_pipeline(vertex_shader.shader, fragment_shader.shader, (u32)std::size(descriptor_set_layouts), descriptor_set_layouts);
-
-	VkDescriptorUpdateTemplate update_template = context->create_descriptor_update_template((u32)std::size(shaders), shaders, VK_PIPELINE_BIND_POINT_GRAPHICS, pp.layout);
-	pp.update_template = update_template;
-
-	vkDestroyShaderModule(context->device, vertex_shader.shader, nullptr);
-	vkDestroyShaderModule(context->device, fragment_shader.shader, nullptr);
-
-	g_garbage_collector->push([=]()
-		{
-			vkDestroyPipeline(context->device, pp.pipeline, nullptr);
-			vkDestroyPipelineLayout(context->device, pp.layout, nullptr);
-			vkDestroyDescriptorSetLayout(context->device, desc_0, nullptr);
-			vkDestroyDescriptorUpdateTemplate(context->device, update_template, nullptr);
-		}, Garbage_Collector::SHUTDOWN);
-
-	return pp;
-}
-
 void Renderer::create_samplers()
 {
 	VkSamplerCreateInfo cinfo{ VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
@@ -411,7 +231,6 @@ Renderer::Renderer(Vk_Context* context, Platform* platform,
 	Timer* timer)
 	: context(context),
 	platform(platform),
-	rt_pipeline({}),
 	mesh_manager(mesh_manager),
 	texture_manager(texture_manager),
 	material_manager(material_manager),
@@ -420,7 +239,85 @@ Renderer::Renderer(Vk_Context* context, Platform* platform,
 	initialize();
 }
 
+void Renderer::create_cubemap_from_envmap()
+{
+	VkCommandBuffer cmd = get_current_frame_command_buffer();
+	vk_begin_command_buffer(cmd);
+	vk_transition_layout(cmd, cubemap.image.image,
+		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+		VK_ACCESS_NONE, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
+		VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 
+	VkClearValue colors[6] = {
+		{127.0f / 255.0f, 255.0f / 255.0f, 212.0f / 255.0f},
+		{200.0f / 255.0f, 162.0f / 255.0f, 200.0f / 255.0f},
+		{255.0f / 255.0f, 229.0f / 255.0f, 180.0f / 255.0f},
+		{ 65.0f / 255.0f, 102.0f / 255.0f, 245.0f / 255.0f},
+		{255.0f / 255.0f, 255.0f / 255.0f,   0.0f / 255.0f},
+		{128.0f / 255.0f,   0.0f / 255.0f,  32.0f / 255.0f}
+	};
+
+	glm::mat4 view_matrices[6] = {
+		glm::lookAt(glm::vec3(0.0), glm::vec3(-1.0, 0.0, 0.0), glm::vec3(0.0, 1.0, 0.0)),
+		glm::lookAt(glm::vec3(0.0), glm::vec3(1.0, 0.0, 0.0), glm::vec3(0.0, 1.0, 0.0)),
+		glm::lookAt(glm::vec3(0.0), glm::vec3(0.0, 1.0, 0.0), glm::vec3(0.0, 0.0, -1.0)),
+		glm::lookAt(glm::vec3(0.0), glm::vec3(0.0, -1.0, 0.0), glm::vec3(0.0, 0.0, 1.0)),
+		glm::lookAt(glm::vec3(0.0), glm::vec3(0.0, 0.0, 1.0), glm::vec3(0.0, 1.0, 0.0)),
+		glm::lookAt(glm::vec3(0.0), glm::vec3(0.0, 0.0, -1.0), glm::vec3(0.0, 1.0, 0.0))
+	};
+
+	glm::mat4 proj = glm::perspective(glm::radians(90.0f), 1.0f, 0.1f, 10.0f);
+
+	for (u32 face = 0; face < 6; ++face)
+	{
+		VkRenderingAttachmentInfo attachment_info = vkinit::rendering_attachment_info(cubemap.image_views[face], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE, colors[face]);
+		VkRect2D render_area = { {0, 0}, {cubemap.size, cubemap.size} };
+		VkRenderingInfo rendering_info = vkinit::rendering_info(render_area, 1, &attachment_info);
+		vkCmdBeginRendering(cmd, &rendering_info);
+
+		VkViewport viewport{ 0.0f, (float)cubemap.size, (float)cubemap.size, -(float)cubemap.size, 0.0f, 1.0f };
+
+
+		vkCmdSetViewport(cmd, 0, 1, &viewport);
+		vkCmdSetScissor(cmd, 0, 1, &render_area);
+
+		//struct {
+		//	glm::uvec2 size;
+		//	u32 face_index;
+		//} pc;
+		//pc.size = glm::uvec2(cubemap.size);
+		//pc.face_index = face;
+
+		struct {
+			glm::mat4 viewproj;
+		} pc;
+		pc.viewproj = proj * view_matrices[face];
+
+		Descriptor_Info descriptor_info[] =
+		{
+			Descriptor_Info(bilinear_sampler, environment_map.image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+		};
+
+		vkCmdPushDescriptorSetWithTemplateKHR(cmd, pipelines[GENERATE_CUBEMAP_PIPELINE2].update_template, pipelines[GENERATE_CUBEMAP_PIPELINE2].layout, 0, descriptor_info);
+
+		vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines[GENERATE_CUBEMAP_PIPELINE2].pipeline);
+		vkCmdPushConstants(cmd, pipelines[GENERATE_CUBEMAP_PIPELINE2].layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+		//vkCmdDraw(cmd, 6, 1, 0, 0);
+		vkCmdDraw(cmd, 36, 1, 0, 0);
+
+		vkCmdEndRendering(cmd);
+	}
+
+	vk_transition_layout(cmd, cubemap.image.image,
+		VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+		VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
+		VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT
+	);
+
+	vkEndCommandBuffer(cmd);
+	vk_command_buffer_single_submit(cmd);
+	vkQueueWaitIdle(context->graphics_queue);
+}
 void Renderer::initialize()
 {
 	create_descriptor_pools();
@@ -428,9 +325,19 @@ void Renderer::initialize()
 
 	create_lookup_textures();
 
-	rt_pipeline = vk_create_rt_pipeline();
-	primary_ray_pipeline = create_gbuffer_rt_pipeline();
-	raster_pipeline = create_raster_pipeline();
+	pipelines[PATH_TRACER_PIPELINE] = vk_create_rt_pipeline();
+	//primary_ray_pipeline = create_gbuffer_rt_pipeline();
+	pipelines[RASTER_PIPELINE] = create_raster_graphics_pipeline("shaders/spirv/basic.vert.spv", "shaders/spirv/basic.frag.spv", true);;
+	pipelines[CUBEMAP_PIPELINE] = create_raster_graphics_pipeline("shaders/spirv/cube_test.vert.spv", "shaders/spirv/cube_test.frag.spv", true);
+	Raster_Options opt;
+	opt.color_formats[0] = VK_FORMAT_R16G16B16A16_SFLOAT;
+	//pipelines[GENERATE_CUBEMAP_PIPELINE] = create_raster_graphics_pipeline("shaders/spirv/fullscreen_quad.vert.spv", "shaders/spirv/equirectangular_to_cubemap.frag.spv", false, opt);
+	pipelines[GENERATE_CUBEMAP_PIPELINE2] = create_raster_graphics_pipeline("shaders/spirv/generate_cubemap.vert.spv", "shaders/spirv/equirectangular_to_cubemap.frag.spv", false, opt);
+
+	opt.depth_write_enable = VK_FALSE;
+	opt.color_formats[0] = VK_FORMAT_R32G32B32A32_SFLOAT;
+	pipelines[SKYBOX_PIPELINE] = create_raster_graphics_pipeline("shaders/spirv/skybox.vert.spv", "shaders/spirv/skybox.frag.spv", false, opt);
+	cubemap = context->create_cubemap(512, VK_FORMAT_R16G16B16A16_SFLOAT);
 
 	u32 indirect_buffer_size = MAX_INDIRECT_DRAWS * sizeof(VkDrawIndexedIndirectCommand);
 	indirect_draw_buffer = context->create_gpu_buffer(indirect_buffer_size, VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
@@ -441,7 +348,6 @@ void Renderer::initialize()
 	compute_pp = context->create_compute_pipeline("shaders/spirv/test.comp.spv");
 	
 	create_samplers();
-
 
 	for (int i = 0; i < FRAMES_IN_FLIGHT; ++i)
 		query_pools[i] = context->create_query_pool();
@@ -499,12 +405,23 @@ void Renderer::do_frame(ECS* ecs)
 void Renderer::init_scene(ECS* ecs)
 {
 	constexpr char* envmap_src = "D:/envmaps/piazza_bologni_4k.hdr";
+	//char* envmap_src = "data/golf_course_sunrise_4k.hdr";
 	//constexpr char* envmap_src = "data/kloppenheim_06_puresky_4k.hdr";
 	environment_map = context->load_texture_hdri(
 		envmap_src,
 		VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
 
-	
+	create_cubemap_from_envmap();
+
+	{
+		VkCommandBuffer cmd = get_current_frame_command_buffer();
+		probe_system.init(context);
+		vk_begin_command_buffer(get_current_frame_command_buffer());
+		probe_system.bake(cmd, &cubemap, bilinear_sampler_clamp);
+		vkEndCommandBuffer(cmd);
+		vk_command_buffer_single_submit(cmd);
+		vkQueueWaitIdle(context->graphics_queue);
+	}
 	
 	{
 		// Update bindless textures
@@ -726,6 +643,8 @@ void Renderer::pre_frame()
 {
 	g_garbage_collector->collect();
 
+	ImGui::Render();
+
 	// Update cameras
 	if (scene.active_camera->dirty)
 	{
@@ -788,6 +707,44 @@ void Renderer::begin_frame()
 		VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_SHADER_WRITE_BIT,
 		VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
 	);
+}
+
+Vk_Pipeline Renderer::create_raster_graphics_pipeline(const char* vertex_shader_path, const char* fragment_shader_path, bool use_bindless_layout, Raster_Options opt)
+{
+	Shader vertex_shader, fragment_shader;
+	bool success = load_shader_from_file(&vertex_shader, context->device, vertex_shader_path);
+	assert(success);
+	success = load_shader_from_file(&fragment_shader, context->device, fragment_shader_path);
+	assert(success);
+
+	Shader shaders[] = { vertex_shader, fragment_shader };
+
+	VkDescriptorSetLayout desc_0 = context->create_descriptor_set_layout((u32)std::size(shaders), shaders);
+
+	VkDescriptorSetLayout descriptor_set_layouts[4] = {  };
+	descriptor_set_layouts[0] = desc_0;
+	u32 layout_count = use_bindless_layout ? 2 : 1;
+
+	if (use_bindless_layout)
+		descriptor_set_layouts[1] = bindless_set_layout;
+
+	Vk_Pipeline pp = context->create_raster_pipeline(vertex_shader.shader, fragment_shader.shader, layout_count, descriptor_set_layouts, opt);
+
+	VkDescriptorUpdateTemplate update_template = context->create_descriptor_update_template((u32)std::size(shaders), shaders, VK_PIPELINE_BIND_POINT_GRAPHICS, pp.layout);
+	pp.update_template = update_template;
+
+	vkDestroyShaderModule(context->device, vertex_shader.shader, nullptr);
+	vkDestroyShaderModule(context->device, fragment_shader.shader, nullptr);
+
+	g_garbage_collector->push([=]()
+		{
+			vkDestroyPipeline(context->device, pp.pipeline, nullptr);
+	vkDestroyPipelineLayout(context->device, pp.layout, nullptr);
+	vkDestroyDescriptorSetLayout(context->device, desc_0, nullptr);
+	vkDestroyDescriptorUpdateTemplate(context->device, update_template, nullptr);
+		}, Garbage_Collector::SHUTDOWN);
+
+	return pp;
 }
 
 void Renderer::render_gbuffer()
@@ -869,10 +826,11 @@ void Renderer::end_frame()
 
 	cpu_frame_end = timer->get_current_time();
 
+	vkDeviceWaitIdle(context->device); // Synchronization debugging
+
 	char title[256];
 	sprintf(title, "cpu time: %.2f ms, gpu time: %.2f ms, mode: %s", (cpu_frame_end - cpu_frame_begin) * 1000.0, current_frame_gpu_time * 1e-6, render_mode == PATH_TRACER ? "path tracing" : "raster");
 	SDL_SetWindowTitle(platform->window.window, title);
-
 
 	frame_counter++;
 	current_frame_index = (current_frame_index + 1) % FRAMES_IN_FLIGHT;
@@ -901,27 +859,23 @@ void Renderer::draw(ECS* ecs)
 
 void Renderer::trace_rays(VkCommandBuffer cmd)
 {
-	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, rt_pipeline.pipeline);
+	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, pipelines[PATH_TRACER_PIPELINE].pipeline);
 
 	// Update descriptor set
 	u32 frame_index = frame_counter % FRAMES_IN_FLIGHT;
-	u32 aligned_size = vkinit::aligned_size(
-		sizeof(Camera_Component),
-		(u32)context->physical_device_properties.properties.limits.minUniformBufferOffsetAlignment
-	);
-
 	{
 		Descriptor_Info descriptor_info[] =
 		{
 			Descriptor_Info(0, framebuffer.render_targets[PATH_TRACER_COLOR].image.image_view, VK_IMAGE_LAYOUT_GENERAL),
 			Descriptor_Info(scene.tlas.value().acceleration_structure),
-			Descriptor_Info(gpu_camera_data.gpu_buffer.buffer, 0, aligned_size),
-			Descriptor_Info(bilinear_sampler, environment_map.image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+			Descriptor_Info(gpu_camera_data.gpu_buffer.buffer, 0, VK_WHOLE_SIZE),
+			Descriptor_Info(bilinear_sampler, environment_map.image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
+			Descriptor_Info(bilinear_sampler_clamp, cubemap.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
 		};
-		vkCmdPushDescriptorSetWithTemplateKHR(cmd, descriptor_update_template, rt_pipeline.layout, 0, descriptor_info);
+		vkCmdPushDescriptorSetWithTemplateKHR(cmd, descriptor_update_template, pipelines[PATH_TRACER_PIPELINE].layout, 0, descriptor_info);
 	}
-	vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, rt_pipeline.layout, 1, 1, &bindless_descriptor_set, 0, nullptr);
-	vkCmdPushConstants(cmd, rt_pipeline.layout, VK_SHADER_STAGE_RAYGEN_BIT_KHR, 0, sizeof(frames_accumulated), &frames_accumulated);
+	vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, pipelines[PATH_TRACER_PIPELINE].layout, 1, 1, &bindless_descriptor_set, 0, nullptr);
+	vkCmdPushConstants(cmd, pipelines[PATH_TRACER_PIPELINE].layout, VK_SHADER_STAGE_RAYGEN_BIT_KHR, 0, sizeof(frames_accumulated), &frames_accumulated);
 
 	// Trace rays
 
@@ -1043,28 +997,59 @@ void Renderer::rasterize(VkCommandBuffer cmd, ECS* ecs)
 	viewport.maxDepth = 1.0f;
 	viewport.x = 0.f;
 	viewport.y = (float)window_height;
+
+	//goto end_rendering;
 	vkCmdSetViewport(cmd, 0, 1, &viewport);
 
 	vkCmdSetScissor(cmd, 0, 1, &render_area);
 
-	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, raster_pipeline.pipeline);
-	u32 aligned_size = vkinit::aligned_size(
-		sizeof(Camera_Component),
-		(u32)context->physical_device_properties.properties.limits.minUniformBufferOffsetAlignment
-	);
+	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines[SKYBOX_PIPELINE].pipeline);
+	{
+		Descriptor_Info descriptor_info[] =
+		{
+			Descriptor_Info(gpu_camera_data.gpu_buffer.buffer, 0, VK_WHOLE_SIZE),
+			Descriptor_Info(bilinear_sampler_clamp, cubemap.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+		};
+		vkCmdPushDescriptorSetWithTemplateKHR(cmd, pipelines[SKYBOX_PIPELINE].update_template, pipelines[SKYBOX_PIPELINE].layout, 0, descriptor_info);
+	}
+
+	vkCmdDraw(cmd, 36, 1, 0, 0);
+
+#if 1
+	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines[RASTER_PIPELINE].pipeline);
+
 	{
 		Descriptor_Info descriptor_info[] =
 		{
 			Descriptor_Info(bilinear_sampler_clamp, brdf_lut.image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
 			Descriptor_Info(bilinear_sampler, prefiltered_envmap.image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
-			Descriptor_Info(gpu_camera_data.gpu_buffer.buffer, 0, aligned_size),
-			Descriptor_Info(bilinear_sampler, environment_map.image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+			Descriptor_Info(gpu_camera_data.gpu_buffer.buffer, 0, VK_WHOLE_SIZE),
+			Descriptor_Info(bilinear_sampler, environment_map.image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
+			Descriptor_Info(bilinear_sampler_clamp, cubemap.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
+			Descriptor_Info(probe_system.probe_samples.buffer, 0, VK_WHOLE_SIZE),
 		};
-		vkCmdPushDescriptorSetWithTemplateKHR(cmd, raster_pipeline.update_template, raster_pipeline.layout, 0, descriptor_info);
+		vkCmdPushDescriptorSetWithTemplateKHR(cmd, pipelines[RASTER_PIPELINE].update_template, pipelines[RASTER_PIPELINE].layout, 0, descriptor_info);
 	}
-	vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, raster_pipeline.layout, 1, 1, &bindless_descriptor_set, 0, nullptr);
+	vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines[RASTER_PIPELINE].layout, 1, 1, &bindless_descriptor_set, 0, nullptr);
 	
 	//vkCmdDraw(cmd, 36, 1, 0, 0);
+#else
+	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines[CUBEMAP_PIPELINE].pipeline);
+
+	{
+		Descriptor_Info descriptor_info[] =
+		{
+			Descriptor_Info(bilinear_sampler, cubemap.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
+			Descriptor_Info(),
+			Descriptor_Info(gpu_camera_data.gpu_buffer.buffer, 0, VK_WHOLE_SIZE),
+			Descriptor_Info(bilinear_sampler, environment_map.image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+		};
+		vkCmdPushDescriptorSetWithTemplateKHR(cmd, pipelines[CUBEMAP_PIPELINE].update_template, pipelines[CUBEMAP_PIPELINE].layout, 0, descriptor_info);
+	}
+
+	vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines[CUBEMAP_PIPELINE].layout, 1, 1, &bindless_descriptor_set, 0, nullptr);
+
+#endif
 
 	for (auto [a] : ecs->filter<Static_Mesh_Component>())
 	{
@@ -1078,6 +1063,9 @@ void Renderer::rasterize(VkCommandBuffer cmd, ECS* ecs)
 		//vkCmdDrawIndexed(cmd, (u32)mesh->indices.size(), 1, 0, 0, index);
 		vkCmdDrawIndexedIndirect(cmd, indirect_draw_buffer.gpu_buffer.buffer, 0, (u32)mesh->primitives.size(), sizeof(VkDrawIndexedIndirectCommand));
 	}
+end_rendering:
+
+	ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
 
 	vkCmdEndRendering(cmd);
 
@@ -1099,6 +1087,9 @@ void Renderer::cleanup()
 	for (int i = 0; i < FRAMES_IN_FLIGHT; ++i)
 		vkDestroyQueryPool(context->device, query_pools[i], nullptr);
 	vkDestroyDescriptorUpdateTemplate(context->device, descriptor_update_template, nullptr);
+	vkDestroyPipelineLayout(context->device, pipelines[PATH_TRACER_PIPELINE].layout, nullptr);
+	vkDestroyPipeline(context->device, pipelines[PATH_TRACER_PIPELINE].pipeline, nullptr);
+	vkDestroyDescriptorSetLayout(context->device, pipelines[PATH_TRACER_PIPELINE].desc_sets[0], nullptr);
 }
 
 
@@ -1745,4 +1736,3 @@ void Renderer::create_lookup_textures()
 	vk_command_buffer_single_submit(cmd);
 	vkQueueWaitIdle(context->graphics_queue);
 }
-

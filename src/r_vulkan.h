@@ -61,6 +61,18 @@ struct Raytracing_Pipeline
 	Shader_Binding_Table shader_binding_table;
 };
 
+struct Raster_Options
+{
+	VkPolygonMode polygon_mode = VK_POLYGON_MODE_FILL;
+	VkCullModeFlags cull_mode = VK_CULL_MODE_BACK_BIT;
+	VkFrontFace front_face = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+	VkCompareOp depth_compare_op = VK_COMPARE_OP_GREATER;
+	bool depth_test_enable = true;
+	bool depth_write_enable = true;
+	u32 color_attachment_count = 1;
+	std::array<VkFormat, 8> color_formats = {VK_FORMAT_R32G32B32A32_SFLOAT};
+};
+
 struct Garbage_Collector
 {
 	struct Garbage
@@ -92,6 +104,14 @@ struct Async_Upload
 	VkQueue upload_queue;
 	VkSemaphore timeline_sem;
 	u64 timeline_semaphore_value;
+};
+
+struct Cubemap
+{
+	Vk_Allocated_Image image;
+	std::array<VkImageView, 6> image_views; // A view for each face
+	VkImageView view; // Cubemap view
+	u32 size;
 };
 
 struct Vk_Context
@@ -126,6 +146,8 @@ struct Vk_Context
 
 	std::array<Per_Frame_Objects, FRAMES_IN_FLIGHT> frame_objects;
 
+	Platform* platform;
+
 	// Constructor
 	Vk_Context(Platform* window);
 
@@ -137,11 +159,19 @@ struct Vk_Context
 	void create_swapchain(Platform* platform);
 	void create_sync_objects();
 	VkQueryPool create_query_pool();
+
 	Vk_Allocated_Buffer allocate_buffer(uint32_t size,
 		VkBufferUsageFlags usage, VmaMemoryUsage memory_usage, VmaAllocationCreateFlags flags, u64 alignment = 0);
-	Vk_Allocated_Image allocate_image(VkExtent3D extent, VkFormat format, VkImageUsageFlags usage, VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT, VkImageTiling tiling = VK_IMAGE_TILING_OPTIMAL, int mip_levels = 1);
+	Vk_Allocated_Image allocate_image(VkExtent3D extent, VkFormat format, 
+		VkImageUsageFlags usage, VkImageAspectFlags aspect = 
+		VK_IMAGE_ASPECT_COLOR_BIT, VkImageTiling tiling = VK_IMAGE_TILING_OPTIMAL, int mip_levels = 1, VkImageCreateFlags flags = 0,
+		int layers = 1
+	);
 	void free_image(Vk_Allocated_Image img);
 	void free_buffer(Vk_Allocated_Buffer buffer);
+
+	void init_imgui();
+
 	Vk_Allocated_Buffer create_buffer(VkCommandBuffer cmd, size_t size, void* data, VkBufferUsageFlags usage);
 	VkDeviceAddress get_buffer_device_address(const Vk_Allocated_Buffer& buf);
 	VkShaderModule create_shader_module_from_file(const char* filepath);
@@ -154,15 +184,20 @@ struct Vk_Context
 	Vk_Pipeline create_compute_pipeline(const char* shaderpath);
 	VkDescriptorSetLayout create_layout_from_spirv(u8* bytecode, u32 size);
 	Vk_Allocated_Image load_texture_hdri(const char* filepath, VkImageUsageFlags usage = (VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT));
-	Vk_Allocated_Image load_texture(const char* filepath);
+	Vk_Allocated_Image load_texture(const char* filepath, bool flip_y = false);
 	Vk_Allocated_Image load_texture_async(const char* filepath, u64* timeline_semaphore_value);
+	Cubemap create_cubemap(u32 size, VkFormat format);
 	VkDescriptorSetLayout create_descriptor_set_layout(u32 num_shaders, struct Shader* shaders);
 	Raytracing_Pipeline create_raytracing_pipeline(
 		VkShaderModule rgen, VkShaderModule rmiss, VkShaderModule rchit,
 		VkDescriptorSetLayout* layouts, int num_layouts);
 
+	VkCommandBuffer allocate_command_buffer();
+	void free_command_buffer(VkCommandBuffer cmd);
+
 	Vk_Pipeline create_raster_pipeline(VkShaderModule vertex_shader, VkShaderModule fragment_shader,
-		u32 num_layouts, VkDescriptorSetLayout* layouts);
+		u32 num_layouts, VkDescriptorSetLayout* layouts, Raster_Options raster_opt);
+	Vk_Pipeline create_raster_pipeline(const char* vertex_shader, const char* fragment_shader, Raster_Options opt = {});
 
 	void save_screenshot(Vk_Allocated_Image image, const char* filename);
 };

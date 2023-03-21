@@ -4,8 +4,12 @@
 #include "stb/stb_image.h"
 #include "vk_helpers.h"
 #include "shaders.h"
+#include "imgui/imgui.h"
+#include "imgui/imgui_impl_sdl2.h"
+#include "imgui/imgui_impl_vulkan.h"
 
 #define VSYNC 1
+//#define VALIDATION_VERBOSE
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL debug_callback(
 	VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
@@ -14,13 +18,17 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debug_callback(
 	void* pUserData) {
 
 	printf("validation layer: %s\n", pCallbackData->pMessage);
+#ifndef VALIDATION_VERBOSE
 	assert(false);
+#endif
 	return VK_FALSE;
 }
 
 static bool check_extensions(const std::vector<const char*>& device_exts, const std::vector<VkExtensionProperties>& props);
 
 Vk_Context::Vk_Context(Platform* platform)
+	: platform(platform)
+
 {
 	VK_CHECK(volkInitialize());
 
@@ -30,6 +38,7 @@ Vk_Context::Vk_Context(Platform* platform)
 	init_mem_allocator();
 	create_swapchain(platform);
 	create_sync_objects();
+	init_imgui();
 }
 
 void Vk_Context::create_instance(Platform_Window* window)
@@ -83,8 +92,11 @@ void Vk_Context::create_instance(Platform_Window* window)
 	if constexpr (USE_VALIDATION_LAYERS)
 	{
 		VkDebugUtilsMessengerCreateInfoEXT ci{ VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT };
-		ci.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT; // VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT;
-		ci.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+		ci.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT; 
+#ifdef VALIDATION_VERBOSE
+		ci.messageSeverity |= VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT;
+#endif
+		ci.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT;// | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
 		ci.pfnUserCallback = debug_callback;
 		VK_CHECK(vkCreateDebugUtilsMessengerEXT(instance, &ci, nullptr, &debug_messenger));
 		g_garbage_collector->push([=]()
@@ -109,13 +121,21 @@ void Vk_Context::find_physical_device()
 		VK_KHR_SHADER_NON_SEMANTIC_INFO_EXTENSION_NAME
 	};
 
+	// Additional extensions that will be used if they exist but are not required
+	std::vector<const char*> optional_preferred_exts = {
+		VK_KHR_RAY_QUERY_EXTENSION_NAME
+	};
+
+	std::vector<const char*> preferred_extensions = device_exts;
+	preferred_extensions.insert(preferred_extensions.end(), optional_preferred_exts.begin(), optional_preferred_exts.end());
+
 	uint32_t count;
 	vkEnumeratePhysicalDevices(instance, &count, nullptr);
 	assert(count != 0);
 	std::vector<VkPhysicalDevice> devices(count);
 	vkEnumeratePhysicalDevices(instance, &count, devices.data());
 
-	// Find first device with required extensions
+	// Find first device with optional and required extensions
 	for (VkPhysicalDevice d : devices)
 	{
 		uint32_t ext_count;
@@ -124,10 +144,30 @@ void Vk_Context::find_physical_device()
 		std::vector<VkExtensionProperties> ext_props(ext_count);
 		vkEnumerateDeviceExtensionProperties(d, nullptr, &ext_count, ext_props.data());
 
-		if (check_extensions(device_exts, ext_props))
+		if (check_extensions(preferred_extensions, ext_props))
 		{
 			physical_device = d;
 			break;
+		}
+	}
+
+	if (physical_device == VK_NULL_HANDLE)
+	{
+		LOG_DEBUG("Not all optional Vulkan extensions were present, falling back to required extensions.");
+		// Fall back to required extensions
+		for (VkPhysicalDevice d : devices)
+		{
+			uint32_t ext_count;
+			vkEnumerateDeviceExtensionProperties(d, nullptr, &ext_count, nullptr);
+
+			std::vector<VkExtensionProperties> ext_props(ext_count);
+			vkEnumerateDeviceExtensionProperties(d, nullptr, &ext_count, ext_props.data());
+
+			if (check_extensions(device_exts, ext_props))
+			{
+				physical_device = d;
+				break;
+			}
 		}
 	}
 	assert(physical_device != VK_NULL_HANDLE);
@@ -239,6 +279,8 @@ void Vk_Context::find_physical_device()
 	volkLoadDevice(dev);
 
 	device = dev;
+
+	LOG_DEBUG("Selecting physical device: %s\n", phys_dev_props.properties.deviceName);
 
 	vkGetDeviceQueue(device, graphics_idx, 0, &graphics_queue);
 	vkGetDeviceQueue(device, graphics_idx, 1, &async_upload.upload_queue);
@@ -456,10 +498,10 @@ Vk_Allocated_Buffer Vk_Context::allocate_buffer(uint32_t size, VkBufferUsageFlag
 	return buffer;
 }
 
-Vk_Allocated_Image Vk_Context::allocate_image(VkExtent3D extent, VkFormat format, VkImageUsageFlags usage, VkImageAspectFlags aspect, VkImageTiling tiling, int mip_levels)
+Vk_Allocated_Image Vk_Context::allocate_image(VkExtent3D extent, VkFormat format, VkImageUsageFlags usage, VkImageAspectFlags aspect, VkImageTiling tiling, int mip_levels, VkImageCreateFlags flags, int layers)
 {
 	VkImageCreateInfo cinfo{ VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
-	cinfo.arrayLayers = 1;
+	cinfo.arrayLayers = layers;
 	cinfo.extent = extent;
 	cinfo.format = format;
 	cinfo.imageType = extent.depth == 1 ? VK_IMAGE_TYPE_2D : VK_IMAGE_TYPE_3D;
@@ -468,6 +510,7 @@ Vk_Allocated_Image Vk_Context::allocate_image(VkExtent3D extent, VkFormat format
 	cinfo.samples = VK_SAMPLE_COUNT_1_BIT;
 	cinfo.usage = usage; //VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 	cinfo.tiling = tiling;
+	cinfo.flags = flags;
 
 	VmaAllocationCreateInfo allocinfo{};
 	allocinfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
@@ -700,6 +743,10 @@ VkDescriptorSetLayout Vk_Context::create_descriptor_set_layout(u32 num_shaders, 
 				bindings[i].descriptorCount = 1;
 				bindings[i].descriptorType = shader->descriptor_types[i];
 				bindings[i].stageFlags |= shader->shader_stage;
+			}
+			else
+			{
+				bindings[i].binding = i;
 			}
 		}
 	}
@@ -1018,17 +1065,17 @@ Raytracing_Pipeline Vk_Context::create_raytracing_pipeline(
 	VkDeviceAddress base = get_buffer_device_address(rt_sbt_buffer);
 	VkStridedDeviceAddressRegionKHR raygen_region{};
 	raygen_region.deviceAddress = base + raygen_group_index * device_sbt_alignment;
-	raygen_region.stride = group_handle_size;
+	raygen_region.stride = group_size_aligned;
 	raygen_region.size = group_size_aligned;
 
 	VkStridedDeviceAddressRegionKHR miss_region{};
 	miss_region.deviceAddress = base + miss_group_index * device_sbt_alignment;
-	miss_region.stride = group_handle_size;
+	miss_region.stride = group_size_aligned;
 	miss_region.size = group_size_aligned;
 
 	VkStridedDeviceAddressRegionKHR hit_region{};
 	hit_region.deviceAddress = base + hit_group_index * device_sbt_alignment;
-	hit_region.stride = group_handle_size;
+	hit_region.stride = group_size_aligned;
 	hit_region.size = group_size_aligned;
 
 	sbt.raygen_region = raygen_region;
@@ -1041,7 +1088,7 @@ Raytracing_Pipeline Vk_Context::create_raytracing_pipeline(
 	return rt_pp;
 }
 
-Vk_Pipeline Vk_Context::create_raster_pipeline(VkShaderModule vertex_shader, VkShaderModule fragment_shader, u32 num_layouts, VkDescriptorSetLayout* layouts)
+Vk_Pipeline Vk_Context::create_raster_pipeline(VkShaderModule vertex_shader, VkShaderModule fragment_shader, u32 num_layouts, VkDescriptorSetLayout* layouts, Raster_Options raster_opt)
 {
 	Vk_Pipeline pp{};
 
@@ -1067,32 +1114,31 @@ Vk_Pipeline Vk_Context::create_raster_pipeline(VkShaderModule vertex_shader, VkS
 	VkPipelineViewportStateCreateInfo viewport_state = vkinit::pipeline_viewport_state_create_info(1, nullptr, 1, nullptr, true);
 
 	VkPipelineRasterizationStateCreateInfo raster_state{ VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO };
-	raster_state.polygonMode = VK_POLYGON_MODE_FILL;
-	//raster_state.polygonMode = VK_POLYGON_MODE_LINE;
-	//raster_state.cullMode = VK_CULL_MODE_NONE;
-	raster_state.cullMode = VK_CULL_MODE_BACK_BIT;
-	raster_state.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+	raster_state.polygonMode = raster_opt.polygon_mode;
+	raster_state.cullMode = raster_opt.cull_mode;
+	raster_state.frontFace = raster_opt.front_face;
 
 	VkPipelineMultisampleStateCreateInfo multisample_state = vkinit::pipeline_multisample_state_create_info(VK_SAMPLE_COUNT_1_BIT);
 
 	VkPipelineDepthStencilStateCreateInfo depth_stencil_state{ VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO };
-	depth_stencil_state.depthTestEnable = VK_TRUE;
-	depth_stencil_state.depthWriteEnable = VK_TRUE;
-	depth_stencil_state.depthCompareOp = VK_COMPARE_OP_GREATER;
+	depth_stencil_state.depthTestEnable = raster_opt.depth_test_enable;
+	depth_stencil_state.depthWriteEnable = raster_opt.depth_write_enable;
+	depth_stencil_state.depthCompareOp = raster_opt.depth_compare_op;
 	depth_stencil_state.minDepthBounds = 0.f;
 	depth_stencil_state.maxDepthBounds = 1.f;
 
-	VkPipelineColorBlendAttachmentState attachment = vkinit::pipeline_color_blend_attachment_state();
-	VkPipelineColorBlendStateCreateInfo blend_state = vkinit::pipeline_color_blend_state_create_info(1, &attachment);
+	std::vector<VkPipelineColorBlendAttachmentState> attachments(raster_opt.color_attachment_count);
+	for (auto& a : attachments)
+		a = vkinit::pipeline_color_blend_attachment_state();
+	VkPipelineColorBlendStateCreateInfo blend_state = vkinit::pipeline_color_blend_state_create_info((u32)attachments.size(), attachments.data());
 
 	VkDynamicState dynamic_states[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
 	VkPipelineDynamicStateCreateInfo dynamic_state = vkinit::pipeline_dynamic_state_create_info((u32)std::size(dynamic_states), dynamic_states);
 
 	VkPipelineRenderingCreateInfo rendering_create_info{ VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO };
 	rendering_create_info.viewMask = 0;
-	rendering_create_info.colorAttachmentCount = 1;
-	VkFormat color_format = VK_FORMAT_R32G32B32A32_SFLOAT;
-	rendering_create_info.pColorAttachmentFormats = &color_format;
+	rendering_create_info.colorAttachmentCount = raster_opt.color_attachment_count;
+	rendering_create_info.pColorAttachmentFormats = raster_opt.color_formats.data();
 	rendering_create_info.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
 
 	VkGraphicsPipelineCreateInfo pipeline_create_info = { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
@@ -1114,17 +1160,177 @@ Vk_Pipeline Vk_Context::create_raster_pipeline(VkShaderModule vertex_shader, VkS
 	return pp;
 }
 
+void Vk_Context::free_command_buffer(VkCommandBuffer cmd)
+{
+	vkFreeCommandBuffers(device, command_pool, 1, &cmd);
+}
+
+VkCommandBuffer Vk_Context::allocate_command_buffer()
+{
+	VkCommandBufferAllocateInfo info{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO };
+	info.commandPool = command_pool;
+	info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+	info.commandBufferCount = 1;
+
+	VkCommandBuffer cmd = 0;
+	vkAllocateCommandBuffers(device, &info, &cmd);
+	return cmd;
+}
+
+Cubemap Vk_Context::create_cubemap(u32 size, VkFormat format)
+{
+	Cubemap cubemap{};
+
+	cubemap.size = size;
+	cubemap.image = allocate_image({ size, size, 1 }, format,
+		VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+		VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_TILING_OPTIMAL,
+		1, VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT,
+		6 /*layers*/
+	);
+
+	{
+		// Create an image view to use for sampling the cubemap 
+		VkImageViewCreateInfo create_info = vkinit::image_view_create_info(cubemap.image.image, VK_IMAGE_VIEW_TYPE_CUBE, format, 0, 1, 0, 6);
+		vkCreateImageView(device, &create_info, nullptr, &cubemap.view);
+
+		g_garbage_collector->push([=]()
+			{
+				vkDestroyImageView(device, cubemap.view, nullptr);
+			}, Garbage_Collector::SHUTDOWN);
+	}
+
+	// Create views for the 6 faces for rendering to the cubemap
+	for (int face = 0; face < 6; ++face)
+	{
+		VkImageViewCreateInfo create_info = vkinit::image_view_create_info(cubemap.image.image, VK_IMAGE_VIEW_TYPE_2D, format, 0, 1, face, 1);
+		vkCreateImageView(device, &create_info, nullptr, &cubemap.image_views[face]);
+		g_garbage_collector->push([=]()
+			{
+				vkDestroyImageView(device, cubemap.image_views[face], nullptr);
+			}, Garbage_Collector::SHUTDOWN);
+	}
+	return cubemap;
+}
+
+void Vk_Context::init_imgui()
+{
+	//1: create descriptor pool for IMGUI
+	// the size of the pool is very oversize, but it's copied from imgui demo itself.
+	VkDescriptorPoolSize pool_sizes[] =
+	{
+		{ VK_DESCRIPTOR_TYPE_SAMPLER, 1000 },
+		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1000 },
+		{ VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1000 },
+		{ VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1000 },
+		{ VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, 1000 },
+		{ VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, 1000 },
+		{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1000 },
+		{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1000 },
+		{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1000 },
+		{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, 1000 },
+		{ VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 1000 }
+	};
+
+	VkDescriptorPoolCreateInfo pool_info = {};
+	pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+	pool_info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+	pool_info.maxSets = 1000;
+	pool_info.poolSizeCount = (u32)std::size(pool_sizes);
+	pool_info.pPoolSizes = pool_sizes;
+
+	VkDescriptorPool imguiPool;
+	VK_CHECK(vkCreateDescriptorPool(device, &pool_info, nullptr, &imguiPool));
+
+	// 2: initialize imgui library
+
+	//this initializes the core structures of imgui
+	ImGui::CreateContext();
+
+	//this initializes imgui for SDL
+	ImGui_ImplSDL2_InitForVulkan(platform->window.window);
+
+	////this initializes imgui for Vulkan
+	ImGui_ImplVulkan_InitInfo init_info = {};
+	init_info.Instance = instance;
+	init_info.PhysicalDevice = physical_device;
+	init_info.Device = device;
+	init_info.Queue = graphics_queue;
+	init_info.DescriptorPool = imguiPool;
+	init_info.MinImageCount = 3;
+	init_info.ImageCount = 3;
+	init_info.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+
+	ImGui_ImplVulkan_Init(&init_info, VK_NULL_HANDLE, VK_FORMAT_R32G32B32A32_SFLOAT, VK_FORMAT_D32_SFLOAT);
+	//execute a gpu command to upload imgui font textures
+	
+	VkCommandBufferAllocateInfo info{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+	info.commandBufferCount = 1;
+	info.commandPool = command_pool;
+	info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+	VkCommandBuffer cmd;
+	vkAllocateCommandBuffers(device, &info, &cmd);
+
+	VkCommandBufferBeginInfo begin_info{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
+	begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+	vkBeginCommandBuffer(cmd, &begin_info);
+
+	ImGui_ImplVulkan_CreateFontsTexture(cmd);
+
+	vkEndCommandBuffer(cmd);
+
+	VkSubmitInfo submit_info = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
+	submit_info.commandBufferCount = 1;
+	submit_info.pCommandBuffers = &cmd;
+	vkQueueSubmit(graphics_queue, 1, &submit_info, 0);
+	vkQueueWaitIdle(graphics_queue);
+
+	//clear font textures from cpu data
+	ImGui_ImplVulkan_DestroyFontUploadObjects();
+
+	//add the destroy the imgui created structures
+	g_garbage_collector->push([=]() {
+		vkDestroyDescriptorPool(device, imguiPool, nullptr);
+		ImGui_ImplVulkan_Shutdown();
+		}, Garbage_Collector::SHUTDOWN);
+
+	LOG_DEBUG("Initialized imgui\n");
+}
+
 void Vk_Context::save_screenshot(Vk_Allocated_Image image, const char* filename)
 {
 }
 
-Vk_Allocated_Image Vk_Context::load_texture(const char* filepath)
+Vk_Pipeline Vk_Context::create_raster_pipeline(const char* vertex_shader, const char* fragment_shader, Raster_Options opt)
+{
+	Vk_Pipeline pipeline;
+
+	Shader vert_shader{};
+	bool success = load_shader_from_file(&vert_shader, device, vertex_shader);
+	Shader frag_shader{};
+	success = load_shader_from_file(&frag_shader, device, fragment_shader);
+
+	Shader shaders[] = { vert_shader, frag_shader };
+	VkDescriptorSetLayout desc_set_layout = create_descriptor_set_layout((u32)std::size(shaders), shaders);
+
+	pipeline = create_raster_pipeline(vert_shader.shader, frag_shader.shader, 1, &desc_set_layout, opt);
+	pipeline.update_template = create_descriptor_update_template((u32)std::size(shaders), shaders, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout);
+	pipeline.desc_sets[0] = desc_set_layout;
+
+	vkDestroyShaderModule(device, vert_shader.shader, nullptr);
+	vkDestroyShaderModule(device, frag_shader.shader, nullptr);
+
+	return pipeline;
+}
+
+Vk_Allocated_Image Vk_Context::load_texture(const char* filepath, bool flip_y)
 {
 	constexpr int required_n_comps = 4; // GIVE ME 4 CHANNELS!!!
 
-	stbi_set_flip_vertically_on_load(0);
+	stbi_set_flip_vertically_on_load((int)flip_y);
 	int x, y, comp;
 	u8* data = stbi_load(filepath, &x, &y, &comp, required_n_comps);
+	assert(data);
 
 	u32 required_size = (x * y * required_n_comps) * sizeof(u8);
 	Vk_Allocated_Image img = allocate_image(

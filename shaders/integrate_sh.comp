@@ -1,0 +1,69 @@
+#version 460
+
+#extension GL_GOOGLE_include_directive : enable
+
+#include "sh.glsl"
+#define M_PI 3.14159
+#include "sampling.glsl"
+#include "random.glsl"
+
+layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout (binding = 0, set = 0) buffer SH_sample_buffer
+{
+    SH_3 samples[];
+} SH_samples;
+
+layout (binding = 1, set = 0) uniform samplerCube environment_map;
+
+
+
+void main()
+{
+    uvec4 seed = uvec4(420, 69, 1337, 203423);
+
+    const uint samples = 4096;
+    float total_weight = 0.0;
+    SH_3 sh;
+
+    for (int i = 0; i < 9; ++i)
+    {
+        sh.coefs[i] = vec3(0.0f);
+    }
+
+    for (int i = 0; i < samples; ++i)
+    {
+        vec4 rand = vec4(pcg4d(seed)) * ldexp(1.0, -32);
+        vec3 dir = sample_uniform_sphere(rand.xy);
+        vec3 envmap_sample = texture(environment_map, dir).rgb;
+        vec3 n = normalize(dir);
+        float pdf = 1.0 / 4.0; // Pi predivided
+		envmap_sample /= pdf;
+
+        sh.coefs[0] += 0.282095f * envmap_sample;
+		sh.coefs[1] += -0.488603f * n.y * envmap_sample;
+		sh.coefs[2] += 0.488603f * n.z * envmap_sample;
+		sh.coefs[3] += -0.488603f * n.x * envmap_sample;
+		sh.coefs[4] += 1.092548f * n.x * n.y * envmap_sample;
+		sh.coefs[5] += -1.092548f * n.y * n.z * envmap_sample;
+		sh.coefs[6] += 0.315392f * (3.0f * n.z * n.z - 1.0f) * envmap_sample;
+		sh.coefs[7] += -1.092548f * n.x * n.z * envmap_sample;
+		sh.coefs[8] += 0.54627f * (n.x * n.x - n.y * n.y) * envmap_sample;
+
+		total_weight += 1.0f;
+    }
+
+    const vec3 cosine_lobe_band_factor[9] = {
+		vec3(M_PI),
+		vec3(2.0 * M_PI / 3.0f), vec3(2.0 * M_PI / 3.0f), vec3(2.0 * M_PI / 3.0f),
+		vec3(M_PI / 4.0f), vec3(M_PI / 4.0f), vec3(M_PI / 4.0f), vec3(M_PI / 4.0f), vec3(M_PI / 4.0f)
+	};
+
+    for (int i = 0; i < 9; ++i)
+    {
+		sh.coefs[i] *= 1.f / total_weight;
+        sh.coefs[i] *= cosine_lobe_band_factor[i];
+    }
+
+    SH_samples.samples[0] = sh;
+}

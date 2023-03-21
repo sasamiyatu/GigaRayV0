@@ -1,0 +1,143 @@
+#version 460
+
+#extension GL_EXT_ray_tracing : require
+#extension GL_GOOGLE_include_directive : enable
+#extension GL_EXT_debug_printf : enable
+#extension GL_EXT_scalar_block_layout : enable
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#define M_PI 3.14159
+#include "lightmap.glsl"
+#include "random.glsl"
+#include "sampling.glsl"
+#include "math.glsl"
+
+layout(location = 0) rayPayloadEXT Ray_Payload pay;
+
+layout(binding = 0, set = 0, rgba32f) uniform image2D output_image;
+layout(binding = 1, set = 0) uniform accelerationStructureEXT scene;
+layout(binding = 2, set = 0) readonly buffer camera_buffer
+{
+    mat4 viewproj;
+	mat4 view;
+	mat4 inverse_view;
+	mat4 proj;
+};
+layout(binding = 3, set = 0) uniform sampler2D lightmap_tex;
+layout(binding = 4, set = 0, scalar) readonly buffer material_buffer_t
+{
+    Material materials[];
+} material_buffer;
+
+layout(push_constant) uniform constants
+{
+    uint output_mode;
+    uint frame_number;
+} control;
+
+#define MAX_BOUNCES 4
+
+void main()
+{
+    ivec2 p = ivec2(gl_LaunchIDEXT.xy);
+
+    vec2 uv = ((p + 0.5f) / vec2(gl_LaunchSizeEXT.xy)) * 2.f - 1.f;
+
+    vec3 ro = inverse_view[3].xyz;
+    float aspect = proj[1][1] / proj[0][0];
+    float tan_half_fov_y = 1.f / proj[1][1];
+    vec3 rd = normalize(
+        (uv.x * inverse_view[0].xyz * tan_half_fov_y * aspect) - 
+        (uv.y * inverse_view[1].xyz * tan_half_fov_y) -
+        inverse_view[2].xyz
+    );
+
+    pay.instance_id = -1;
+
+    vec3 radiance = vec3(0.0);
+    vec3 throughput = vec3(1.0);
+
+    uvec4 seed = uvec4(gl_LaunchIDEXT.xy, control.frame_number, 1);
+
+    for (int bounce = 0; bounce < MAX_BOUNCES; ++bounce)
+    {
+        traceRayEXT(
+            scene,
+            gl_RayFlagsOpaqueEXT,
+            0xFF,
+            0,
+            0,
+            0,
+            ro,
+            0.0,
+            rd,
+            100000.0,
+            0
+        );
+
+        if (pay.instance_id != -1)
+        {
+            // Hit
+            Material mat = material_buffer.materials[pay.instance_id];
+            radiance += throughput * mat.emissive_factor;
+            
+            Vertex v = get_interpolated_vertex(pay.instance_id, pay.prim_id, pay.barycentrics);
+            vec3 world_normal = normalize(vec3(vec4(v.normal, 0) * pay.world_to_object));
+            vec3 world_pos = vec3(pay.object_to_world * vec4(v.position, 1.0));
+            if (dot(world_normal, -rd) < 0.0) world_normal = -world_normal;
+
+            vec4 rand = vec4(pcg4d(seed)) * ldexp(1.0, -32);
+            mat3 tbn = create_tangent_space(world_normal);
+            ro = offset_ray(world_pos, world_normal);
+            rd = tbn * random_cosine_hemisphere(rand.xy);
+
+            throughput *= mat.base_color_factor.rgb;
+        }
+        else
+        {
+            break;
+        }
+    }
+
+
+    vec3 color = radiance;
+#if 0
+    if (pay.instance_id != -1)
+    {
+        uvec4 seed = uvec4(pay.instance_id, 0, 42, 1337);
+        seed = pcg4d(seed);
+        color = vec3(seed.xyz) * ldexp(1.0, -32);
+        Vertex v = get_interpolated_vertex(pay.instance_id, pay.prim_id, pay.barycentrics);
+        vec3 world_normal = normalize(vec3(vec4(v.normal, 0) * pay.world_to_object));
+        world_normal = v.normal;
+        ivec2 pixelcoord = ivec2(textureSize(lightmap_tex, 0) * v.uv1);
+        int odd = (pixelcoord.x ^ pixelcoord.y) & 1;
+        vec3 c = odd == 1 ? vec3(0.25) : vec3(0.5);
+        vec3 lm = texture(lightmap_tex, v.uv1).rgb;
+        vec3 pos = vec3(pay.object_to_world * vec4(v.position, 1.0));
+        Material mat = material_buffer.materials[pay.instance_id];
+        if (mat.emissive_factor.r > 0.0)
+            mat.base_color_factor = vec4(1.0, 0.0, 1.0, 1.0);
+        switch (control.output_mode)
+        {
+        case 0:
+            color = c * v.color;
+            break;
+        case 1:
+            color = lm;
+            break;
+        case 2:
+            color = world_normal * 0.5 + 0.5;
+            break;
+        case 3:
+            color = pos;
+            break;
+        case 4:
+            color = mat.base_color_factor.rgb;
+            break;
+        }
+    }
+#endif
+
+    imageStore(output_image, p, vec4(color, 1.0));
+}

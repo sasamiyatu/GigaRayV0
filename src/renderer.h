@@ -1,7 +1,6 @@
 #pragma once
 #include "Volk/volk.h"
 #include "vma/vk_mem_alloc.h"
-#define VK_NO_PROTOTYPES
 #include "SDL.h"
 #include "SDL_vulkan.h"
 #include <vector>
@@ -14,6 +13,7 @@
 #include "material.h"
 #include "gbuffer.h"
 #include "timer.h"
+#include "sh.h"
 
 #define VK_CHECK(x)                                                 \
 	do                                                              \
@@ -99,6 +99,26 @@ enum Render_Targets
 	MAX
 };
 
+enum Pipelines
+{
+	PATH_TRACER_PIPELINE = 0,
+	RASTER_PIPELINE,
+	CUBEMAP_PIPELINE,
+	GENERATE_CUBEMAP_PIPELINE,
+	GENERATE_CUBEMAP_PIPELINE2,
+	SKYBOX_PIPELINE,
+	PIPELINE_COUNT,
+};
+
+enum Samplers
+{
+	POINT_SAMPLER = 0,
+	BILINEAR_SAMPLER,
+	CUBEMAP_SAMPLER,
+	SAMPLER_COUNT
+};
+
+
 struct Renderer
 {
 	enum Render_Mode {
@@ -113,9 +133,10 @@ struct Renderer
 	Platform* platform;
 	bool initialized = false;
 
-	Vk_Pipeline rt_pipeline;
+	Vk_Pipeline pipelines[PIPELINE_COUNT];
+	VkSampler samplers[SAMPLER_COUNT];
+
 	Raytracing_Pipeline primary_ray_pipeline;
-	Vk_Pipeline raster_pipeline;
 
 	Framebuffer framebuffer;
 	Vk_Allocated_Image final_output; // This is what gets blitted into the swapchain at the end
@@ -137,6 +158,7 @@ struct Renderer
 	VkQueryPool query_pools[FRAMES_IN_FLIGHT];
 	Vk_Allocated_Image brdf_lut;
 	Vk_Allocated_Image prefiltered_envmap;
+	Cubemap cubemap;
 	GPU_Buffer indirect_draw_buffer;
 	GPU_Buffer instance_data_buffer;
 
@@ -149,6 +171,8 @@ struct Renderer
 	Resource_Manager<Mesh>* mesh_manager;
 	Resource_Manager<Texture>* texture_manager;
 	Resource_Manager<Material>* material_manager;
+
+	Probe_System probe_system;
 
 	Timer* timer;
 
@@ -173,7 +197,8 @@ struct Renderer
 	void vk_command_buffer_single_submit(VkCommandBuffer cmd);
 	Vk_Pipeline vk_create_rt_pipeline();
 	Raytracing_Pipeline create_gbuffer_rt_pipeline();
-	Vk_Pipeline create_raster_pipeline();
+	Vk_Pipeline create_raster_graphics_pipeline(const char* vertex_shader_path, const char* fragment_shader_path, 
+		bool use_bindless_layout, Raster_Options opt = {});
 
 	void create_vertex_buffer(Mesh* mesh, VkCommandBuffer cmd);
 	void create_index_buffer(Mesh* mesh, VkCommandBuffer cmd);
@@ -183,7 +208,7 @@ struct Renderer
 	Vk_Allocated_Image prefilter_envmap(VkCommandBuffer cmd, Vk_Allocated_Image envmap);
 
 	void create_lookup_textures();
-
+	void create_cubemap_from_envmap();
 	void do_frame(ECS* ecs);
 	void init_scene(ECS* ecs);
 	void pre_frame();
