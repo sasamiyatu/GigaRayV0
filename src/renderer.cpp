@@ -412,16 +412,6 @@ void Renderer::init_scene(ECS* ecs)
 		VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
 
 	create_cubemap_from_envmap();
-
-	{
-		VkCommandBuffer cmd = get_current_frame_command_buffer();
-		probe_system.init(context);
-		vk_begin_command_buffer(get_current_frame_command_buffer());
-		probe_system.bake(cmd, &cubemap, bilinear_sampler_clamp);
-		vkEndCommandBuffer(cmd);
-		vk_command_buffer_single_submit(cmd);
-		vkQueueWaitIdle(context->graphics_queue);
-	}
 	
 	{
 		// Update bindless textures
@@ -506,14 +496,19 @@ void Renderer::init_scene(ECS* ecs)
 	// Prefilter envmap
 	prefiltered_envmap = prefilter_envmap(cmd, environment_map);
 
+	glm::vec3 scene_bbmin = glm::vec3(INFINITY);
+	glm::vec3 scene_bbmax = glm::vec3(-INFINITY);
 	// Create vertex / index buffers
 	for (auto [mesh] : ecs->filter<Static_Mesh_Component>())
 	{
 		Mesh* m = mesh->manager->get_resource_with_id(mesh->mesh_id);
 		if (m->vertex_buffer.buffer != VK_NULL_HANDLE && m->index_buffer.buffer != VK_NULL_HANDLE)
 			continue;
-		create_vertex_buffer(m, cmd);
-		create_index_buffer(m, cmd);
+
+		scene_bbmin = glm::min(m->bbmin, scene_bbmin);
+		scene_bbmax = glm::max(m->bbmax, scene_bbmax);
+		create_vertex_buffer(m, cmd, context);
+		create_index_buffer(m, cmd, context);
 		
 		u32 prim_count = (u32)m->primitives.size();
 		m->instance_data_buffer = context->create_gpu_buffer((u32)(m->primitives.size() * sizeof(Primitive_Info)), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
@@ -621,6 +616,18 @@ void Renderer::init_scene(ECS* ecs)
 	}
 
 	vkQueueWaitIdle(context->graphics_queue);
+
+	{
+		// Bake light probes
+		VkCommandBuffer cmd = get_current_frame_command_buffer();
+		probe_system.init(context, bindless_descriptor_set, bindless_set_layout);
+		probe_system.init_probe_grid(scene_bbmin, scene_bbmax);
+		vk_begin_command_buffer(get_current_frame_command_buffer());
+		probe_system.bake(cmd, &cubemap, bilinear_sampler_clamp);
+		vkEndCommandBuffer(cmd);
+		vk_command_buffer_single_submit(cmd);
+		vkQueueWaitIdle(context->graphics_queue);
+	}
 }
 
 void full_barrier(VkCommandBuffer cmd)
@@ -1027,6 +1034,7 @@ void Renderer::rasterize(VkCommandBuffer cmd, ECS* ecs)
 			Descriptor_Info(bilinear_sampler, environment_map.image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
 			Descriptor_Info(bilinear_sampler_clamp, cubemap.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
 			Descriptor_Info(probe_system.probe_samples.buffer, 0, VK_WHOLE_SIZE),
+			Descriptor_Info(scene.tlas.value().acceleration_structure),
 		};
 		vkCmdPushDescriptorSetWithTemplateKHR(cmd, pipelines[RASTER_PIPELINE].update_template, pipelines[RASTER_PIPELINE].layout, 0, descriptor_info);
 	}
@@ -1267,72 +1275,6 @@ static bool check_extensions(const std::vector<const char*>& device_exts, const 
 	return true;
 }
 
-
-void Renderer::create_vertex_buffer(Mesh* mesh, VkCommandBuffer cmd)
-{
-	u32 buffer_size = mesh->get_vertex_buffer_size();
-	mesh->vertex_buffer = context->allocate_buffer(buffer_size,
-		VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT
-		| VK_BUFFER_USAGE_VERTEX_BUFFER_BIT
-		| VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR
-		| VK_BUFFER_USAGE_TRANSFER_DST_BIT
-		| VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-		VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0);
-
-
-	mesh->vertex_buffer_address = context->get_buffer_device_address(mesh->vertex_buffer);
-
-	Vk_Allocated_Buffer tmp_staging_buffer = context->allocate_buffer(
-		buffer_size,
-		VK_BUFFER_USAGE_TRANSFER_SRC_BIT, 
-		VMA_MEMORY_USAGE_AUTO, VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT, 0);
-
-
-	void* mapped;
-	vmaMapMemory(context->allocator, tmp_staging_buffer.allocation, &mapped);
-	memcpy(mapped, mesh->vertices.data(), buffer_size);
-	vmaUnmapMemory(context->allocator, tmp_staging_buffer.allocation);
-
-	VkBufferCopy copy_region{};
-	copy_region.srcOffset = 0; // Optional
-	copy_region.dstOffset = 0; // Optional
-	copy_region.size = buffer_size;
-
-	vkCmdCopyBuffer(cmd, tmp_staging_buffer.buffer, mesh->vertex_buffer.buffer, 1, &copy_region);
-}
-
-void Renderer::create_index_buffer(Mesh* mesh, VkCommandBuffer cmd)
-{
-	u32 buffer_size = mesh->get_index_buffer_size();
-	mesh->index_buffer = context->allocate_buffer(buffer_size,
-		VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT
-		| VK_BUFFER_USAGE_INDEX_BUFFER_BIT
-		| VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR
-		| VK_BUFFER_USAGE_TRANSFER_DST_BIT
-		| VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-		VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0);
-
-
-	mesh->index_buffer_address = context->get_buffer_device_address(mesh->index_buffer);
-
-	Vk_Allocated_Buffer tmp_staging_buffer = context->allocate_buffer(
-		buffer_size,
-		VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-		VMA_MEMORY_USAGE_AUTO, VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT, 0);
-
-
-	void* mapped;
-	vmaMapMemory(context->allocator, tmp_staging_buffer.allocation, &mapped);
-	memcpy(mapped, mesh->indices.data(), buffer_size);
-	vmaUnmapMemory(context->allocator, tmp_staging_buffer.allocation);
-
-	VkBufferCopy copy_region{};
-	copy_region.srcOffset = 0; // Optional
-	copy_region.dstOffset = 0; // Optional
-	copy_region.size = buffer_size;
-
-	vkCmdCopyBuffer(cmd, tmp_staging_buffer.buffer, mesh->index_buffer.buffer, 1, &copy_region);
-}
 
 void Renderer::create_bottom_level_acceleration_structure(Mesh* mesh)
 {

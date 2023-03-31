@@ -2,10 +2,13 @@
 #extension GL_GOOGLE_include_directive : enable
 #extension GL_EXT_scalar_block_layout : enable
 #extension GL_EXT_nonuniform_qualifier : enable
+#extension GL_EXT_ray_tracing : require
+#extension GL_EXT_ray_query : require
 #include "math.glsl"
 #include "scene.glsl"
 #include "brdf.h"
 #include "sh.glsl"
+#include "random.glsl"
 
 layout(set = 0, binding = 0) uniform sampler2D brdf_lut;
 layout(set = 0, binding = 1) uniform sampler2D prefiltered_envmap;
@@ -13,6 +16,7 @@ layout(set = 0, binding = 5) buffer SH_sample_buffer
 {
     SH_3 samples[];
 } SH_samples;
+layout(set = 0, binding = 6) uniform accelerationStructureEXT scene;
 
 layout(location = 0) in vec3 in_normal;
 layout(location = 1) in vec3 base_color;
@@ -59,6 +63,26 @@ void main()
     vec3 N = normal;
     vec3 V = normalize(camera_pos - frag_pos);
     vec3 R = reflect(-V, normal);
+
+    vec3 L = normalize(vec3(0.0, 1.0, 0.2));
+
+#if 1
+    rayQueryEXT rq;
+
+    rayQueryInitializeEXT(rq, scene, gl_RayFlagsTerminateOnFirstHitEXT, 0xFF, frag_pos + normal * 0.001, 0.0, L, 10000.0);
+
+    rayQueryProceedEXT(rq);
+
+    if (rayQueryGetIntersectionTypeEXT(rq, true) != gl_RayQueryCommittedIntersectionNoneEXT) 
+    {
+        uint custom_index = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
+        uvec4 seed = uvec4(custom_index, 0, 1, 2);
+        uvec4 rand = pcg4d(seed);
+        //color = vec4(0.0, 0.0, 0.0, 1.0);
+        color = vec4(vec3(rand) * ldexp(1.0, -32), 1.0);
+        return;
+    }   
+#endif
     vec3 envmap_sample = texture(envmap_cube, R).rgb;
     vec2 uv = equirectangular_to_uv(R);
     float lod = roughness * 4.0;
@@ -75,7 +99,7 @@ void main()
     float metallic = metallic_roughness.b;
     float alpha = metallic_roughness.g * metallic_roughness.g;
     float alpha2 = alpha * alpha;
-    vec3 L = normalize(vec3(0.0, 1.0, 0.2));
+
     vec3 H = normalize(L + V);
     float NoL = max(0.0, dot(N, L));
     float NoH = max(0.0, dot(N, H));
@@ -104,8 +128,8 @@ void main()
     //ckRoughness(NdotV, SILVER, roughness);
     //vec3 specular = env * (specular_color * t.x + t.y);
     color = vec4(total, 1.0);
-    color = vec4(envmap_sample, 1.0);
-    SH_3 sh = SH_samples.samples[0];
-    vec3 evaluated_sh = eval_sh(sh, N);
-    color = vec4(evaluated_sh, 1.0);
+    // color = vec4(envmap_sample, 1.0);
+    // SH_3 sh = SH_samples.samples[0];
+    // vec3 evaluated_sh = eval_sh(sh, N);
+    // color = vec4(evaluated_sh, 1.0);
 }

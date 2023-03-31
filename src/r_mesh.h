@@ -1,6 +1,6 @@
 #pragma once
-#include "ecs.h"
-#include "renderer.h"
+#include "defines.h"
+#include "r_vulkan.h"
 
 struct Vertex
 {
@@ -8,6 +8,25 @@ struct Vertex
 	glm::vec3 normal;
 	glm::vec2 texcoord;
 	glm::vec4 tangent;
+};
+
+struct Acceleration_Structure
+{
+	enum Level
+	{
+		BOTTOM_LEVEL = 0,
+		TOP_LEVEL
+	};
+	VkAccelerationStructureKHR acceleration_structure;
+	Level level;
+	Vk_Allocated_Buffer acceleration_structure_buffer;
+	VkDeviceAddress acceleration_structure_buffer_address;
+	Vk_Allocated_Buffer scratch_buffer;
+	VkDeviceAddress scratch_buffer_address;
+
+	// Only used for TLAS
+	Vk_Allocated_Buffer tlas_instances;
+	VkDeviceAddress tlas_instances_address;
 };
 
 struct Mesh_Primitive
@@ -23,6 +42,8 @@ struct Mesh
 	std::vector<Vertex> vertices;
 	std::vector<uint32_t> indices;
 	std::vector<Mesh_Primitive> primitives;
+	glm::vec3 bbmin = glm::vec3(INFINITY);
+	glm::vec3 bbmax = glm::vec3(-INFINITY);
 	
 	Vk_Allocated_Buffer vertex_buffer;
 	Vk_Allocated_Buffer index_buffer;
@@ -59,7 +80,12 @@ struct Geometry
 
 void merge_meshes(u32 num_meshes, Mesh* meshes, Mesh* out);
 
+struct ECS;
+
 Mesh* get_mesh(ECS* ecs, uint32_t entity_id);
 
 Mesh create_sphere(u32 subdivision);
 Mesh create_box(float x_scale = 1.0f, float y_scale = 1.0f, float z_scale = 1.0f);
+
+void create_vertex_buffer(Mesh* mesh, VkCommandBuffer cmd, Vk_Context* ctx);
+void create_index_buffer(Mesh* mesh, VkCommandBuffer cmd, Vk_Context* ctx);

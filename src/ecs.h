@@ -1,5 +1,4 @@
 #pragma once
-#include "renderer.h"
 #include "defines.h"
 #include "resource_manager.h"
 #include <vector>
@@ -17,7 +16,8 @@
 	X(Camera_Component, camera_component) \
 	X(Velocity_Component, velocity_component)
 
-
+struct Renderer;
+struct Mesh;
 
 struct Renderable_Component
 {

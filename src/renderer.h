@@ -14,6 +14,7 @@
 #include "gbuffer.h"
 #include "timer.h"
 #include "sh.h"
+#include "texture.h"
 
 #define VK_CHECK(x)                                                 \
 	do                                                              \
@@ -27,7 +28,7 @@
 	} while (0)
 
 struct ECS;
-
+struct Mesh;
 
 struct Render_Target
 {
@@ -42,25 +43,6 @@ struct Framebuffer
 	std::vector<Render_Target> render_targets;
 };
 
-
-struct Acceleration_Structure
-{
-	enum Level
-	{
-		BOTTOM_LEVEL = 0,
-		TOP_LEVEL
-	};
-	VkAccelerationStructureKHR acceleration_structure;
-	Level level;
-	Vk_Allocated_Buffer acceleration_structure_buffer;
-	VkDeviceAddress acceleration_structure_buffer_address;
-	Vk_Allocated_Buffer scratch_buffer;
-	VkDeviceAddress scratch_buffer_address;
-
-	// Only used for TLAS
-	Vk_Allocated_Buffer tlas_instances;
-	VkDeviceAddress tlas_instances_address;
-};
 
 struct GPU_Camera_Data
 {
@@ -77,11 +59,6 @@ struct Scene
 	Vk_Allocated_Buffer material_buffer;
 };
 
-struct Texture
-{
-	Vk_Allocated_Image image;
-
-};
 
 struct Gbuffer
 {
@@ -200,8 +177,6 @@ struct Renderer
 	Vk_Pipeline create_raster_graphics_pipeline(const char* vertex_shader_path, const char* fragment_shader_path, 
 		bool use_bindless_layout, Raster_Options opt = {});
 
-	void create_vertex_buffer(Mesh* mesh, VkCommandBuffer cmd);
-	void create_index_buffer(Mesh* mesh, VkCommandBuffer cmd);
 	void create_bottom_level_acceleration_structure(Mesh* mesh);
 	void build_bottom_level_acceleration_structure(Mesh* mesh, VkCommandBuffer cmd);
 	void create_top_level_acceleration_structure(ECS* ecs, VkCommandBuffer cmd);

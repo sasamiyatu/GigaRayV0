@@ -1,4 +1,5 @@
 #include "r_mesh.h"
+#include "ecs.h"
 #include "resource_manager.h"
 
 void merge_meshes(u32 num_meshes, Mesh* meshes, Mesh* out)
@@ -19,6 +20,8 @@ void merge_meshes(u32 num_meshes, Mesh* meshes, Mesh* out)
 		assert(meshes[i].primitives.size() == 1);
 		prim.material_id = meshes[i].primitives[0].material_id;
 		out->primitives.push_back(prim);
+		out->bbmax = glm::max(out->bbmax, meshes[i].bbmax);
+		out->bbmin = glm::min(out->bbmin, meshes[i].bbmin);
 	}
 }
 
@@ -251,4 +254,70 @@ uint32_t Mesh::get_vertex_size()
 uint32_t Mesh::get_primitive_count()
 {
 	return (uint32_t)(indices.size() / 3);
+}
+
+void create_vertex_buffer(Mesh* mesh, VkCommandBuffer cmd, Vk_Context* ctx)
+{
+	u32 buffer_size = mesh->get_vertex_buffer_size();
+	mesh->vertex_buffer = ctx->allocate_buffer(buffer_size,
+		VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT
+		| VK_BUFFER_USAGE_VERTEX_BUFFER_BIT
+		| VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR
+		| VK_BUFFER_USAGE_TRANSFER_DST_BIT
+		| VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+		VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0);
+
+
+	mesh->vertex_buffer_address = ctx->get_buffer_device_address(mesh->vertex_buffer);
+
+	Vk_Allocated_Buffer tmp_staging_buffer = ctx->allocate_buffer(
+		buffer_size,
+		VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+		VMA_MEMORY_USAGE_AUTO, VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT, 0);
+
+
+	void* mapped;
+	vmaMapMemory(ctx->allocator, tmp_staging_buffer.allocation, &mapped);
+	memcpy(mapped, mesh->vertices.data(), buffer_size);
+	vmaUnmapMemory(ctx->allocator, tmp_staging_buffer.allocation);
+
+	VkBufferCopy copy_region{};
+	copy_region.srcOffset = 0; // Optional
+	copy_region.dstOffset = 0; // Optional
+	copy_region.size = buffer_size;
+
+	vkCmdCopyBuffer(cmd, tmp_staging_buffer.buffer, mesh->vertex_buffer.buffer, 1, &copy_region);
+}
+
+void create_index_buffer(Mesh* mesh, VkCommandBuffer cmd, Vk_Context* ctx)
+{
+	u32 buffer_size = mesh->get_index_buffer_size();
+	mesh->index_buffer = ctx->allocate_buffer(buffer_size,
+		VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT
+		| VK_BUFFER_USAGE_INDEX_BUFFER_BIT
+		| VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR
+		| VK_BUFFER_USAGE_TRANSFER_DST_BIT
+		| VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+		VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0);
+
+
+	mesh->index_buffer_address = ctx->get_buffer_device_address(mesh->index_buffer);
+
+	Vk_Allocated_Buffer tmp_staging_buffer = ctx->allocate_buffer(
+		buffer_size,
+		VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+		VMA_MEMORY_USAGE_AUTO, VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT, 0);
+
+
+	void* mapped;
+	vmaMapMemory(ctx->allocator, tmp_staging_buffer.allocation, &mapped);
+	memcpy(mapped, mesh->indices.data(), buffer_size);
+	vmaUnmapMemory(ctx->allocator, tmp_staging_buffer.allocation);
+
+	VkBufferCopy copy_region{};
+	copy_region.srcOffset = 0; // Optional
+	copy_region.dstOffset = 0; // Optional
+	copy_region.size = buffer_size;
+
+	vkCmdCopyBuffer(cmd, tmp_staging_buffer.buffer, mesh->index_buffer.buffer, 1, &copy_region);
 }

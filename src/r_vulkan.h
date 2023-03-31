@@ -142,6 +142,8 @@ struct Vk_Context
 	VkQueue graphics_queue;
 	Async_Upload async_upload;
 	VkPhysicalDeviceProperties2 physical_device_properties;
+	VkPhysicalDeviceRayTracingPipelinePropertiesKHR raytracing_pipeline_properties;
+	VkPhysicalDeviceSubgroupProperties subgroup_properties;
 	VkPhysicalDeviceAccelerationStructurePropertiesKHR acceleration_structure_properties = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR };
 
 	std::array<Per_Frame_Objects, FRAMES_IN_FLIGHT> frame_objects;
@@ -181,7 +183,7 @@ struct Vk_Context
 	VkDeviceAddress get_acceleration_structure_device_address(VkAccelerationStructureKHR as);
 	VkSemaphore create_semaphore(bool timeline = false);
 	GPU_Buffer create_gpu_buffer(u32 size, VkBufferUsageFlags usage_flags, u32 alignment = 0);
-	Vk_Pipeline create_compute_pipeline(const char* shaderpath);
+	Vk_Pipeline create_compute_pipeline(const char* shaderpat, VkDescriptorSetLayout bindless_layout = VK_NULL_HANDLE);
 	VkDescriptorSetLayout create_layout_from_spirv(u8* bytecode, u32 size);
 	Vk_Allocated_Image load_texture_hdri(const char* filepath, VkImageUsageFlags usage = (VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT));
 	Vk_Allocated_Image load_texture(const char* filepath, bool flip_y = false);

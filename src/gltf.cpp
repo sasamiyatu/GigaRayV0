@@ -5,6 +5,8 @@
 #include "common.h"
 #include "janitor.h"
 #include "r_mesh.h"
+#include "resource_manager.h"
+#include "texture.h"
 
 template <typename T>
 static void read_data(cgltf_accessor* acc, u32 stride, const std::map<std::string, u8*>& buffer_data, T* out_data)
@@ -254,6 +256,8 @@ void create_from_mesh2(Mesh2* m, u32 mesh_count, Mesh* out_meshes)
             else
                 new_vert.tangent = glm::vec4(1.f, 0.f, 0.f, 1.f);
             out_meshes[i].vertices[j] = new_vert;
+            out_meshes[i].bbmax = glm::max(new_vert.pos, mesh->bbmax);
+            out_meshes[i].bbmin = glm::min(new_vert.pos, mesh->bbmin);
         }
     }
 }

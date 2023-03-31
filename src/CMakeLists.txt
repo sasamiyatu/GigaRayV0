@@ -46,6 +46,8 @@ add_executable(GigaRayV0
     sh.cpp
     shaders.h 
     shaders.cpp
+    texture.h
+    texture.cpp
     timer.h 
     timer.cpp
     vk_helpers.h

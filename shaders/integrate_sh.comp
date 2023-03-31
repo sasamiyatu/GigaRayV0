@@ -1,26 +1,50 @@
 #version 460
 
 #extension GL_GOOGLE_include_directive : enable
+#extension GL_EXT_ray_tracing : enable
+#extension GL_EXT_ray_query : enable
+#extension GL_KHR_shader_subgroup_arithmetic : enable
+#extension GL_EXT_scalar_block_layout : enable
+
+#define M_PI 3.14159
 
 #include "sh.glsl"
-#define M_PI 3.14159
 #include "sampling.glsl"
 #include "random.glsl"
+#include "test.glsl"
 
-layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout (local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 
 layout (binding = 0, set = 0) buffer SH_sample_buffer
 {
     SH_3 samples[];
 } SH_samples;
 
-layout (binding = 1, set = 0) uniform samplerCube environment_map;
+layout (binding = 1, set = 0) uniform samplerCube env_map;
+layout (binding = 2, set = 0) uniform accelerationStructureEXT scene;
 
+layout (set = 1, binding = 0) uniform sampler2D textures[];
+layout (set = 1, binding = 1, scalar) readonly buffer vertex_buffer_array_t
+{
+    Vertex_Data verts[];
+} vertex_buffer_array[];
+layout (set = 1, binding = 2, scalar) readonly buffer index_buffer_array_t
+{
+    Index_Data indices[];
+} index_buffer_array[];
+layout (set = 1, binding = 3, scalar) readonly buffer material_array_t
+{
+    Material materials[];
+} material_array;
 
+layout(set = 1, binding = 4, scalar) readonly buffer primitive_info_t
+{
+    Primitive_Info primitives[];
+} primitive_info_array[];
 
 void main()
 {
-    uvec4 seed = uvec4(420, 69, 1337, 203423);
+    uvec4 seed = uvec4(420, 69, 1337, gl_LocalInvocationID);
 
     const uint samples = 4096;
     float total_weight = 0.0;
@@ -31,11 +55,15 @@ void main()
         sh.coefs[i] = vec3(0.0f);
     }
 
-    for (int i = 0; i < samples; ++i)
+    const uint subgroup_size = 32;
+    const float inv_subgroup_size = 1.0 / float(subgroup_size);
+    const uint samples_per_thread = samples / subgroup_size;
+
+    for (int i = 0; i < 1; ++i)
     {
         vec4 rand = vec4(pcg4d(seed)) * ldexp(1.0, -32);
         vec3 dir = sample_uniform_sphere(rand.xy);
-        vec3 envmap_sample = texture(environment_map, dir).rgb;
+        vec3 envmap_sample = texture(env_map, dir).rgb;
         vec3 n = normalize(dir);
         float pdf = 1.0 / 4.0; // Pi predivided
 		envmap_sample /= pdf;
@@ -53,17 +81,37 @@ void main()
 		total_weight += 1.0f;
     }
 
-    const vec3 cosine_lobe_band_factor[9] = {
-		vec3(M_PI),
-		vec3(2.0 * M_PI / 3.0f), vec3(2.0 * M_PI / 3.0f), vec3(2.0 * M_PI / 3.0f),
-		vec3(M_PI / 4.0f), vec3(M_PI / 4.0f), vec3(M_PI / 4.0f), vec3(M_PI / 4.0f), vec3(M_PI / 4.0f)
-	};
-
     for (int i = 0; i < 9; ++i)
     {
 		sh.coefs[i] *= 1.f / total_weight;
-        sh.coefs[i] *= cosine_lobe_band_factor[i];
+        
     }
 
-    SH_samples.samples[0] = sh;
+    barrier();
+
+    SH_3 subgroup_SH;
+
+    for (int i = 0; i < 9; ++i)
+    {
+        subgroup_SH.coefs[i] = subgroupAdd(sh.coefs[i]);
+        //subgroup_SH.coefs[i] = sh.coefs[i];
+    }
+
+    if (gl_LocalInvocationID == uvec3(0, 0, 0))
+    {
+
+        const vec3 cosine_lobe_band_factor[9] = {
+            vec3(M_PI),
+            vec3(2.0 * M_PI / 3.0f), vec3(2.0 * M_PI / 3.0f), vec3(2.0 * M_PI / 3.0f),
+            vec3(M_PI / 4.0f), vec3(M_PI / 4.0f), vec3(M_PI / 4.0f), vec3(M_PI / 4.0f), vec3(M_PI / 4.0f)
+        };
+
+        for (int i = 0; i < 9; ++i)
+        {
+            subgroup_SH.coefs[i] *= cosine_lobe_band_factor[i];
+            subgroup_SH.coefs[i] *= inv_subgroup_size;
+        }
+
+        SH_samples.samples[0] = subgroup_SH;
+    }
 }

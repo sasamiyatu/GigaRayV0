@@ -88,8 +88,8 @@ int main(int argc, char** argv)
 	}
 #else
 	{
-		//i32 mesh_id = mesh_manager.register_resource(combined_mesh, "combined");
-		i32 mesh_id = mesh_manager.register_resource(test_mesh, "combined");
+		i32 mesh_id = mesh_manager.register_resource(combined_mesh, "combined");
+		//i32 mesh_id = mesh_manager.register_resource(test_mesh, "combined");
 		Static_Mesh_Component meshcomp = { &mesh_manager, mesh_id };
 		ecs.add_entity(Transform_Component(), meshcomp);
 	}

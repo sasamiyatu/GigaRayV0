@@ -1,9 +1,9 @@
 #pragma once
 #include "defines.h"
 #include "obj.h"
-#include "renderer.h"
+//#include "renderer.h"
 
-struct Mesh;
+//struct Mesh;
 
 struct Texture;
 

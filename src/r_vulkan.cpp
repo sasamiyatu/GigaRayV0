@@ -123,7 +123,8 @@ void Vk_Context::find_physical_device()
 
 	// Additional extensions that will be used if they exist but are not required
 	std::vector<const char*> optional_preferred_exts = {
-		VK_KHR_RAY_QUERY_EXTENSION_NAME
+		VK_KHR_RAY_QUERY_EXTENSION_NAME,
+		VK_KHR_SPIRV_1_4_EXTENSION_NAME
 	};
 
 	std::vector<const char*> preferred_extensions = device_exts;
@@ -180,10 +181,20 @@ void Vk_Context::find_physical_device()
 	VkPhysicalDeviceRayTracingPipelinePropertiesKHR rt_pipeline_props{
 		VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR
 	};
+	VkPhysicalDeviceSubgroupProperties subgroup_props{ 
+		VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES 
+	};
+	
 	phys_dev_props.pNext = &rt_pipeline_props;
 	rt_pipeline_props.pNext = &acceleration_structure_properties;
+	acceleration_structure_properties.pNext = &subgroup_props;
+	
 	vkGetPhysicalDeviceProperties2(physical_device, &phys_dev_props);
 	physical_device_properties = phys_dev_props;
+	raytracing_pipeline_properties = rt_pipeline_props;
+	subgroup_properties = subgroup_props;
+
+	bool arithmetic_supported = (subgroup_properties.supportedOperations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
 
 	VkPhysicalDeviceFeatures2 features2{
 		VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2
@@ -209,6 +220,9 @@ void Vk_Context::find_physical_device()
 	VkPhysicalDeviceMaintenance4Features maintenance_feats{
 		VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_FEATURES
 	};
+	VkPhysicalDeviceRayQueryFeaturesKHR ray_query_feats{
+		VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR
+	};
 
 
 	features2.pNext = &features13;
@@ -216,8 +230,10 @@ void Vk_Context::find_physical_device()
 	features12.pNext = &features11;
 	features11.pNext = &as_feats;
 	as_feats.pNext = &rt_pipeline_feats;
+	rt_pipeline_feats.pNext = &ray_query_feats;
 
 	vkGetPhysicalDeviceFeatures2(physical_device, &features2);
+
 
 	device_sbt_alignment = rt_pipeline_props.shaderGroupBaseAlignment;
 	device_shader_group_handle_size = rt_pipeline_props.shaderGroupHandleSize;
@@ -263,8 +279,8 @@ void Vk_Context::find_physical_device()
 	queue_info.pQueuePriorities = queue_prio.data();
 
 	VkDeviceCreateInfo device_create_info{ VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
-	device_create_info.enabledExtensionCount = (uint32_t)device_exts.size();
-	device_create_info.ppEnabledExtensionNames = device_exts.data();
+	device_create_info.enabledExtensionCount = (uint32_t)preferred_extensions.size();
+	device_create_info.ppEnabledExtensionNames = preferred_extensions.data();
 	device_create_info.pEnabledFeatures = nullptr;
 	device_create_info.pNext = &features2;
 	device_create_info.queueCreateInfoCount = 1;
@@ -760,7 +776,7 @@ VkDescriptorSetLayout Vk_Context::create_descriptor_set_layout(u32 num_shaders, 
 	return layout;
 }
 
-Vk_Pipeline Vk_Context::create_compute_pipeline(const char* shaderpath)
+Vk_Pipeline Vk_Context::create_compute_pipeline(const char* shaderpath, VkDescriptorSetLayout bindless_layout)
 {
 	Shader shader;
 	bool success = load_shader_from_file(&shader, device, shaderpath);
@@ -775,9 +791,19 @@ Vk_Pipeline Vk_Context::create_compute_pipeline(const char* shaderpath)
 
 	VkDescriptorSetLayout set_layout = create_descriptor_set_layout(1, &shader);
 
+	VkDescriptorSetLayout set_layouts[4] = {};
+	set_layouts[0] = set_layout;
+	u32 set_layout_count = 1;
+
+	if (bindless_layout != VK_NULL_HANDLE)
+	{
+		set_layouts[1] = bindless_layout;
+		set_layout_count = 2;
+	}
+
 	VkPipelineLayoutCreateInfo layout_cinfo{ VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
-	layout_cinfo.pSetLayouts = &set_layout;
-	layout_cinfo.setLayoutCount = 1;
+	layout_cinfo.pSetLayouts = set_layouts;
+	layout_cinfo.setLayoutCount = set_layout_count;
 	VkPushConstantRange push_constants{};
 	push_constants.offset = 0;
 	push_constants.size = 128;
