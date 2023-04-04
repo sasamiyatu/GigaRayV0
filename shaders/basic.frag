@@ -66,7 +66,7 @@ void main()
 
     vec3 L = normalize(vec3(0.0, 1.0, 0.2));
 
-#if 1
+#if 0
     rayQueryEXT rq;
 
     rayQueryInitializeEXT(rq, scene, gl_RayFlagsTerminateOnFirstHitEXT, 0xFF, frag_pos + normal * 0.001, 0.0, L, 10000.0);

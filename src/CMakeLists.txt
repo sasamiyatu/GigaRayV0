@@ -42,6 +42,8 @@ add_executable(GigaRayV0
     r_vulkan.cpp
     sampling.h
     sampling.cpp
+    scene.h
+    scene.cpp
     sh.h
     sh.cpp
     shaders.h 

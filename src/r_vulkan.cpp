@@ -9,7 +9,7 @@
 #include "imgui/imgui_impl_vulkan.h"
 
 #define VSYNC 1
-//#define VALIDATION_VERBOSE
+#define VALIDATION_VERBOSE
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL debug_callback(
 	VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,

@@ -26,7 +26,7 @@ constexpr int MAX_BINDLESS_RESOURCES = 16536;
 // FIXME: We're gonna need more stuff than this 
 void Renderer::create_bindless_descriptor_set_layout()
 {
-	VkShaderStageFlags flags = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+	VkShaderStageFlags flags = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
 	// Bindless stuff
 
 	VkDescriptorSetLayoutBinding bindless_bindings[] = {
@@ -620,10 +620,10 @@ void Renderer::init_scene(ECS* ecs)
 	{
 		// Bake light probes
 		VkCommandBuffer cmd = get_current_frame_command_buffer();
-		probe_system.init(context, bindless_descriptor_set, bindless_set_layout);
-		probe_system.init_probe_grid(scene_bbmin, scene_bbmax);
 		vk_begin_command_buffer(get_current_frame_command_buffer());
-		probe_system.bake(cmd, &cubemap, bilinear_sampler_clamp);
+		probe_system.init(context, bindless_descriptor_set, bindless_set_layout, &gpu_camera_data, &scene, cmd);
+		probe_system.init_probe_grid(scene_bbmin, scene_bbmax);
+		//probe_system.bake(cmd, &cubemap, bilinear_sampler_clamp);
 		vkEndCommandBuffer(cmd);
 		vk_command_buffer_single_submit(cmd);
 		vkQueueWaitIdle(context->graphics_queue);
@@ -847,6 +847,7 @@ void Renderer::draw(ECS* ecs)
 {
 	VkCommandBuffer cmd = get_current_frame_command_buffer();
 
+	probe_system.bake(cmd, &cubemap, bilinear_sampler_clamp);
 
 	if(render_mode == PATH_TRACER)
 		trace_rays(cmd);
@@ -1071,6 +1072,8 @@ void Renderer::rasterize(VkCommandBuffer cmd, ECS* ecs)
 		//vkCmdDrawIndexed(cmd, (u32)mesh->indices.size(), 1, 0, 0, index);
 		vkCmdDrawIndexedIndirect(cmd, indirect_draw_buffer.gpu_buffer.buffer, 0, (u32)mesh->primitives.size(), sizeof(VkDrawIndexedIndirectCommand));
 	}
+	probe_system.debug_render(cmd);
+
 end_rendering:
 
 	ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
@@ -1098,6 +1101,8 @@ void Renderer::cleanup()
 	vkDestroyPipelineLayout(context->device, pipelines[PATH_TRACER_PIPELINE].layout, nullptr);
 	vkDestroyPipeline(context->device, pipelines[PATH_TRACER_PIPELINE].pipeline, nullptr);
 	vkDestroyDescriptorSetLayout(context->device, pipelines[PATH_TRACER_PIPELINE].desc_sets[0], nullptr);
+
+	probe_system.shutdown();
 }
 
 

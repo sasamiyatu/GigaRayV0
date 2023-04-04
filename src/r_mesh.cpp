@@ -114,6 +114,8 @@ Mesh create_sphere(u32 subdivision)
 	prim.vertex_count = (u32)mesh.indices.size();
 	prim.vertex_offset = 0;
 	mesh.primitives.push_back(prim);
+	mesh.bbmin = glm::vec3(-1.0);
+	mesh.bbmax = glm::vec3(1.0);
 
 	return mesh;
 }

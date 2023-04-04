@@ -5,6 +5,8 @@
 #extension GL_EXT_ray_query : enable
 #extension GL_KHR_shader_subgroup_arithmetic : enable
 #extension GL_EXT_scalar_block_layout : enable
+#extension GL_EXT_debug_printf : enable
+#extension GL_EXT_nonuniform_qualifier : require
 
 #define M_PI 3.14159
 
@@ -12,10 +14,11 @@
 #include "sampling.glsl"
 #include "random.glsl"
 #include "test.glsl"
+#include "brdf.glsl"
 
-layout (local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+layout (local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
-layout (binding = 0, set = 0) buffer SH_sample_buffer
+layout (binding = 0, set = 0, scalar) buffer SH_sample_buffer
 {
     SH_3 samples[];
 } SH_samples;
@@ -42,12 +45,94 @@ layout(set = 1, binding = 4, scalar) readonly buffer primitive_info_t
     Primitive_Info primitives[];
 } primitive_info_array[];
 
+layout( push_constant ) uniform constants
+{
+    uvec3 probe_counts;
+    float probe_spacing;
+    vec3 probe_min;
+    uint samples_accumulated;
+} control;
+
+#define SAMPLES_PER_PASS 256
+#define NEE
+
+Vertex get_interpolated_vertex(int custom_instance_id, int primitive_id, vec2 barycentrics)
+{
+    int geom_id = int((custom_instance_id) & 0x3FFF);
+    int prim_id = int((custom_instance_id >> 14) & 0x3FF);
+
+    Primitive_Info prim_info = primitive_info_array[geom_id].primitives[prim_id];
+
+    uint material_id = prim_info.material_index;
+
+    uvec3 inds = index_buffer_array[geom_id].indices[primitive_id + prim_info.vertex_offset / 3].index;
+    vec3 v0 = vertex_buffer_array[geom_id].verts[inds.x].pos;
+    vec3 v1 = vertex_buffer_array[geom_id].verts[inds.y].pos;
+    vec3 v2 = vertex_buffer_array[geom_id].verts[inds.z].pos;
+
+    vec3 n0 = vertex_buffer_array[geom_id].verts[inds.x].normal;
+    vec3 n1 = vertex_buffer_array[geom_id].verts[inds.y].normal;
+    vec3 n2 = vertex_buffer_array[geom_id].verts[inds.z].normal;
+
+    vec2 t0 = vertex_buffer_array[geom_id].verts[inds.x].texcoord;
+    vec2 t1 = vertex_buffer_array[geom_id].verts[inds.y].texcoord;
+    vec2 t2 = vertex_buffer_array[geom_id].verts[inds.z].texcoord;
+
+    vec3 N = normalize((1.0 - barycentrics.x - barycentrics.y) * n0 + barycentrics.x * n1 + barycentrics.y * n2);
+    vec3 P = (1.0 - barycentrics.x - barycentrics.y) * v0 + barycentrics.x * v1 + barycentrics.y * v2;
+    vec2 TX = (1.0 - barycentrics.x - barycentrics.y) * t0 + barycentrics.x * t1 + barycentrics.y * t2;
+
+    Vertex v;
+    v.pos = P;
+    v.normal = N;
+    v.texcoord = TX;
+    v.geometric_normal = normalize(cross(v1-v0, v2-v0));
+
+    Material mat = material_array.materials[material_id];
+
+    Material_Properties matprop;
+    vec3 albedo = mat.base_color_tex != -1 ? textureLod(textures[mat.base_color_tex], v.texcoord, 0).rgb : mat.base_color_factor.rgb;
+    albedo = pow(albedo, vec3(2.2));
+
+    vec2 metallic_roughness = mat.metallic_roughness_tex != -1 ? textureLod(textures[mat.metallic_roughness_tex], v.texcoord, 0).bg : vec2(mat.metallic_factor, mat.roughness_factor);
+
+    v.material.base_color = albedo;
+    v.material.metallic = metallic_roughness.x;
+    v.material.roughness = metallic_roughness.y;
+
+    return v;
+}
+
+// normal is geometric normal
+vec3 offset_ray(vec3 p, vec3 n)
+{
+    const float int_scale = 256.0f;
+    const float float_scale = 1.0f / 65536.0f;
+    const float origin = 1.0f / 32.0f;
+    ivec3 of_i = ivec3(int_scale * n);
+
+    vec3 p_i = vec3(
+        intBitsToFloat(floatBitsToInt(p.x) + ((p.x < 0.0) ? -of_i.x : of_i.x)),
+        intBitsToFloat(floatBitsToInt(p.y) + ((p.y < 0.0) ? -of_i.y : of_i.y)),
+        intBitsToFloat(floatBitsToInt(p.z) + ((p.z < 0.0) ? -of_i.z : of_i.z))
+    );
+
+    return vec3(
+        abs(p.x) < origin ? p.x + float_scale * n.x : p_i.x,
+        abs(p.y) < origin ? p.y + float_scale * n.y : p_i.y,
+        abs(p.z) < origin ? p.z + float_scale * n.z : p_i.z
+    );
+}
+
+#define MAX_BOUNCES 3
+
+shared SH_3[8] subgroup_SH;
+
 void main()
 {
-    uvec4 seed = uvec4(420, 69, 1337, gl_LocalInvocationID);
+    const vec3 L = normalize(vec3(0.0, 1.0, 0.2));
+    uvec4 seed = uvec4(420, control.samples_accumulated, gl_SubgroupID, gl_LocalInvocationID);
 
-    const uint samples = 4096;
-    float total_weight = 0.0;
     SH_3 sh;
 
     for (int i = 0; i < 9; ++i)
@@ -55,51 +140,103 @@ void main()
         sh.coefs[i] = vec3(0.0f);
     }
 
-    const uint subgroup_size = 32;
+    if (gl_SubgroupInvocationID == 0)
+    {
+        for (int i = 0; i < 9; ++i)
+            subgroup_SH[gl_SubgroupID].coefs[i] = vec3(0.0f);
+    }
+
+    const uint subgroup_size = gl_SubgroupSize;
     const float inv_subgroup_size = 1.0 / float(subgroup_size);
-    const uint samples_per_thread = samples / subgroup_size;
 
-    for (int i = 0; i < 1; ++i)
+    uint probe_linear_index = control.probe_counts.x * control.probe_counts.y * gl_WorkGroupID.z + 
+        control.probe_counts.x * gl_WorkGroupID.y + 
+        gl_WorkGroupID.x;
+
+    vec3 probe_pos = control.probe_min + vec3(gl_WorkGroupID) * control.probe_spacing;
+
+    vec4 rand = vec4(pcg4d(seed)) * ldexp(1.0, -32);
+    vec3 dir = sample_uniform_sphere(rand.xy);
+    vec3 ro = probe_pos;
+    vec3 radiance = vec3(0.0);
+    vec3 throughput = vec3(1.0);
+    vec3 first_dir = dir;
+    for (int i = 0; i < MAX_BOUNCES; ++i)
     {
-        vec4 rand = vec4(pcg4d(seed)) * ldexp(1.0, -32);
-        vec3 dir = sample_uniform_sphere(rand.xy);
-        vec3 envmap_sample = texture(env_map, dir).rgb;
-        vec3 n = normalize(dir);
-        float pdf = 1.0 / 4.0; // Pi predivided
-		envmap_sample /= pdf;
+        rayQueryEXT rq;
 
-        sh.coefs[0] += 0.282095f * envmap_sample;
-		sh.coefs[1] += -0.488603f * n.y * envmap_sample;
-		sh.coefs[2] += 0.488603f * n.z * envmap_sample;
-		sh.coefs[3] += -0.488603f * n.x * envmap_sample;
-		sh.coefs[4] += 1.092548f * n.x * n.y * envmap_sample;
-		sh.coefs[5] += -1.092548f * n.y * n.z * envmap_sample;
-		sh.coefs[6] += 0.315392f * (3.0f * n.z * n.z - 1.0f) * envmap_sample;
-		sh.coefs[7] += -1.092548f * n.x * n.z * envmap_sample;
-		sh.coefs[8] += 0.54627f * (n.x * n.x - n.y * n.y) * envmap_sample;
+        rayQueryInitializeEXT(rq, scene, gl_RayFlagsOpaqueEXT, 0xFF, ro, 0.0, dir, 10000.0);
 
-		total_weight += 1.0f;
+        while (rayQueryProceedEXT(rq))
+        {
+        }
+
+        if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionTriangleEXT) 
+        {
+            const int primitive_id = rayQueryGetIntersectionPrimitiveIndexEXT(rq, true);
+            vec2 barycentrics = rayQueryGetIntersectionBarycentricsEXT(rq, true);
+            const int custom_instance_id = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
+            Vertex v = get_interpolated_vertex(custom_instance_id, primitive_id, barycentrics);
+            ro = offset_ray(v.pos, v.geometric_normal);
+
+#ifdef NEE
+            rayQueryEXT shadow_ray;
+            rayQueryInitializeEXT(shadow_ray, scene, gl_RayFlagsTerminateOnFirstHitEXT, 0xFF, ro, 0.0, L, 10000.0);
+
+            rayQueryProceedEXT(shadow_ray);
+
+            if (rayQueryGetIntersectionTypeEXT(shadow_ray, true) == gl_RayQueryCommittedIntersectionNoneEXT)
+            {
+                vec3 V = -dir;
+                radiance += throughput * eval_combined_brdf(v.normal, L, V, v.material);
+            }
+#endif
+
+            vec4 rand = vec4(pcg4d(seed)) * ldexp(1.0, -32);
+            int brdf_type = DIFFUSE_TYPE;
+
+            vec3 brdf_weight;
+            vec3 new_dir;
+
+            if (!eval_indirect_combined_brdf(rand.yz, v.normal, v.geometric_normal, -dir, v.material, brdf_type, new_dir, brdf_weight))
+            {
+                //break;
+            }
+
+            dir = new_dir;
+            throughput *= brdf_weight;
+            if (any(isnan(throughput)))
+                break;
+        }
+        else
+        {
+            radiance += throughput * texture(env_map, dir).rgb;
+            break;
+        }
+
     }
+
+    vec3 n = dir;
+    float pdf = 1.0 / 4.0; // Pi predivided
+    radiance /= pdf;
+
+    sh.coefs[0] += 0.282095f * radiance;
+    sh.coefs[1] += -0.488603f * n.y * radiance;
+    sh.coefs[2] += 0.488603f * n.z * radiance;
+    sh.coefs[3] += -0.488603f * n.x * radiance;
+    sh.coefs[4] += 1.092548f * n.x * n.y * radiance;
+    sh.coefs[5] += -1.092548f * n.y * n.z * radiance;
+    sh.coefs[6] += 0.315392f * (3.0f * n.z * n.z - 1.0f) * radiance;
+    sh.coefs[7] += -1.092548f * n.x * n.z * radiance;
+    sh.coefs[8] += 0.54627f * (n.x * n.x - n.y * n.y) * radiance;
 
     for (int i = 0; i < 9; ++i)
     {
-		sh.coefs[i] *= 1.f / total_weight;
-        
+        sh.coefs[i] = subgroupAdd(sh.coefs[i]);
     }
 
-    barrier();
-
-    SH_3 subgroup_SH;
-
-    for (int i = 0; i < 9; ++i)
+    if (gl_SubgroupInvocationID == 0)
     {
-        subgroup_SH.coefs[i] = subgroupAdd(sh.coefs[i]);
-        //subgroup_SH.coefs[i] = sh.coefs[i];
-    }
-
-    if (gl_LocalInvocationID == uvec3(0, 0, 0))
-    {
-
         const vec3 cosine_lobe_band_factor[9] = {
             vec3(M_PI),
             vec3(2.0 * M_PI / 3.0f), vec3(2.0 * M_PI / 3.0f), vec3(2.0 * M_PI / 3.0f),
@@ -108,10 +245,35 @@ void main()
 
         for (int i = 0; i < 9; ++i)
         {
-            subgroup_SH.coefs[i] *= cosine_lobe_band_factor[i];
-            subgroup_SH.coefs[i] *= inv_subgroup_size;
+            sh.coefs[i] *= cosine_lobe_band_factor[i];
+            sh.coefs[i] *= inv_subgroup_size;
         }
 
-        SH_samples.samples[0] = subgroup_SH;
+        subgroup_SH[gl_SubgroupID] = sh;
+    }
+
+    barrier();
+
+    if (gl_LocalInvocationID == uvec3(0, 0, 0))
+    {
+        SH_3 new_SH;
+        for (int i = 0; i < 9; ++i)
+            new_SH.coefs[i] = vec3(0.0);
+        const float w = 1.0f / float(gl_NumSubgroups);
+        for (int i = 0; i < gl_NumSubgroups; ++i)
+        {
+            for (int j = 0; j < 9; ++j)
+            {
+                //SH_samples.samples[probe_linear_index].coefs[j] += subgroup_SH[i].coefs[j] * w;
+
+                new_SH.coefs[j] += subgroup_SH[i].coefs[j] * w;
+            }
+        }
+
+        float blend_alpha = float(control.samples_accumulated) / float(control.samples_accumulated + SAMPLES_PER_PASS);
+        for (int i = 0; i < 9; ++i)
+        {
+            SH_samples.samples[probe_linear_index].coefs[i] = mix(new_SH.coefs[i], SH_samples.samples[probe_linear_index].coefs[i], blend_alpha);
+        }
     }
 }
