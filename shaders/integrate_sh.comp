@@ -124,7 +124,7 @@ vec3 offset_ray(vec3 p, vec3 n)
     );
 }
 
-#define MAX_BOUNCES 3
+#define MAX_BOUNCES 8
 
 shared SH_3[8] subgroup_SH;
 
@@ -132,6 +132,8 @@ void main()
 {
     const vec3 L = normalize(vec3(0.0, 1.0, 0.2));
     uvec4 seed = uvec4(420, control.samples_accumulated, gl_SubgroupID, gl_LocalInvocationID);
+    seed = pcg4d(seed);
+    seed = pcg4d(seed);
 
     SH_3 sh;
 
@@ -178,6 +180,8 @@ void main()
             const int custom_instance_id = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
             Vertex v = get_interpolated_vertex(custom_instance_id, primitive_id, barycentrics);
             ro = offset_ray(v.pos, v.geometric_normal);
+            if (dot(v.geometric_normal, -dir) < 0.0) 
+                break;
 
 #ifdef NEE
             rayQueryEXT shadow_ray;
@@ -200,7 +204,7 @@ void main()
 
             if (!eval_indirect_combined_brdf(rand.yz, v.normal, v.geometric_normal, -dir, v.material, brdf_type, new_dir, brdf_weight))
             {
-                //break;
+                break;
             }
 
             dir = new_dir;
@@ -210,13 +214,13 @@ void main()
         }
         else
         {
-            radiance += throughput * texture(env_map, dir).rgb;
+            //radiance += throughput * texture(env_map, dir).rgb;
             break;
         }
 
     }
 
-    vec3 n = dir;
+    vec3 n = first_dir;
     float pdf = 1.0 / 4.0; // Pi predivided
     radiance /= pdf;
 
@@ -265,7 +269,6 @@ void main()
             for (int j = 0; j < 9; ++j)
             {
                 //SH_samples.samples[probe_linear_index].coefs[j] += subgroup_SH[i].coefs[j] * w;
-
                 new_SH.coefs[j] += subgroup_SH[i].coefs[j] * w;
             }
         }

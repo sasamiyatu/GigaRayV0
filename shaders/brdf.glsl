@@ -138,7 +138,7 @@ bool eval_indirect_combined_brdf(
     out vec3 new_ray_dir, out vec3 brdf_weight
 )
 {
-    //if (dot(shading_normal, V_world) <= 0.f) return false;
+    if (dot(geometric_normal, V_world) <= 0.f) return false;
 
     mat3 tbn = create_tangent_space(shading_normal);
     //vec4 q_rotation_to_z = get_rotation_to_z_axis(shading_normal);
@@ -160,7 +160,7 @@ bool eval_indirect_combined_brdf(
         vec3 H_spec = sampleGGXVNDF(V, data.alpha, u); // FIXME: Use a different random number
 
         float vdoth = max(0.0001, dot(V, H_spec));
-        //brdf_weight *= (vec3(1.0) - f_schlick(data.specular_f0, vec3(1.0), vdoth));
+        brdf_weight *= (vec3(1.0) - f_schlick(data.specular_f0, vec3(1.0), vdoth));
     }
     else if (brdf_type == SPECULAR_TYPE)
     {

@@ -62,8 +62,8 @@ int main(int argc, char** argv)
 	//test_mat.metallic_factor = 1.0f;
 	//test_mat.roughness_factor = 0.25f;
 	test_mat.base_color_factor = glm::vec4(1.0);
-	test_mat.metallic_factor = 0.0f;
-	test_mat.roughness_factor = 1.0;
+	test_mat.metallic_factor = 1.0f;
+	test_mat.roughness_factor = 0.25;
 	i32 material_id = material_manager.register_resource(test_mat, "test");
 	test_mesh.primitives[0].material_id = material_id;
 	//meshes.push_back(create_sphere(16));
