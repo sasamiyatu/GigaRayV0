@@ -10,7 +10,8 @@ layout (location = 2) out vec2 texcoord;
 layout (location = 3) out vec3 frag_pos;
 layout (location = 4) flat out vec3 camera_pos;
 layout (location = 5) flat out float roughness;
-layout (location = 6) flat out Material mat;
+layout (location = 6) out vec3 view_z;
+layout (location = 7) flat out Material mat;
 
 void main()
 {
@@ -24,6 +25,8 @@ void main()
     vec3 pos = vertex_buffer_array[geom_id].verts[gl_VertexIndex].pos;
     normal = vertex_buffer_array[geom_id].verts[gl_VertexIndex].normal;
     texcoord = vertex_buffer_array[geom_id].verts[gl_VertexIndex].texcoord;
+    vec4 view_pos = camera_data.view * vec4(pos, 1.0);
+    view_z = view_pos.xyz;
     vec4 hpos = xform * vec4(pos, 1.0);
     frag_pos = pos;
     mat4 inv_view = inverse(camera_data.view);

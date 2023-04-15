@@ -1,0 +1,76 @@
+#version 460
+#extension GL_EXT_debug_printf : enable
+#extension GL_GOOGLE_include_directive : enable
+#include "brdf.h"
+#include "math.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(binding = 0, set = 0, rgba32f) uniform image2D path_tracer_input_image;
+layout(binding = 1, set = 0, rgba32f) uniform image2D raster_input_image;
+layout(binding = 2, set = 0, rgba32f) uniform image2D normal_roughness;
+layout(binding = 3, set = 0, rgba32f) uniform image2D basecolor_metalness;
+layout(binding = 4, set = 0) uniform sampler2D depth;
+layout(binding = 5, set = 0, rgba32f) uniform image2D output_image;
+layout(binding = 6, set = 0) uniform sampler2D test_img;
+
+layout( push_constant ) uniform constants
+{
+    mat4 inv_proj;
+    ivec2 size;
+    float image_split_pos;
+} control;
+
+void main()
+{
+    ivec3 p = ivec3(gl_GlobalInvocationID);
+    if (any(greaterThanEqual(p.xy, control.size)))
+        return;
+    
+    int split_pixel = int(float(control.size.x) * control.image_split_pos);
+    const float exposure = 1.0;
+    vec4 color = vec4(0.0);
+    if (p.x <= split_pixel)
+        color = imageLoad(path_tracer_input_image, p.xy);
+    else
+        color = imageLoad(raster_input_image, p.xy);
+    vec2 uv = vec2(p.xy) / vec2(control.size);
+    uv.y = 1.f - uv.y;
+    vec4 v = textureLod(test_img, uv, 0);
+    vec4 normal_roughness = imageLoad(normal_roughness, p.xy);
+    vec4 basecolor_metalness = imageLoad(basecolor_metalness, p.xy);
+    //color.rgb = v.rgb;
+    vec3 normal = decode_unit_vector(normal_roughness.rg, false, true);
+    float depth = texelFetch(depth, p.xy, 0).r;
+
+    // Reinhardt tonemapping
+    color.rgb = color.rgb / (color.rgb + 1.0);
+    color.rgb *= exposure;
+    vec3 gamma_corrected = pow(color.rgb, vec3(0.4545));
+    //vec3 gamma_corrected = color.rgb;
+    imageStore(output_image, p.xy, vec4(gamma_corrected.rgb, 1.0));
+
+    //imageStore(output_image, p.xy, vec4(pow(basecolor_metalness.rgb, vec3(0.4545)), 1.0));
+    imageStore(output_image, p.xy, vec4(normal * 0.5 + 0.5, 1.0));
+
+    vec2 ndc = (vec2(p.xy) + 0.5) / imageSize(raster_input_image);
+    ndc = ndc * 2.0 - 1.0;
+    vec4 screen_space = vec4(ndc, depth, 1.0);
+    vec4 view_space = control.inv_proj * screen_space;
+    view_space.xyz /= view_space.w;
+    imageStore(output_image, p.xy, vec4(vec3(-view_space.z) / 1000.0, 1.0));
+    mat4 inv_proj = control.inv_proj;
+    if (p.xy == ivec2(0, 0))
+    {
+        // debugPrintfEXT("invproj: \n%f %f %f %f\n%f%f%f%f\n%f%f%f%f\n%f%f%f%f", 
+        //     inv_proj[0][0], inv_proj[1][0],  inv_proj[2][0],  inv_proj[3][0],
+        //     inv_proj[0][1], inv_proj[1][1],  inv_proj[2][1],  inv_proj[3][1],
+        //     inv_proj[0][2], inv_proj[1][2],  inv_proj[2][2],  inv_proj[3][2],
+        //     inv_proj[0][3], inv_proj[1][3],  inv_proj[2][3],  inv_proj[3][3]);
+        debugPrintfEXT("comp vew: %f %f %f", view_space.x, view_space.y, view_space.z);
+        //debugPrintfEXT("w: %f", view_space.w);
+    }
+    //vec4 v = imageLoad(test_img, p.xy + ivec2(0, 500));
+    //imageStore(output_image, p.xy, v);
+    //imageStore(output_image, p.xy, vec4(1.0, 0.0, 1.0, 1.0));
+}

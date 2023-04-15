@@ -25,7 +25,12 @@ layout(location = 2) in vec2 texcoord;
 layout(location = 3) in vec3 frag_pos;
 layout(location = 4) in vec3 camera_pos;
 layout(location = 5) flat in float roughness;
-layout (location = 6) flat in Material mat;
+layout(location = 6) in vec3 view_z;
+layout(location = 7) flat in Material mat;
+
+layout(location = 0) out vec4 color;
+layout(location = 1) out vec4 normal_roughness;
+layout(location = 2) out vec4 basecolor_metalness;
 
 const vec3 SILVER = vec3(0.95, 0.93, 0.88);
 
@@ -142,12 +147,6 @@ vec3 get_probe_irradiance(vec3 P, vec3 N)
 
     for (int i = 0; i < 9; ++i)
         result.coefs[i] /= w_total;
-
-    if (gl_FragCoord.xy == vec2(0.5, 0.5))
-    {
-        debugPrintfEXT("w_total: %f", w_total);
-    }
-
 #endif
 
     uint probe_linear_index = control.probe_counts.x * control.probe_counts.y * nearest.z + 
@@ -159,8 +158,6 @@ vec3 get_probe_irradiance(vec3 P, vec3 N)
 
     return evaluated_sh;
 }
-
-layout(location = 0) out vec4 color;
 void main()
 {
     vec3 normal = normalize(in_normal);
@@ -233,6 +230,13 @@ void main()
     //vec3 specular = env * (specular_color * t.x + t.y);
     color = vec4(total + indirect, 1.0);
     color = vec4(evaluated_sh, 1.0);
+    normal_roughness = vec4(encode_unit_vector(N, false), mat_props.roughness, 1.0);
+    basecolor_metalness = vec4(mat_props.baseColor.rgb, mat_props.roughness);
+
+    if (gl_FragCoord.xy == vec2(0.5, 0.5))
+    {
+        debugPrintfEXT("view: %f %f %f", view_z.x, view_z.y, view_z.z);
+    }
     // color = vec4(envmap_sample, 1.0);
     // SH_2 sh = SH_samples.samples[0];
     // vec3 evaluated_sh = eval_sh(sh, N);

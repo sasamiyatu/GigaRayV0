@@ -39,26 +39,21 @@ struct Render_Target
 	std::string name;
 };
 
-struct Framebuffer
-{
-	std::vector<Render_Target> render_targets;
-};
-
-struct Gbuffer
-{
-	Render_Target normal;
-	Render_Target world_pos;
-	Render_Target albedo;
-	Render_Target depth;
-};
-
 enum Render_Targets
 {
 	PATH_TRACER_COLOR = 0,
 	RASTER_COLOR,
 	DEPTH,
-	MAX
+	NORMAL_ROUGHNESS,
+	BASECOLOR_METALNESS,
+	MAX_RENDER_TARGETS
 };
+
+struct Framebuffer
+{
+	Render_Target render_targets[MAX_RENDER_TARGETS];
+};
+
 
 enum Pipelines
 {
@@ -137,8 +132,6 @@ struct Renderer
 
 	Timer* timer;
 
-	Gbuffer gbuffer;
-
 	Renderer(Vk_Context* context, Platform* platform, 
 		Resource_Manager<Mesh>* mesh_manager, 
 		Resource_Manager<Texture>* texture_manager,
@@ -151,7 +144,7 @@ struct Renderer
 	void create_descriptor_pools();
 	void create_bindless_descriptor_set_layout();
 	VkDescriptorSetLayout create_descriptor_set_layout(struct Shader* shader);
-	void vk_create_render_targets(VkCommandBuffer cmd);
+	void create_render_targets(VkCommandBuffer cmd);
 	void transition_swapchain_images(VkCommandBuffer cmd);
 	void create_samplers();
 

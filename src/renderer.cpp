@@ -21,6 +21,9 @@ static constexpr int MAX_MATERIAL_COUNT = 256;
 
 static void vk_begin_command_buffer(VkCommandBuffer cmd);
 
+constexpr VkFormat NORMAL_ROUGHNESS_FORMAT = VK_FORMAT_A2B10G10R10_UNORM_PACK32;
+constexpr VkFormat BASECOLOR_METALNESS_FORMAT = VK_FORMAT_R8G8B8A8_UNORM;
+
 constexpr u32 MAX_INDIRECT_DRAWS = 1'000'000;
 constexpr int MAX_BINDLESS_RESOURCES = 16536;
 // FIXME: We're gonna need more stuff than this 
@@ -327,25 +330,34 @@ void Renderer::initialize()
 
 	pipelines[PATH_TRACER_PIPELINE] = vk_create_rt_pipeline();
 	//primary_ray_pipeline = create_gbuffer_rt_pipeline();
-	pipelines[RASTER_PIPELINE] = create_raster_graphics_pipeline("shaders/spirv/basic.vert.spv", "shaders/spirv/basic.frag.spv", true);;
+	{
+		Raster_Options opt;
+		opt.color_attachment_count = 3;
+		opt.color_formats[0] = VK_FORMAT_R32G32B32A32_SFLOAT;
+		opt.color_formats[1] = NORMAL_ROUGHNESS_FORMAT;
+		opt.color_formats[2] = BASECOLOR_METALNESS_FORMAT;
+		pipelines[RASTER_PIPELINE] = create_raster_graphics_pipeline("shaders/spirv/basic.vert.spv", "shaders/spirv/basic.frag.spv", true, opt);
+
+		opt.depth_write_enable = VK_FALSE;
+		pipelines[SKYBOX_PIPELINE] = create_raster_graphics_pipeline("shaders/spirv/skybox.vert.spv", "shaders/spirv/skybox.frag.spv", false, opt);
+	}
 	pipelines[CUBEMAP_PIPELINE] = create_raster_graphics_pipeline("shaders/spirv/cube_test.vert.spv", "shaders/spirv/cube_test.frag.spv", true);
+
 	Raster_Options opt;
 	opt.color_formats[0] = VK_FORMAT_R16G16B16A16_SFLOAT;
 	//pipelines[GENERATE_CUBEMAP_PIPELINE] = create_raster_graphics_pipeline("shaders/spirv/fullscreen_quad.vert.spv", "shaders/spirv/equirectangular_to_cubemap.frag.spv", false, opt);
 	pipelines[GENERATE_CUBEMAP_PIPELINE2] = create_raster_graphics_pipeline("shaders/spirv/generate_cubemap.vert.spv", "shaders/spirv/equirectangular_to_cubemap.frag.spv", false, opt);
 
-	opt.depth_write_enable = VK_FALSE;
-	opt.color_formats[0] = VK_FORMAT_R32G32B32A32_SFLOAT;
-	pipelines[SKYBOX_PIPELINE] = create_raster_graphics_pipeline("shaders/spirv/skybox.vert.spv", "shaders/spirv/skybox.frag.spv", false, opt);
+
 	cubemap = context->create_cubemap(512, VK_FORMAT_R16G16B16A16_SFLOAT);
 
 	u32 indirect_buffer_size = MAX_INDIRECT_DRAWS * sizeof(VkDrawIndexedIndirectCommand);
 	indirect_draw_buffer = context->create_gpu_buffer(indirect_buffer_size, VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
 
 	transition_swapchain_images(get_current_frame_command_buffer());
-	vk_create_render_targets(get_current_frame_command_buffer());
+	create_render_targets(get_current_frame_command_buffer());
 	
-	compute_pp = context->create_compute_pipeline("shaders/spirv/test.comp.spv");
+	compute_pp = context->create_compute_pipeline("shaders/spirv/composition.comp.spv");
 	
 	create_samplers();
 
@@ -746,9 +758,9 @@ Vk_Pipeline Renderer::create_raster_graphics_pipeline(const char* vertex_shader_
 	g_garbage_collector->push([=]()
 		{
 			vkDestroyPipeline(context->device, pp.pipeline, nullptr);
-	vkDestroyPipelineLayout(context->device, pp.layout, nullptr);
-	vkDestroyDescriptorSetLayout(context->device, desc_0, nullptr);
-	vkDestroyDescriptorUpdateTemplate(context->device, update_template, nullptr);
+			vkDestroyPipelineLayout(context->device, pp.layout, nullptr);
+			vkDestroyDescriptorSetLayout(context->device, desc_0, nullptr);
+			vkDestroyDescriptorUpdateTemplate(context->device, update_template, nullptr);
 		}, Garbage_Collector::SHUTDOWN);
 
 	return pp;
@@ -941,6 +953,9 @@ void Renderer::tonemap(VkCommandBuffer cmd)
 		Descriptor_Info descriptor_info[] = {
 			Descriptor_Info(0, framebuffer.render_targets[PATH_TRACER_COLOR].image.image_view,  VK_IMAGE_LAYOUT_GENERAL),
 			Descriptor_Info(0, framebuffer.render_targets[RASTER_COLOR].image.image_view,  VK_IMAGE_LAYOUT_GENERAL),
+			Descriptor_Info(0, framebuffer.render_targets[NORMAL_ROUGHNESS].image.image_view,  VK_IMAGE_LAYOUT_GENERAL),
+			Descriptor_Info(0, framebuffer.render_targets[BASECOLOR_METALNESS].image.image_view,  VK_IMAGE_LAYOUT_GENERAL),
+			Descriptor_Info(bilinear_sampler_clamp, framebuffer.render_targets[DEPTH].image.image_view,  VK_IMAGE_LAYOUT_GENERAL),
 			Descriptor_Info(0, final_output.image_view ,VK_IMAGE_LAYOUT_GENERAL),
 			Descriptor_Info(bilinear_sampler_clamp, brdf_lut.image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
 			//Descriptor_Info(0, brdf_lut.image_view, VK_IMAGE_LAYOUT_GENERAL)
@@ -951,11 +966,13 @@ void Renderer::tonemap(VkCommandBuffer cmd)
 	
 	struct
 	{
+		glm::mat4 inv_proj;
 		glm::ivec2 size;
 		float split_pos;
 	} pc;
 	pc.size = glm::ivec2(size.x, size.y);
 	pc.split_pos = render_mode == PATH_TRACER ? 1.0f : render_mode == SIDE_BY_SIDE ? 0.5f : 0.0f;
+	pc.inv_proj = glm::inverse(scene.current_frame_camera.proj);
 	vkCmdPushConstants(cmd, compute_pp.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
 	vkCmdDispatch(cmd, group_count.x, group_count.y, group_count.z);
 	vkCmdPipelineBarrier(cmd,
@@ -976,12 +993,28 @@ void Renderer::rasterize(VkCommandBuffer cmd, ECS* ecs)
 	VkClearValue depth_clear{};
 	depth_clear.depthStencil.depth = 0.f;
 
-	VkRenderingAttachmentInfo attachment_info{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
-	attachment_info.imageView = framebuffer.render_targets[RASTER_COLOR].image.image_view;
-	attachment_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-	attachment_info.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-	attachment_info.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-	attachment_info.clearValue = clear_value;
+
+	VkRenderingAttachmentInfo attachment_infos[3] = {};
+	attachment_infos[0].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+	attachment_infos[0].imageView = framebuffer.render_targets[RASTER_COLOR].image.image_view;
+	attachment_infos[0].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+	attachment_infos[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+	attachment_infos[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+	attachment_infos[0].clearValue = clear_value;
+
+	attachment_infos[1].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+	attachment_infos[1].imageView = framebuffer.render_targets[NORMAL_ROUGHNESS].image.image_view;
+	attachment_infos[1].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+	attachment_infos[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+	attachment_infos[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+	attachment_infos[1].clearValue = { 0.0f, 0.0f, 0.0f, 0.0f };
+
+	attachment_infos[2].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+	attachment_infos[2].imageView = framebuffer.render_targets[BASECOLOR_METALNESS].image.image_view;
+	attachment_infos[2].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+	attachment_infos[2].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+	attachment_infos[2].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+	attachment_infos[2].clearValue = { 0.0f, 0.0f, 0.0f, 0.0f };
 
 	VkRenderingAttachmentInfo depth_attachment_info{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
 	depth_attachment_info.imageView = framebuffer.render_targets[DEPTH].image.image_view;
@@ -993,8 +1026,8 @@ void Renderer::rasterize(VkCommandBuffer cmd, ECS* ecs)
 	VkRenderingInfo rendering_info{VK_STRUCTURE_TYPE_RENDERING_INFO};
 	rendering_info.renderArea = render_area;
 	rendering_info.layerCount = 1;
-	rendering_info.colorAttachmentCount = 1;
-	rendering_info.pColorAttachments = &attachment_info;
+	rendering_info.colorAttachmentCount = (u32)std::size(attachment_infos);
+	rendering_info.pColorAttachments = attachment_infos;
 	rendering_info.pDepthAttachment = &depth_attachment_info;
 	vkCmdBeginRendering(cmd, &rendering_info);
 
@@ -1083,11 +1116,11 @@ void Renderer::rasterize(VkCommandBuffer cmd, ECS* ecs)
 		//vkCmdDrawIndexed(cmd, (u32)mesh->indices.size(), 1, 0, 0, index);
 		vkCmdDrawIndexedIndirect(cmd, indirect_draw_buffer.gpu_buffer.buffer, 0, (u32)mesh->primitives.size(), sizeof(VkDrawIndexedIndirectCommand));
 	}
-	probe_system.debug_render(cmd);
+	//probe_system.debug_render(cmd);
 
 end_rendering:
 
-	ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
+	//ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
 
 	vkCmdEndRendering(cmd);
 
@@ -1140,9 +1173,8 @@ static void vk_begin_command_buffer(VkCommandBuffer cmd)
 	vkBeginCommandBuffer(cmd, &begin_info);
 }
 
-void Renderer::vk_create_render_targets(VkCommandBuffer cmd)
+void Renderer::create_render_targets(VkCommandBuffer cmd)
 {
-	framebuffer.render_targets.resize(MAX);
 	i32 w, h;
 	platform->get_window_size(&w, &h);
 	Render_Target color_attachments[2];
@@ -1160,7 +1192,7 @@ void Renderer::vk_create_render_targets(VkCommandBuffer cmd)
 	depth_attachment.image = context->allocate_image(
 		{ (u32)w, (u32)h, 1 },
 		depth_attachment.format,
-		VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+		VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
 		VK_IMAGE_ASPECT_DEPTH_BIT
 	);
 
@@ -1170,57 +1202,24 @@ void Renderer::vk_create_render_targets(VkCommandBuffer cmd)
 		VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_STORAGE_BIT
 	);
 
-	{
-		// Normal
-		VkFormat format = VK_FORMAT_R32G32B32A32_SFLOAT;
-		gbuffer.normal.image = context->allocate_image(
-			{ u32(w), (u32)h, 1 },
-			format,
-			VK_IMAGE_USAGE_STORAGE_BIT
-		);
-		gbuffer.normal.format = format;
-		gbuffer.normal.layout = VK_IMAGE_LAYOUT_GENERAL;
-		gbuffer.normal.name = "normal";
-	}
+	Render_Target normal_attachment;
+	normal_attachment.format = NORMAL_ROUGHNESS_FORMAT;
+	//normal_attachment.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+	normal_attachment.image = context->allocate_image(
+		{ (u32)w, (u32)h, 1 },
+		normal_attachment.format,
+		VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT,
+		VK_IMAGE_ASPECT_COLOR_BIT
+	);
 
-	{
-		// World pos
-		VkFormat format = VK_FORMAT_R32G32B32A32_SFLOAT;
-		gbuffer.world_pos.image = context->allocate_image(
-			{ u32(w), (u32)h, 1 },
-			format,
-			VK_IMAGE_USAGE_STORAGE_BIT
-		);
-		gbuffer.world_pos.format = format;
-		gbuffer.world_pos.layout = VK_IMAGE_LAYOUT_GENERAL;
-		gbuffer.world_pos.name = "world_pos";
-	}
-
-	{
-		// Albedo
-		VkFormat format = VK_FORMAT_R8G8B8A8_UNORM;
-		gbuffer.albedo.image = context->allocate_image(
-			{ u32(w), (u32)h, 1 },
-			format,
-			VK_IMAGE_USAGE_STORAGE_BIT
-		);
-		gbuffer.albedo.format = format;
-		gbuffer.albedo.layout = VK_IMAGE_LAYOUT_GENERAL;
-		gbuffer.albedo.name = "albedo";
-	}
-
-	{
-		// Depth
-		VkFormat format = VK_FORMAT_R32_SFLOAT;
-		gbuffer.depth.image = context->allocate_image(
-			{ u32(w), (u32)h, 1 },
-			format,
-			VK_IMAGE_USAGE_STORAGE_BIT
-		);
-		gbuffer.depth.format = format;
-		gbuffer.depth.layout = VK_IMAGE_LAYOUT_GENERAL;
-		gbuffer.depth.name = "albedo";
-	}
+	Render_Target albedo_attachment;
+	albedo_attachment.format = VK_FORMAT_R8G8B8A8_UNORM;
+	albedo_attachment.image = context->allocate_image(
+		{ (u32)w, (u32)h, 1 },
+		albedo_attachment.format,
+		VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT,
+		VK_IMAGE_ASPECT_COLOR_BIT
+	);
 
 	vk_begin_command_buffer(cmd);
 
@@ -1233,7 +1232,7 @@ void Renderer::vk_create_render_targets(VkCommandBuffer cmd)
 	}
 
 	vk_transition_layout(cmd, depth_attachment.image.image,
-		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
 		0, 0,
 		VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
 		1, VK_IMAGE_ASPECT_DEPTH_BIT);
@@ -1243,25 +1242,15 @@ void Renderer::vk_create_render_targets(VkCommandBuffer cmd)
 		0, VK_ACCESS_SHADER_WRITE_BIT,
 		VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
 
-	vk_transition_layout(cmd, gbuffer.albedo.image.image,
+	vk_transition_layout(cmd, normal_attachment.image.image,
 		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-		0, VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT,
-		VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
+		0, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+		VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 
-	vk_transition_layout(cmd, gbuffer.normal.image.image,
+	vk_transition_layout(cmd, albedo_attachment.image.image,
 		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-		0, VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT,
-		VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
-
-	vk_transition_layout(cmd, gbuffer.world_pos.image.image,
-		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-		0, VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT,
-		VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
-
-	vk_transition_layout(cmd, gbuffer.depth.image.image,
-		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-		0, VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT,
-		VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
+		0, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+		VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 
 	vkEndCommandBuffer(cmd);
 	vk_command_buffer_single_submit(cmd);
@@ -1271,6 +1260,8 @@ void Renderer::vk_create_render_targets(VkCommandBuffer cmd)
 	framebuffer.render_targets[PATH_TRACER_COLOR] = color_attachments[0];
 	framebuffer.render_targets[RASTER_COLOR] = color_attachments[1];
 	framebuffer.render_targets[DEPTH] = depth_attachment;
+	framebuffer.render_targets[NORMAL_ROUGHNESS] = normal_attachment;
+	framebuffer.render_targets[BASECOLOR_METALNESS] = albedo_attachment;
 }
 
 static bool check_extensions(const std::vector<const char*>& device_exts, const std::vector<VkExtensionProperties>& props)

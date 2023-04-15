@@ -106,4 +106,27 @@ vec2 equirectangular_to_uv(vec3 dir)
     return uv;
 }
 
+// Oct packing
+vec2 encode_unit_vector(vec3 v, bool signed)
+{
+    v /= dot(abs(v), vec3(1.0));
+
+    vec2 oct_wrap = (1.0 - abs(v.yx)) * (step(0.0, v.xy) * 2.0 - 1.0);
+    v.xy = v.z >= 0.0 ? v.xy : oct_wrap;
+
+    return signed ? v.xy : v.xy * 0.5 + 0.5;
+}
+
+vec3 decode_unit_vector(vec2 p, bool signed, bool should_normalize)
+{
+    p = signed ? p : (p * 2.0 - 1.0);
+
+    // https://twitter.com/Stubbesaurus/status/937994790553227264
+    vec3 n = vec3(p.xy, 1.0 - abs(p.x) - abs(p.y));
+    float t = clamp(-n.z, 0.0, 1.0);
+    n.xy -= t * (step(0.0, n.xy) * 2.0 - 1.0);
+
+    return should_normalize ? normalize(n) : n;
+}
+
 #endif
