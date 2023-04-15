@@ -1,12 +1,12 @@
 #ifndef SH_GLSL
 #define SH_GLSL
 
-struct SH_3
+struct SH_2
 {
     vec3 coefs[9];
 };
 
-vec3 eval_sh(SH_3 sh, vec3 n)
+vec3 eval_sh(SH_2 sh, vec3 n)
 {
     vec3 sh_result[9];
     sh_result[0] = 0.282095f * sh.coefs[0];

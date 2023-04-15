@@ -6,7 +6,7 @@
 #extension GL_EXT_nonuniform_qualifier : require
 
 #define SQUARE_ROUGHNESS
-#define MAX_BOUNCES 2
+#define MAX_BOUNCES 4
 #define RAY_TRACING
 #define NEE
 #define USE_ENVMAP

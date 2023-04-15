@@ -1026,6 +1026,17 @@ void Renderer::rasterize(VkCommandBuffer cmd, ECS* ecs)
 #if 1
 	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines[RASTER_PIPELINE].pipeline);
 
+	struct
+	{
+		glm::uvec3 probe_counts;
+		float probe_spacing;
+		glm::vec3 probe_min;
+	} pc;
+
+	pc.probe_counts = probe_system.probe_counts;
+	pc.probe_spacing = probe_system.probe_spacing;
+	pc.probe_min = probe_system.bbmin;
+	vkCmdPushConstants(cmd, pipelines[RASTER_PIPELINE].layout, VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_VERTEX_BIT	, 0, sizeof(pc), &pc);
 	{
 		Descriptor_Info descriptor_info[] =
 		{

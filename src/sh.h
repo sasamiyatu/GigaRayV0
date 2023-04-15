@@ -5,19 +5,19 @@
 
 struct Scene;
 
-struct SH_3
+struct SH_2
 {
     glm::vec3 coefs[9];
 };
 
 struct Probe_System
 {
-    SH_3 probe; // Single probe for now
+    SH_2 probe; // Single probe for now
     Vk_Context* ctx;
     Vk_Allocated_Buffer probe_samples;
     Vk_Pipeline sh_integrate_pipeline;
     Vk_Pipeline sh_debug_rendering_pipeline;
-    SH_3* mapped_probe_data;
+    SH_2* mapped_probe_data;
     glm::vec3 bbmin;
     glm::vec3 bbmax;
     glm::uvec3 probe_counts;

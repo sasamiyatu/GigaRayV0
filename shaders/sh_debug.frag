@@ -12,12 +12,12 @@ layout (location = 0) out vec4 out_color;
 
 layout(set = 0, binding = 3, scalar) buffer SH_probe_buffer
 {
-    SH_3 SH_probes[];
+    SH_2 SH_probes[];
 };
 
 void main()
 {
-    SH_3 probe = SH_probes[probe_index];
+    SH_2 probe = SH_probes[probe_index];
     vec3 N = normalize(normal);
     vec3 evaluated_sh = eval_sh(probe, N);
 

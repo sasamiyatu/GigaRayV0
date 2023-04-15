@@ -30,11 +30,11 @@ void Probe_System::init_probe_grid(glm::vec3 min, glm::vec3 max)
 		probe_counts = glm::uvec3(1);
 
 	const u32 total_probe_count = probe_counts.x * probe_counts.y * probe_counts.z;
-	const u32 required_size = total_probe_count * sizeof(SH_3);
+	const u32 required_size = total_probe_count * sizeof(SH_2);
 	probe_samples = ctx->allocate_buffer(required_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_AUTO, VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT);
 	void* mapped;
 	vmaMapMemory(ctx->allocator, probe_samples.allocation, &mapped);
-	mapped_probe_data = (SH_3*)mapped;
+	mapped_probe_data = (SH_2*)mapped;
 	for (u32 i = 0; i < total_probe_count; ++i)
 		for (int j = 0; j < 9; ++j)
 			mapped_probe_data[i].coefs[j] = glm::vec3(0.0f);

@@ -20,7 +20,7 @@ layout (local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
 layout (binding = 0, set = 0, scalar) buffer SH_sample_buffer
 {
-    SH_3 samples[];
+    SH_2 samples[];
 } SH_samples;
 
 layout (binding = 1, set = 0) uniform samplerCube env_map;
@@ -126,7 +126,7 @@ vec3 offset_ray(vec3 p, vec3 n)
 
 #define MAX_BOUNCES 8
 
-shared SH_3[8] subgroup_SH;
+shared SH_2[8] subgroup_SH;
 
 void main()
 {
@@ -135,7 +135,7 @@ void main()
     seed = pcg4d(seed);
     seed = pcg4d(seed);
 
-    SH_3 sh;
+    SH_2 sh;
 
     for (int i = 0; i < 9; ++i)
     {
@@ -260,7 +260,7 @@ void main()
 
     if (gl_LocalInvocationID == uvec3(0, 0, 0))
     {
-        SH_3 new_SH;
+        SH_2 new_SH;
         for (int i = 0; i < 9; ++i)
             new_SH.coefs[i] = vec3(0.0);
         const float w = 1.0f / float(gl_NumSubgroups);

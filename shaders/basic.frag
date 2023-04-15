@@ -4,6 +4,7 @@
 #extension GL_EXT_nonuniform_qualifier : enable
 #extension GL_EXT_ray_tracing : require
 #extension GL_EXT_ray_query : require
+#extension GL_EXT_debug_printf : require
 #include "math.glsl"
 #include "scene.glsl"
 #include "brdf.h"
@@ -12,10 +13,10 @@
 
 layout(set = 0, binding = 0) uniform sampler2D brdf_lut;
 layout(set = 0, binding = 1) uniform sampler2D prefiltered_envmap;
-layout(set = 0, binding = 5) buffer SH_sample_buffer
+layout(set = 0, binding = 5, scalar) buffer SH_sample_buffer
 {
-    SH_3 samples[];
-} SH_samples;
+    SH_2 probes[];
+} SH_probes;
 layout(set = 0, binding = 6) uniform accelerationStructureEXT scene;
 
 layout(location = 0) in vec3 in_normal;
@@ -31,28 +32,132 @@ const vec3 SILVER = vec3(0.95, 0.93, 0.88);
 vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness)
 {
     return F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
-}   
+}
 
-vec3 eval_sh(SH_3 sh, vec3 n)
+layout( push_constant ) uniform constants
 {
-    vec3 sh_result[9];
-    sh_result[0] = 0.282095f * sh.coefs[0];
-    sh_result[1] = -0.488603f * n.y * sh.coefs[1];
-    sh_result[2] = 0.488603f * n.z * sh.coefs[2];
-    sh_result[3] = -0.488603f * n.x * sh.coefs[3];
-    sh_result[4] = 1.092548f * n.x * n.y * sh.coefs[4];
-    sh_result[5] = -1.092548f * n.y * n.z * sh.coefs[5];
-    sh_result[6] = 0.315392f * (3.0f * n.z * n.z - 1.0f) * sh.coefs[6];
-    sh_result[7] = -1.092548f * n.x * n.z * sh.coefs[7];
-    sh_result[8] = 0.54627f * (n.x * n.x - n.y * n.y) * sh.coefs[8];
+    uvec3 probe_counts;
+    float probe_spacing;
+    vec3 probe_min;
+} control;
 
-    vec3 col = vec3(0.0);
+uint get_probe_linear_index(ivec3 p)
+{
+    return control.probe_counts.x * control.probe_counts.y * p.z + 
+        control.probe_counts.x * p.y + p.x;
+}
+
+vec3 get_probe_irradiance(vec3 P, vec3 N)
+{
+    vec3 pos_relative = (P - control.probe_min) / control.probe_spacing;
+    ivec3 nearest = ivec3(round(pos_relative));
+    ivec3 lower = ivec3(floor(pos_relative));
+
+    vec3 t = fract(pos_relative);
+#if 0
+    SH_2 interpolated_x[4];
+    // Interpolate along the X axis first
+    // This reduced the 3-dimensional 2x2x2 probe volume to a 2-dimensions that we can then bilinearly interpolate
+    for (int y = 0; y < 2; ++y)
+    {
+        for (int z = 0; z < 2; ++z)
+        {
+            ivec3 p0 = lower + ivec3(0, y, z);
+            ivec3 p1 = lower + ivec3(1, y, z);
+            SH_2 probe0 = SH_probes.probes[get_probe_linear_index(p0)];
+            SH_2 probe1 = SH_probes.probes[get_probe_linear_index(p1)];
+            SH_2 result;
+            for (int i = 0; i < 9; ++i)
+            {
+                result.coefs[i] = (1.0 - t.x) * probe0.coefs[i] + t.x * probe1.coefs[i];
+            }
+            interpolated_x[y * 2 + z] = result;
+        }
+    }
+
+    SH_2 interpolated_y[2];
+    // Interpolate along y 
+    for (int z = 0; z < 2; ++z)
+    {
+        SH_2 probe0 = interpolated_x[z];
+        SH_2 probe1 = interpolated_x[2 + z];
+        SH_2 result;
+        for (int i = 0; i < 9; ++i)
+        {
+            result.coefs[i] = (1.0 - t.y) * probe0.coefs[i] + t.y * probe1.coefs[i];
+        }
+        interpolated_y[z] = result;
+    }
+
+    // Finally along z axis
+    SH_2 result;
     for (int i = 0; i < 9; ++i)
     {
-        col += sh_result[i];
+        result.coefs[i] = (1.0 - t.z) * interpolated_y[0].coefs[i] + t.z * interpolated_y[1].coefs[i];
     }
-    col = max(vec3(0.0), col);
-    return col;
+#else
+
+    float w_total = 0.0;
+    SH_2 result;
+
+    for (int i = 0; i < 9; ++i)
+        result.coefs[i] = vec3(0.0);
+
+    for (int z = 0; z < 2; ++z)
+    {
+        for (int y = 0; y < 2; ++y)
+        {
+            for (int x = 0; x < 2; ++x)
+            {
+                vec3 steps = step(vec3(0.5), vec3(x, y, z));
+                steps = steps * -2.0 + 1.0;
+                vec3 weights = steps * (0.5 - t) + 0.5;
+                float w = weights.x * weights.y * weights.z;
+
+                vec3 probe_pos = (lower + ivec3(x, y, z)) * control.probe_spacing + control.probe_min;
+                vec3 dir = probe_pos - P;
+                float dist = length(dir);
+                dir /= dist;
+
+                float vis = 1.0;
+
+#if 1
+                rayQueryEXT rq;
+                rayQueryInitializeEXT(rq, scene, gl_RayFlagsTerminateOnFirstHitEXT, 0xFF, P + N * 0.001, 0.0, dir, dist);
+                rayQueryProceedEXT(rq);
+                if (rayQueryGetIntersectionTypeEXT(rq, true) != gl_RayQueryCommittedIntersectionNoneEXT) 
+                    vis = 0.0;
+#endif
+
+                w *= vis;
+
+                SH_2 probe = SH_probes.probes[get_probe_linear_index(lower + ivec3(x, y, z))];
+                w_total += w;
+
+                for (int i = 0; i < 9; ++i)
+                    result.coefs[i] += w * probe.coefs[i];
+            }
+        }
+    }
+
+    for (int i = 0; i < 9; ++i)
+        result.coefs[i] /= w_total;
+
+    if (gl_FragCoord.xy == vec2(0.5, 0.5))
+    {
+        debugPrintfEXT("w_total: %f", w_total);
+    }
+
+#endif
+
+    uint probe_linear_index = control.probe_counts.x * control.probe_counts.y * nearest.z + 
+    control.probe_counts.x * nearest.y + nearest.x;
+    SH_2 probe = SH_probes.probes[probe_linear_index];
+
+    vec3 evaluated_sh = eval_sh(result, N);
+
+
+    return evaluated_sh;
 }
 
 layout(location = 0) out vec4 color;
@@ -66,7 +171,8 @@ void main()
 
     vec3 L = normalize(vec3(0.0, 1.0, 0.2));
 
-#if 0
+    float shadow = 1.0;
+#if 1
     rayQueryEXT rq;
 
     rayQueryInitializeEXT(rq, scene, gl_RayFlagsTerminateOnFirstHitEXT, 0xFF, frag_pos + normal * 0.001, 0.0, L, 10000.0);
@@ -75,12 +181,7 @@ void main()
 
     if (rayQueryGetIntersectionTypeEXT(rq, true) != gl_RayQueryCommittedIntersectionNoneEXT) 
     {
-        uint custom_index = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
-        uvec4 seed = uvec4(custom_index, 0, 1, 2);
-        uvec4 rand = pcg4d(seed);
-        //color = vec4(0.0, 0.0, 0.0, 1.0);
-        color = vec4(vec3(rand) * ldexp(1.0, -32), 1.0);
-        return;
+        shadow = 0.0;
     }   
 #endif
     vec3 envmap_sample = texture(envmap_cube, R).rgb;
@@ -91,6 +192,8 @@ void main()
     // vec4 t = texture(brdf_lut, vec2(NoV, roughness));
     // vec4 t3 = texture(brdf_lut, texcoord);
     // vec2 t2 = texture(brdf_lut, vec2(NoV, 0.01)).rg;
+
+    vec3 evaluated_sh = get_probe_irradiance(frag_pos, N);
 
     vec4 base_color = mat.base_color_tex != -1 ? texture(textures[mat.base_color_tex], texcoord, 0) : mat.base_color_factor;
     if (base_color.a < 0.5) discard;
@@ -124,12 +227,14 @@ void main()
     mat_props.opacity = 0.0;
     vec3 brdf = evalCombinedBRDF(N, L, V, mat_props);
     //vec3 total = (kS + kD) * NoL;
-    vec3 total = brdf;
+    vec3 total = brdf * shadow;
+    vec3 indirect = evaluated_sh * diffuse;
     //ckRoughness(NdotV, SILVER, roughness);
     //vec3 specular = env * (specular_color * t.x + t.y);
-    color = vec4(total, 1.0);
+    color = vec4(total + indirect, 1.0);
+    color = vec4(evaluated_sh, 1.0);
     // color = vec4(envmap_sample, 1.0);
-    // SH_3 sh = SH_samples.samples[0];
+    // SH_2 sh = SH_samples.samples[0];
     // vec3 evaluated_sh = eval_sh(sh, N);
     // color = vec4(evaluated_sh, 1.0);
 }
