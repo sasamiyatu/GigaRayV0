@@ -190,7 +190,11 @@ void main()
     // vec4 t3 = texture(brdf_lut, texcoord);
     // vec2 t2 = texture(brdf_lut, vec2(NoV, 0.01)).rg;
 
+#if 0
     vec3 evaluated_sh = get_probe_irradiance(frag_pos, N);
+#else
+    vec3 evaluated_sh = vec3(0.0);
+#endif
 
     vec4 base_color = mat.base_color_tex != -1 ? texture(textures[mat.base_color_tex], texcoord, 0) : mat.base_color_factor;
     if (base_color.a < 0.5) discard;
@@ -229,14 +233,10 @@ void main()
     //ckRoughness(NdotV, SILVER, roughness);
     //vec3 specular = env * (specular_color * t.x + t.y);
     color = vec4(total + indirect, 1.0);
-    color = vec4(evaluated_sh, 1.0);
+    //color = vec4(evaluated_sh, 1.0);
     normal_roughness = vec4(encode_unit_vector(N, false), mat_props.roughness, 1.0);
     basecolor_metalness = vec4(mat_props.baseColor.rgb, mat_props.roughness);
 
-    if (gl_FragCoord.xy == vec2(0.5, 0.5))
-    {
-        debugPrintfEXT("view: %f %f %f", view_z.x, view_z.y, view_z.z);
-    }
     // color = vec4(envmap_sample, 1.0);
     // SH_2 sh = SH_samples.samples[0];
     // vec3 evaluated_sh = eval_sh(sh, N);

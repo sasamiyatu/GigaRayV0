@@ -46,6 +46,7 @@ enum Render_Targets
 	DEPTH,
 	NORMAL_ROUGHNESS,
 	BASECOLOR_METALNESS,
+	INDIRECT_DIFFUSE,
 	MAX_RENDER_TARGETS
 };
 
@@ -63,6 +64,8 @@ enum Pipelines
 	GENERATE_CUBEMAP_PIPELINE,
 	GENERATE_CUBEMAP_PIPELINE2,
 	SKYBOX_PIPELINE,
+	INDIRECT_DIFFUSE_PIPELINE,
+	COMPOSITION_PIPELINE,
 	PIPELINE_COUNT,
 };
 
@@ -74,6 +77,7 @@ enum Samplers
 	SAMPLER_COUNT
 };
 
+#define BLUE_NOISE_TEXTURE_COUNT 64
 
 struct Renderer
 {
@@ -106,7 +110,6 @@ struct Renderer
 	VkDescriptorUpdateTemplate descriptor_update_template;
 	Vk_Allocated_Buffer shader_binding_table;
 	Scene scene;
-	Vk_Pipeline compute_pp;
 	GPU_Buffer gpu_camera_data;
 	Vk_Allocated_Image environment_map;
 	VkSampler bilinear_sampler;
@@ -114,6 +117,7 @@ struct Renderer
 	VkQueryPool query_pools[FRAMES_IN_FLIGHT];
 	Vk_Allocated_Image brdf_lut;
 	Vk_Allocated_Image prefiltered_envmap;
+	Vk_Allocated_Image blue_noise[BLUE_NOISE_TEXTURE_COUNT];
 	Cubemap cubemap;
 	GPU_Buffer indirect_draw_buffer;
 	GPU_Buffer instance_data_buffer;

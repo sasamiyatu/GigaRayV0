@@ -70,8 +70,8 @@ Ray get_camera_ray(mat4 view, mat4 proj, ivec2 pixel, ivec2 size)
 
     mat4 inv_view = inverse(view);
     vec3 ro = inv_view[3].xyz;
-    float aspect = camera_data.proj[1][1] / camera_data.proj[0][0];
-    float tan_half_fov_y = 1.f / camera_data.proj[1][1];
+    float aspect = proj[1][1] / proj[0][0];
+    float tan_half_fov_y = 1.f / proj[1][1];
     vec3 rd = normalize(
         (uv.x * inv_view[0].xyz * tan_half_fov_y * aspect) - 
         (uv.y * inv_view[1].xyz * tan_half_fov_y) -

@@ -1,0 +1,167 @@
+#version 460
+
+#extension GL_EXT_ray_tracing : enable
+#extension GL_EXT_ray_query : enable
+#extension GL_GOOGLE_include_directive : enable
+#extension GL_EXT_debug_printf : enable
+
+#include "scene.glsl"
+#include "math.glsl"
+#include "sampling.glsl"
+#include "random.glsl"
+#include "misc.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(binding = 0, set = 0, rgba32f) uniform image2D indirect_diffuse;
+layout(binding = 1, set = 0, rgba32f) uniform image2D normal_roughness;
+layout(binding = 3, set = 0, rgba32f) uniform image2D basecolor_metalness;
+layout(binding = 4, set = 0) uniform sampler2D depth;
+layout(binding = 5, set = 0) uniform accelerationStructureEXT scene;
+layout(binding = 6, set = 0) uniform samplerCube env_map;
+layout(binding = 7, set = 0) uniform sampler2D blue_noise;
+
+layout( push_constant ) uniform constants
+{
+    ivec2 size;
+    uint frame_number;
+    uint frames_accumulated;
+} control;
+
+#define MAX_BOUNCES 1
+
+float pow5(float x)
+{
+    float clamped = clamp(x, 0.0, 1.0);
+    return pow(1.0 - clamped, 5.0);
+}
+
+void main()
+{
+    ivec3 p = ivec3(gl_GlobalInvocationID);
+    if (any(greaterThanEqual(p.xy, control.size)))
+        return;
+
+    float d = texelFetch(depth, p.xy, 0).r;
+    if (d == 0.0)
+    {
+        imageStore(indirect_diffuse, p.xy, vec4(0.0, 0.0, 0.0, 1.0));
+        return;
+    }
+    vec2 ndc = (vec2(p.xy) + 0.5) / vec2(control.size);
+    ndc.y = 1.0 - ndc.y;
+    ndc = ndc * 2.0 - 1.0;
+
+    vec4 screen_space = vec4(ndc, d, 1.0);
+    vec4 view_space = camera_data.current.inverse_proj * screen_space;
+    view_space /= view_space.w;
+    
+    vec4 world_space = camera_data.current.inverse_view * view_space;
+    vec3 X = world_space.xyz;
+    vec4 normal_roughness = imageLoad(normal_roughness, p.xy);
+    vec3 N = decode_unit_vector(normal_roughness.xy, false, true);
+    mat3 TBN = create_tangent_space(N);
+
+    vec3 camera_pos = camera_data.current.inverse_view[3].xyz;
+    vec3 V = normalize(camera_pos - X);
+    
+    uvec4 seed = uvec4(p.xy, control.frame_number, 0);
+#if 1
+    ivec2 p_ = p.xy % textureSize(blue_noise, 0);
+    vec3 dir = texelFetch(blue_noise, p_, 0).rgb;
+    dir = dir * 2.0 - 1.0;
+    vec3 ray_dir = TBN * dir;
+#else
+    //seed = pcg4d(seed);
+    //seed = pcg4d(seed);
+    vec4 rand = vec4(pcg4d(seed)) *  ldexp(1.0, -32);
+    vec3 ray_dir = TBN * random_cosine_hemisphere(rand.xy);
+#endif
+
+
+    vec3 ray_origin = offset_ray(X, N);
+    //ray_origin = X + N * 0.1;
+    float z_scale = 0.03 + abs( view_space.z ) * 0.005;
+    float NoV0 = abs( dot( N, V ) );
+    ray_origin += V * z_scale;
+    ray_origin += N * pow5( NoV0 ) * z_scale;
+
+    vec3 throughput = vec3(1.0);
+    vec3 radiance = vec3(0.0);
+    const vec3 L = normalize(vec3(0.0, 1.0, 0.2));
+    for (int i = 0; i < MAX_BOUNCES; ++i)
+    {
+        rayQueryEXT rq;
+        rayQueryInitializeEXT(rq, scene, gl_RayFlagsOpaqueEXT, 0xFF, ray_origin, 0.0, ray_dir, 10000.0);
+
+        while (rayQueryProceedEXT(rq))
+        {
+        }
+
+        if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionTriangleEXT) 
+        {
+            const int primitive_id = rayQueryGetIntersectionPrimitiveIndexEXT(rq, true);
+            vec2 barycentrics = rayQueryGetIntersectionBarycentricsEXT(rq, true);
+            const int custom_instance_id = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
+            float hit_t = rayQueryGetIntersectionTEXT(rq, true);
+            Vertex v = get_interpolated_vertex(custom_instance_id, primitive_id, barycentrics);
+            ray_origin = offset_ray(v.pos, v.geometric_normal);
+            // if (dot(v.geometric_normal, -ray_dir) < 0.0) 
+            //     break;
+
+#if 0
+            // Self intersection debugging
+            if (hit_t < 0.1)
+            {
+                imageStore(indirect_diffuse, p.xy, vec4(1.0, 0.0, 1.0, 1.0));
+                return;
+            }
+#endif
+
+            rayQueryEXT shadow_ray;
+            rayQueryInitializeEXT(shadow_ray, scene, gl_RayFlagsTerminateOnFirstHitEXT, 0xFF, ray_origin, 0.0, L, 10000.0);
+
+            rayQueryProceedEXT(shadow_ray);
+
+            //vec3 albedo = v.material.base_color * (1.0 - v.material.metallic);
+            vec3 albedo = vec3(1.0);
+            if (rayQueryGetIntersectionTypeEXT(shadow_ray, true) == gl_RayQueryCommittedIntersectionNoneEXT)
+            {
+                vec3 V = -ray_dir;
+                float NoL = max(0.0, dot(L, v.normal));
+                const float light_intensity = 10.0f;
+                radiance += throughput * albedo / M_PI * NoL * light_intensity;
+            }
+
+            vec4 rand = vec4(pcg4d(seed)) * ldexp(1.0, -32);
+            mat3 tbn = create_tangent_space(v.normal);
+            vec3 new_dir = tbn * random_cosine_hemisphere(rand.xy);
+
+            ray_dir = new_dir;
+            throughput *= albedo;
+            if (any(isnan(throughput)))
+                break;
+        }
+        else
+        {
+            //radiance += throughput * texture(env_map, ray_dir).rgb;
+            break;
+        }
+    }
+
+    vec3 out_color = radiance;
+#if 1
+    if (control.frames_accumulated != 0)
+    {
+        vec4 prev_color = imageLoad(indirect_diffuse, p.xy);
+        float total = float(control.frames_accumulated) + 1.0;
+        //out_color = mix(out_color.rgb, prev_color.rgb, float(control.frames_accumulated) / total);
+        float alpha = max(0.10, 1.0 / total);
+        out_color = mix(prev_color.rgb, out_color.rgb, alpha);
+    }
+#endif
+
+    imageStore(indirect_diffuse, p.xy, vec4(out_color.xyz, 1.0));
+    //imageStore(indirect_diffuse, p.xy, vec4(dir.xyz, 1.0));
+    //imageStore(indirect_diffuse, p.xy, vec4(N * 0.5 + 0.5, 1.0));
+}

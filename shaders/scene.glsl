@@ -5,11 +5,11 @@
 #extension GL_EXT_nonuniform_qualifier : require
 
 #include "test.glsl"
+#include "../shared/shared.h"
 
 layout(set = 0, binding = 2, scalar) uniform camera_buffer{
-	mat4 view;
-	mat4 proj;
-    uvec4 frame_index;
+    Camera_Data current;
+    Camera_Data previous;
 } camera_data;
 
 #ifdef RAY_TRACING

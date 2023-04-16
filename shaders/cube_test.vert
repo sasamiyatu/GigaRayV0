@@ -10,7 +10,7 @@ void main()
     int geom_id = int((gl_InstanceIndex) & 0x3FFF);
     int material_id = int((gl_InstanceIndex >> 14) & 0x3FF);
 
-    mat4 xform = camera_data.proj * camera_data.view;
+    mat4 xform = camera_data.current.proj * camera_data.current.view;
     vec3 pos = vertex_buffer_array[geom_id].verts[gl_VertexIndex].pos;
     frag_pos = pos;
     vec4 hpos = xform * vec4(pos, 1.0);
