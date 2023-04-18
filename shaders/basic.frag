@@ -31,6 +31,7 @@ layout(location = 7) flat in Material mat;
 layout(location = 0) out vec4 color;
 layout(location = 1) out vec4 normal_roughness;
 layout(location = 2) out vec4 basecolor_metalness;
+layout(location = 3) out vec4 world_position;
 
 const vec3 SILVER = vec3(0.95, 0.93, 0.88);
 
@@ -219,6 +220,13 @@ void main()
     vec3 kS = G_vis * F * D;
     vec3 kD = (1.0 - F) * diffuse / PI;
 
+#if 0
+    if (gl_FragCoord.xy == vec2(640.5, 360.5))
+    {
+        debugPrintfEXT("frag: %f %f %f", frag_pos.x, frag_pos.y, frag_pos.z);
+    }
+#endif
+
     MaterialProperties mat_props;
     mat_props.baseColor = albedo;
     mat_props.metalness = metallic_roughness.b;
@@ -236,6 +244,7 @@ void main()
     //color = vec4(evaluated_sh, 1.0);
     normal_roughness = vec4(encode_unit_vector(N, false), mat_props.roughness, 1.0);
     basecolor_metalness = vec4(mat_props.baseColor.rgb, mat_props.roughness);
+    world_position = vec4(frag_pos, 1.0);
 
     // color = vec4(envmap_sample, 1.0);
     // SH_2 sh = SH_samples.samples[0];

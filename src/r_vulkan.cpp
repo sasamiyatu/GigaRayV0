@@ -1458,11 +1458,12 @@ void GPU_Buffer::upload(VkCommandBuffer cmd, u32 frame_index)
 	vkCmdCopyBuffer(cmd, staging_buffer[frame_index].buffer, gpu_buffer.buffer, 1, &copy_region);
 }
 
-void GPU_Buffer::update_staging_buffer(VmaAllocator allocator, u32 frame_index, void* data, size_t data_size)
+void GPU_Buffer::update_staging_buffer(VmaAllocator allocator, u32 frame_index, void* data, size_t data_size, size_t offset)
 {
 	void* mapped;
 	vmaMapMemory(allocator, staging_buffer[frame_index].allocation, &mapped);
-	memcpy(mapped, data, data_size);
+	u8* dst = (u8*)mapped;
+	memcpy(dst + offset, data, data_size);
 	vmaUnmapMemory(allocator, staging_buffer[frame_index].allocation);
 }
 

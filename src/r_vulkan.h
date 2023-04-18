@@ -34,7 +34,7 @@ struct GPU_Buffer
 	size_t size;
 
 	void upload(VkCommandBuffer cmd, u32 frame_index);
-	void update_staging_buffer(VmaAllocator allocator, u32 frame_index, void* data, size_t data_size);
+	void update_staging_buffer(VmaAllocator allocator, u32 frame_index, void* data, size_t data_size, size_t offset = 0);
 };
 
 struct Vk_Pipeline

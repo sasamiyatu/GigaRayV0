@@ -19,4 +19,5 @@ glm::mat4 Camera_Component::get_projection_matrix(float aspect_ratio, float znea
 glm::mat4 Camera_Component::get_view_matrix()
 {
 	return glm::lookAt(origin, origin + forward, up);
+	//return glm::lookAtLH(origin, origin + forward, up);
 }

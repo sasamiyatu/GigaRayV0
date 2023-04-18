@@ -36,6 +36,10 @@ void Game_State::simulate(float dt)
 		vel->velocity -= glm::vec3(orientation[2]) * 1.f;
 	if (keys[SDL_SCANCODE_S])
 		vel->velocity += glm::vec3(orientation[2]) * 1.f;
+	if (keys[SDL_SCANCODE_SPACE])
+		vel->velocity += glm::vec3(0.0f, 1.0f, 0.0f) * 1.f;
+	else if (keys[SDL_SCANCODE_LCTRL])
+		vel->velocity -= glm::vec3(0.0f, 1.0f, 0.0f) * 1.f;
 
 	xform->pos += vel->velocity * dt * fly_speed;
 

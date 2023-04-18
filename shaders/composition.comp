@@ -12,7 +12,8 @@ layout(binding = 2, set = 0, rgba32f) uniform image2D normal_roughness;
 layout(binding = 3, set = 0, rgba32f) uniform image2D basecolor_metalness;
 layout(binding = 4, set = 0) uniform sampler2D depth;
 layout(binding = 5, set = 0, rgba32f) uniform image2D indirect_diffuse;
-layout(binding = 6, set = 0, rgba32f) uniform image2D output_image;
+layout(binding = 6, set = 0, rgba32f) uniform image2D denoiser_output;
+layout(binding = 7, set = 0, rgba32f) uniform image2D output_image;
 
 layout( push_constant ) uniform constants
 {
@@ -62,10 +63,13 @@ void main()
     view_space.xyz /= view_space.w;
     float view_z = 1.0 / (control.inv_proj[2][3] * depth);
 
+    vec4 denoised = imageLoad(denoiser_output, p.xy);
+
+
     if (p.x < split_pixel)
         imageStore(output_image, p.xy, vec4(gamma_corrected.rgb, 1.0));
     else
-        imageStore(output_image, p.xy, vec4(indirect_diffuse.rgb, 1.0));
+        imageStore(output_image, p.xy, vec4(denoised.rgb, 1.0));
 
     //vec4 v = imageLoad(test_img, p.xy + ivec2(0, 500));
     //imageStore(output_image, p.xy, v);

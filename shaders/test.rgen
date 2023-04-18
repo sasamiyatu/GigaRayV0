@@ -159,7 +159,6 @@ void main()
             vec3 normal = v.normal;
             vec3 albedo = v.material.base_color;
 
-
             vec3 p = v.pos;
             ro = offset_ray(p, v.geometric_normal);
             //ro = p + v.geometric_normal * 0.001;
@@ -192,7 +191,7 @@ void main()
                 );
                 if (pay.prim_id == -1)
                 {
-                    const float light_intensity = 10.0f;
+                    const float light_intensity = 100.0f;
                     vec3 V = -rd;
 #ifdef OWN_BRDF
                     radiance += throughput * eval_combined_brdf(normal, L, V, v.material) * light_intensity;

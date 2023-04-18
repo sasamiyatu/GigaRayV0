@@ -31,9 +31,17 @@
 struct ECS;
 struct Mesh;
 
+#define NEEDS_TEMPORAL
+
+#ifdef NEEDS_TEMPORAL
+constexpr u32 GBUFFER_LAYERS = 2;
+#else
+constexpr u32 GBUFFER_LAYERS = 1;
+#endif
+
 struct Render_Target
 {
-	Vk_Allocated_Image image;
+	Vk_Allocated_Image images[GBUFFER_LAYERS];
 	VkFormat format;
 	VkImageLayout layout;
 	std::string name;
@@ -46,7 +54,9 @@ enum Render_Targets
 	DEPTH,
 	NORMAL_ROUGHNESS,
 	BASECOLOR_METALNESS,
+	WORLD_POSITION,
 	INDIRECT_DIFFUSE,
+	DENOISER_OUTPUT,
 	MAX_RENDER_TARGETS
 };
 
@@ -66,6 +76,7 @@ enum Pipelines
 	SKYBOX_PIPELINE,
 	INDIRECT_DIFFUSE_PIPELINE,
 	COMPOSITION_PIPELINE,
+	TEMPORAL_ACCUMULATION,
 	PIPELINE_COUNT,
 };
 
@@ -103,6 +114,8 @@ struct Renderer
 	uint64_t frame_counter = 0;
 	u32 frames_accumulated = 0;
 	u32 current_frame_index = 0;
+	u32 current_frame_gbuffer_index = 0;
+	u32 previous_frame_gbuffer_index = 0;
 	uint32_t swapchain_image_index = 0;
 	VkDescriptorPool descriptor_pool;
 	VkDescriptorSetLayout bindless_set_layout;

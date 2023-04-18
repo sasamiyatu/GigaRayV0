@@ -24,6 +24,7 @@ void main()
     base_color = mat.base_color_factor.rgb;
     mat4 xform =  camera_data.current.viewproj;
     vec3 pos = vertex_buffer_array[geom_id].verts[gl_VertexIndex].pos;
+    //pos *= 0.01;
     normal = vertex_buffer_array[geom_id].verts[gl_VertexIndex].normal;
     texcoord = vertex_buffer_array[geom_id].verts[gl_VertexIndex].texcoord;
     vec4 view_pos = camera_data.current.view * vec4(pos, 1.0);
