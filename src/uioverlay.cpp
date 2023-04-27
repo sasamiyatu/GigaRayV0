@@ -293,7 +293,7 @@ void UI_Overlay::update_and_render(VkCommandBuffer cmd, float dt)
 		}
 		if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_CollapsingHeader | ImGuiTreeNodeFlags_DefaultOpen))
 		{
-			static const char* on_screen_modes[] = { "Final output", "Indirect diffuse", "Denoised", "Hit distance", "Blur radius", "History length"};
+			static const char* on_screen_modes[] = { "Final output", "Indirect diffuse", "Denoised", "Hit distance", "Blur radius", "History length", "Normal"};
 			ImGui::SliderFloat("Exposure", &g_settings.exposure, 0.0f, 100.0f, "%.3f", ImGuiSliderFlags_Logarithmic);
 			ImGui::Combo("On screen", &g_settings.screen_output, on_screen_modes, (int)std::size(on_screen_modes));
 		}

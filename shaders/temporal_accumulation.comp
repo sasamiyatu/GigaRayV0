@@ -121,23 +121,20 @@ void main()
 
     vec2 X_clip_uv = X_clip_prev.xy * 0.5 + 0.5;
     X_clip_uv.y = 1.0 - X_clip_uv.y;
-    Bilinear result = get_bilinear_filter(X_clip_uv, vec2(control.size));
-    vec4 weights = {
-        (1.0 - result.weights.x) * (1.0 - result.weights.y), (result.weights.x) * (1.0 - result.weights.y),
-        (1.0 - result.weights.x) * (result.weights.y), (result.weights.x) * (result.weights.y)
+    Bilinear bilinear = get_bilinear_filter(X_clip_uv, vec2(control.size));
+    vec4 bilinear_weights = {
+        (1.0 - bilinear.weights.x) * (1.0 - bilinear.weights.y), (bilinear.weights.x) * (1.0 - bilinear.weights.y),
+        (1.0 - bilinear.weights.x) * (bilinear.weights.y), (bilinear.weights.x) * (bilinear.weights.y)
     };
 
     float frustum_size = global_constants.data.min_rect_dim_mul_unproject * abs(Xv.z);
     float inv_dist_to_point = 1.0 / frustum_size;
     const float occlusion_threshold = 0.005;
 
-    float NoV = abs(dot(normalize(camera_data.current.inverse_view[3].xyz - X), curr_normal));
     vec3 X_prev = X; // This should take motion vectors into account, but for now our scene is static.
     vec3 X_prev_cam_rel = (X - camera_data.current.inverse_view[3].xyz);
     vec3 Xv_prev = (camera_data.previous.view * vec4(X_prev, 1.0)).xyz;
-    
-    vec4 prev_depth = textureGather(previous_depth, (result.origin + 1.0) / control.size).wzxy;
-    vec4 prev_zs = camera_data.current.proj[3][2] / prev_depth;
+
     float is_in_screen = float(X_clip_uv == clamp(X_clip_uv, 0.0, 1.0));
 
     float threshold = mix(-1.0, occlusion_threshold, is_in_screen);
@@ -145,20 +142,56 @@ void main()
     float NoXprev = abs(dot(X_prev_cam_rel, curr_normal)) * inv_dist_to_point;
     float Zprev = abs(Xv_prev.z);
     float NoVprev = NoXprev / Zprev;
-    vec4 relative_plane_dist = abs(NoVprev * abs(prev_zs) - NoXprev);
-    vec4 valids = step(relative_plane_dist, vec4(threshold));
-    vec4 occlusion_weights = weights * valids;
     
-    vec4 s00 = texelFetch(history, ivec2(result.origin + vec2(0, 0)), 0);
-    vec4 s10 = texelFetch(history, ivec2(result.origin + vec2(1, 0)), 0);
-    vec4 s01 = texelFetch(history, ivec2(result.origin + vec2(0, 1)), 0);
-    vec4 s11 = texelFetch(history, ivec2(result.origin + vec2(1, 1)), 0);
+    // For bicubic
+    vec4 prev_depths00 = textureGather(previous_depth, (bilinear.origin) / control.size).wzxy;
+    vec4 prev_depths10 = textureGather(previous_depth, (bilinear.origin + vec2(2.0, 0.0)) / control.size).wzxy;
+    vec4 prev_depths01 = textureGather(previous_depth, (bilinear.origin + vec2(0.0, 2.0)) / control.size).wzxy;
+    vec4 prev_depths11 = textureGather(previous_depth, (bilinear.origin + vec2(2.0, 2.0)) / control.size).wzxy;
 
-    vec4 prev_color = s00 * occlusion_weights.x + s10 * occlusion_weights.y + s01 * occlusion_weights.z + s11 * occlusion_weights.w;
+    vec4 prev_zs00 = camera_data.current.proj[3][2] / prev_depths00;
+    vec4 prev_zs10 = camera_data.current.proj[3][2] / prev_depths10;
+    vec4 prev_zs01 = camera_data.current.proj[3][2] / prev_depths01;
+    vec4 prev_zs11 = camera_data.current.proj[3][2] / prev_depths11;
+
+    vec3 plane_dist00 = abs(NoVprev * prev_zs00.yzw - NoXprev);
+    vec3 plane_dist10 = abs(NoVprev * prev_zs10.xzw - NoXprev);
+    vec3 plane_dist01 = abs(NoVprev * prev_zs01.xyw - NoXprev);
+    vec3 plane_dist11 = abs(NoVprev * prev_zs11.xyz - NoXprev);
+
+    vec3 valid00 = step(plane_dist00, vec3(threshold));
+    vec3 valid10 = step(plane_dist10, vec3(threshold));
+    vec3 valid01 = step(plane_dist01, vec3(threshold));
+    vec3 valid11 = step(plane_dist11, vec3(threshold));
+
+    bool allow_bicubic = dot(valid00, vec3(1.0)) + dot(valid10, vec3(1.0)) + dot(valid01, vec3(1.0)) + dot(valid11, vec3(1.0)) == 12.0;
+    allow_bicubic = allow_bicubic && global_constants.data.temporal_filtering_mode == 1;
+
+    // Bilinear params
+    vec4 valids = vec4(valid00.z, valid10.y, valid01.y, valid11.x);
+    vec4 occlusion_weights = bilinear_weights * valids;
     float w_sum = dot(occlusion_weights, vec4(1.0));
-    prev_color = w_sum < 0.001 ? vec4(0.0) : prev_color / w_sum;
+
+    vec4 prev_color = vec4(0.0);
+    if (allow_bicubic)
+    {
+        vec4 rt_params = vec4(1.0 / vec2(control.size), vec2(control.size));
+        prev_color = bicubic_filter(history, X_clip_uv, rt_params);
+        prev_color = max(vec4(0.0), prev_color);
+    }
+    else
+    {        
+        vec4 s00 = texelFetch(history, ivec2(bilinear.origin + vec2(0, 0)), 0);
+        vec4 s10 = texelFetch(history, ivec2(bilinear.origin + vec2(1, 0)), 0);
+        vec4 s01 = texelFetch(history, ivec2(bilinear.origin + vec2(0, 1)), 0);
+        vec4 s11 = texelFetch(history, ivec2(bilinear.origin + vec2(1, 1)), 0);
+
+        prev_color = s00 * occlusion_weights.x + s10 * occlusion_weights.y + s01 * occlusion_weights.z + s11 * occlusion_weights.w;
+        prev_color = w_sum < 0.001 ? vec4(0.0) : prev_color / w_sum;
+    }
 
     NoVprev = abs(dot(normalize(camera_data.previous.inverse_view[3].xyz - X), curr_normal));
+    float NoV = abs(dot(normalize(-X_prev_cam_rel), curr_normal));
     float size_quality = ( NoVprev + 1e-3 ) / ( NoV + 1e-3 ); // this order because we need to fix stretching only, shrinking is OK
     size_quality *= size_quality;
     size_quality = mix( 0.1, 1.0, saturate( size_quality ) );
@@ -176,24 +209,6 @@ void main()
     float alpha = 1.0 / accum_speed;
 
     radiance.rgb = mix(final_color.rgb, radiance.rgb, alpha);
-
-#if 0
-    if (global_constants.data.temporal_filtering_mode == 0)
-    {
-        vec4 bilinear = texture(history, X_clip_uv);
-        accum_speed = min(bilinear.a + 1.0, 32.0);
-        alpha = 1.0 / accum_speed;
-        radiance.rgb = mix(bilinear.rgb, old_rad.rgb, alpha);
-    }
-    else
-    {
-        vec4 rt_params = vec4(1.0 / vec2(control.size), vec2(control.size));
-        vec4 bicubic = bicubic_filter(history, X_clip_uv, rt_params);
-        accum_speed = min(bicubic.a + 1.0, 32.0);
-        alpha = 1.0 / accum_speed;
-        radiance.rgb = mix(bicubic.rgb, old_rad.rgb, alpha);
-    }
-#endif
 
     imageStore(accumulated_output, p.xy, vec4(radiance.rgb, accum_speed));
 }

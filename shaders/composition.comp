@@ -113,6 +113,8 @@ void main()
         case 5: // history length
             final_output = viridis_quintic(1.0 - denoised.a / 32.0);
             break;
+        case 6:
+            final_output = normal * 0.5 + 0.5;
         default:
             break;
     }

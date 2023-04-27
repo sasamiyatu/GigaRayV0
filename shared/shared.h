@@ -73,3 +73,4 @@ struct Global_Constants_Data
 #define HIT_DISTANCE 3
 #define BLUR_RADIUS 4
 #define HISTORY_LENGTH 5
+#define NORMAL

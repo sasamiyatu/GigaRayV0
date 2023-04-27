@@ -40,7 +40,7 @@ struct Settings
     bool temporal_accumulation = true;
     bool history_fix = true;
     int screen_output = DENOISED; // Screen_Output
-    Temporal_Filtering_Mode temporal_filter = Temporal_Filtering_Mode::BILINEAR;
+    Temporal_Filtering_Mode temporal_filter = Temporal_Filtering_Mode::BICUBIC;
     float bicubic_sharpness = 0.5f;
 };
 
