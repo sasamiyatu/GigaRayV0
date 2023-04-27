@@ -27,7 +27,11 @@ layout(binding = 7, set = 0, rgba32f) uniform image2D previous_world_position;
 layout(binding = 8, set = 0) uniform sampler2D previous_depth;
 layout(binding = 9, set = 0, rgba32f) uniform image2D noisy_input;
 layout(binding = 10, set = 0, rgba32f) uniform image2D accumulated_output;
-layout(binding = 11, set = 0, rgba32f) uniform image2D history;
+layout(binding = 11, set = 0) uniform sampler2D history;
+layout(binding = 12, set = 0) readonly buffer global_constants_t
+{
+    Global_Constants_Data data;
+} global_constants;
 
 layout( push_constant ) uniform constants
 {
@@ -50,130 +54,146 @@ Bilinear get_bilinear_filter(vec2 uv /*[0, 1]*/, vec2 tex_size)
     return result;
 }
 
+vec4 bicubic_filter(sampler2D tex, vec2 uv, vec4 render_target_params)
+{
+    vec2 pos = render_target_params.zw * uv; // zw: width and height
+    vec2 center_pos = floor(pos - 0.5) + 0.5; // 
+    vec2 f = pos - center_pos;
+    vec2 f2 = f * f;
+    vec2 f3 = f * f2;
+
+    float c = global_constants.data.bicubic_sharpness;
+    vec2 w0 =        -c  * f3 +  2.0 * c        * f2 - c * f;
+    vec2 w1 =  (2.0 - c) * f3 - (3.0 - c)       * f2         + 1.0;
+    vec2 w2 = -(2.0 - c) * f3 + (3.0 - 2.0 * c) * f2 + c * f;
+    vec2 w3 =         c  * f3 -               c * f2;
+
+    vec2 w12 = w1 + w2;
+    vec2 tc12 = render_target_params.xy * (center_pos + w2 / w12);
+    vec4 center_color = texture(tex, vec2(tc12.x, tc12.y));
+
+    vec2 tc0 = render_target_params.xy * (center_pos - 1.0);
+    vec2 tc3 = render_target_params.xy * (center_pos + 2.0);
+    vec4 color = texture(tex, vec2(tc12.x, tc0.y)) * (w12.x * w0.y) + 
+        texture(tex, vec2(tc0.x, tc12.y)) * (w0.x * w12.y) +
+        center_color * (w12.x * w12.y) + 
+        texture(tex, vec2(tc3.x, tc12.y)) * (w3.x * w12.y) +
+        texture(tex, vec2(tc12.x, tc3.y)) * (w12.x * w3.y);
+
+    float total_w =  (w12.x * w0.y) + (w0.x * w12.y) + (w12.x * w12.y) + (w3.x * w12.y) + (w12.x * w3.y);
+
+    return color / total_w;
+}
+
 void main()
 {
     ivec3 p = ivec3(gl_GlobalInvocationID);
     if (any(greaterThanEqual(p.xy, control.size)))
         return;
 
-    vec2 ndc = vec2(p.xy + 0.5) / control.size;
-    ndc.y = 1.0 - ndc.y;
-    ndc = ndc * 2.0 - 1.0;
-
     vec4 radiance = imageLoad(noisy_input, p.xy);
+
+    if (global_constants.data.temporal_accumulation == 0)
+    {
+        imageStore(accumulated_output, p.xy, vec4(radiance.rgb, 1.0));
+        return;
+    }
 
     vec4 curr_normal_roughness = imageLoad(current_normal_roughness, p.xy);
     vec3 curr_normal = decode_unit_vector(curr_normal_roughness.xy, false, true);
     float curr_depth = texelFetch(current_depth, p.xy, 0).r;
+
+    if (curr_depth == 0.0)
+    {
+        imageStore(accumulated_output, p.xy, vec4(0.0));
+        return;
+    }
+
+    vec2 ndc = vec2(p.xy + 0.5) / control.size;
+    ndc.y = 1.0 - ndc.y;
+    ndc = ndc * 2.0 - 1.0;
+
     vec3 Xv = get_view_pos(vec3(ndc, curr_depth), camera_data.current.proj);
-    //vec4 Xv_homo = camera_data.current.inverse_proj * vec4(ndc, curr_depth, 1.0);
-    //vec3 Xv = Xv_homo.xyz / Xv_homo.w;
     vec3 X = (camera_data.current.inverse_view * vec4(Xv, 1.0)).xyz;
-    //vec3 X = imageLoad(current_world_position, p.xy).xyz;
 
-    mat4 prev_v = camera_data.previous.view;
-    mat4 prev_proj = camera_data.previous.proj;
-    //prev_proj[1][1] *= 1.0;
-
-    mat4 vp = prev_proj * prev_v;
-    //vp[1][1] *= 1.0;
-    vec4 X_clip_prev = (vp * vec4(X, 1.0));
+    vec4 X_clip_prev = (camera_data.previous.viewproj * vec4(X, 1.0));
     X_clip_prev /= X_clip_prev.w;
 
     vec2 X_clip_uv = X_clip_prev.xy * 0.5 + 0.5;
     X_clip_uv.y = 1.0 - X_clip_uv.y;
-    //X_clip_ndc.y = 1.0 - X_clip_ndc.y;
     Bilinear result = get_bilinear_filter(X_clip_uv, vec2(control.size));
     vec4 weights = {
         (1.0 - result.weights.x) * (1.0 - result.weights.y), (result.weights.x) * (1.0 - result.weights.y),
         (1.0 - result.weights.x) * (result.weights.y), (result.weights.x) * (result.weights.y)
     };
 
-    ivec2 offsets[4] = {
-        ivec2(0, 0),
-        ivec2(1, 0),
-        ivec2(0, 1),
-        ivec2(1, 1)
-    };
+    float frustum_size = global_constants.data.min_rect_dim_mul_unproject * abs(Xv.z);
+    float inv_dist_to_point = 1.0 / frustum_size;
+    const float occlusion_threshold = 0.005;
 
-    vec2 prev_screen_pos = (X_clip_prev.xy * 0.5 + 0.5) * control.size;
+    float NoV = abs(dot(normalize(camera_data.current.inverse_view[3].xyz - X), curr_normal));
+    vec3 X_prev = X; // This should take motion vectors into account, but for now our scene is static.
+    vec3 X_prev_cam_rel = (X - camera_data.current.inverse_view[3].xyz);
+    vec3 Xv_prev = (camera_data.previous.view * vec4(X_prev, 1.0)).xyz;
+    
+    vec4 prev_depth = textureGather(previous_depth, (result.origin + 1.0) / control.size).wzxy;
+    vec4 prev_zs = camera_data.current.proj[3][2] / prev_depth;
+    float is_in_screen = float(X_clip_uv == clamp(X_clip_uv, 0.0, 1.0));
+
+    float threshold = mix(-1.0, occlusion_threshold, is_in_screen);
+
+    float NoXprev = abs(dot(X_prev_cam_rel, curr_normal)) * inv_dist_to_point;
+    float Zprev = abs(Xv_prev.z);
+    float NoVprev = NoXprev / Zprev;
+    vec4 relative_plane_dist = abs(NoVprev * abs(prev_zs) - NoXprev);
+    vec4 valids = step(relative_plane_dist, vec4(threshold));
+    vec4 occlusion_weights = weights * valids;
+    
+    vec4 s00 = texelFetch(history, ivec2(result.origin + vec2(0, 0)), 0);
+    vec4 s10 = texelFetch(history, ivec2(result.origin + vec2(1, 0)), 0);
+    vec4 s01 = texelFetch(history, ivec2(result.origin + vec2(0, 1)), 0);
+    vec4 s11 = texelFetch(history, ivec2(result.origin + vec2(1, 1)), 0);
+
+    vec4 prev_color = s00 * occlusion_weights.x + s10 * occlusion_weights.y + s01 * occlusion_weights.z + s11 * occlusion_weights.w;
+    float w_sum = dot(occlusion_weights, vec4(1.0));
+    prev_color = w_sum < 0.001 ? vec4(0.0) : prev_color / w_sum;
+
+    NoVprev = abs(dot(normalize(camera_data.previous.inverse_view[3].xyz - X), curr_normal));
+    float size_quality = ( NoVprev + 1e-3 ) / ( NoV + 1e-3 ); // this order because we need to fix stretching only, shrinking is OK
+    size_quality *= size_quality;
+    size_quality = mix( 0.1, 1.0, saturate( size_quality ) );
+    float footprint_quality = w_sum;
+    footprint_quality = sqrt(clamp(footprint_quality, 0.0, 1.0));
+    footprint_quality *= size_quality;
+
+    vec3 final_color = prev_color.rgb;
+    float accum_speed_prev = prev_color.a;
+
+    float accum_speed = min(accum_speed_prev, 32.0);
+    accum_speed *= mix(footprint_quality, 1.0, 1.0 / (accum_speed + 1.0));
+    accum_speed += 1.0;
+
+    float alpha = 1.0 / accum_speed;
+
+    radiance.rgb = mix(final_color.rgb, radiance.rgb, alpha);
+
 #if 0
-    if (p.xy == ivec2(640, 360))
+    if (global_constants.data.temporal_filtering_mode == 0)
     {
-        vec2 curr_screen_pos = (ndc * 0.5 + 0.5) * control.size;
-        debugPrintfEXT("X: %f %f %f", X.x, X.y, X.z);
-        debugPrintfEXT("ndc: %f %f\nprev: %f %f", ndc.x, ndc.y, X_clip_prev.x, X_clip_prev.y);
-        debugPrintfEXT("curr screen pos: %f %f", curr_screen_pos.x, curr_screen_pos.y);
-        debugPrintfEXT("screen_pos: %f %f", prev_screen_pos.x, prev_screen_pos.y);
-        debugPrintfEXT("bilinear orig: %f %f\nweights: %f %f", result.origin.x, result.origin.y, result.weights.x, result.weights.y);
+        vec4 bilinear = texture(history, X_clip_uv);
+        accum_speed = min(bilinear.a + 1.0, 32.0);
+        alpha = 1.0 / accum_speed;
+        radiance.rgb = mix(bilinear.rgb, old_rad.rgb, alpha);
+    }
+    else
+    {
+        vec4 rt_params = vec4(1.0 / vec2(control.size), vec2(control.size));
+        vec4 bicubic = bicubic_filter(history, X_clip_uv, rt_params);
+        accum_speed = min(bicubic.a + 1.0, 32.0);
+        alpha = 1.0 / accum_speed;
+        radiance.rgb = mix(bicubic.rgb, old_rad.rgb, alpha);
     }
 #endif
 
-    float inv_dist_to_point = 1.0 / distance(X, camera_data.current.inverse_view[3].xyz);
-    vec4 prev_color = vec4(0.0);
-    float total_weight = 0.0;
-    const float occlusion_threshold = 0.010;
-    float total_occlusion = 0.0;
-    for (int i = 0; i < 4; ++i)
-    {
-        ivec2 prev_p = ivec2(result.origin) + offsets[i];
-        float is_in_screen = (all(greaterThanEqual(prev_p, ivec2(0))) && all(lessThan(prev_p, control.size))) ? 1.0 : 0.0;
-        float w = weights[i];
-        vec4 prev_radiance = imageLoad(history, prev_p.xy);
-        vec4 prev_n_r = imageLoad(previous_normal_roughness, prev_p.xy);
-        vec3 prev_n = decode_unit_vector(prev_n_r.xy, false, true);
-        if (any(isnan(prev_radiance))) 
-            prev_radiance = vec4(0.0, 0.0, 0.0, 1.0);
-        float prev_depth = texelFetch(previous_depth, prev_p.xy, 0).r;
-        float prev_view_z = get_view_z(prev_depth, camera_data.current.proj);
-        vec3 X_prev = X; // Assume no motion in world space for now (everything static)
-        vec3 Xv_prev = (camera_data.previous.view * vec4(X_prev, 1.0)).xyz;
-        float NoXprev1 = abs(dot(curr_normal, X_prev));
-        float NoXprev2 = abs(dot(prev_n, X_prev));
-        float NoXprev = max(NoXprev1, NoXprev2) * inv_dist_to_point;
-        float Z_prev = Xv_prev.z;
-        float NoVprev = NoXprev / abs(Z_prev);
-        float plane_dist = abs(NoVprev * abs(prev_view_z) - NoXprev);
-        float occlusion = step(occlusion_threshold, plane_dist);
-
-        if (p.xy == ivec2(640, 360))
-        {
-            debugPrintfEXT("plane dist: %f", plane_dist);
-        }
-
-        float w_n = dot(prev_n, curr_normal) > 0.5 ? 1.0 : 0.0;
-        occlusion = clamp(is_in_screen - occlusion, 0.0, 1.0);
-        occlusion *= w_n;
-        total_occlusion += occlusion;
-
-        w *= occlusion;
-        
-        prev_color += prev_radiance * w;
-        total_weight += w;
-    }
-    
-    total_weight = max(total_weight, 1e-3);
-
-    vec3 final_color = prev_color.rgb / total_weight;
-    //float accum_speed_prev = imageLoad(history, p.xy).a;
-    float accum_speed_prev = prev_color.a / total_weight;
-    if (total_occlusion == 0.0)
-    {
-        accum_speed_prev = 0.0;
-        //radiance.rgb = vec3(1.0, 0.0, 1.0);
-    }
-
-
-    float accum_speed = min(accum_speed_prev + 1.0, 32.0);
-
-    float alpha = 1.0 / accum_speed;
-    if (p.xy == ivec2(0, 0))
-    {
-        debugPrintfEXT("accum speed: %f, alpha: %f", accum_speed, alpha);
-    }
-    radiance.rgb = mix(final_color.rgb, radiance.rgb, alpha);
-
     imageStore(accumulated_output, p.xy, vec4(radiance.rgb, accum_speed));
-    //imageStore(accumulated_output, p.xy, vec4(vec3(linear_prev_depth / 1000.0), 1.0));
-    //imageStore(accumulated_output, p.xy, vec4(diff * 0.5 + 0.5, 1.0));
 }

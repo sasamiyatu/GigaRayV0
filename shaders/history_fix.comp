@@ -1,0 +1,155 @@
+#version 460
+
+#extension GL_EXT_debug_printf : enable
+#extension GL_KHR_shader_subgroup_basic : enable
+#extension GL_KHR_shader_subgroup_arithmetic : enable
+#extension GL_GOOGLE_include_directive : enable
+
+#include "../shared/shared.h"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(binding = 0, set = 0, rgba32f) uniform image2D accumulated_input_output;
+layout(binding = 1, set = 0) uniform sampler2D history_fix;
+layout(binding = 2, set = 0) uniform sampler2D history_fix_view_z;
+layout(binding = 3, set = 0) readonly buffer global_constants_t
+{
+    Global_Constants_Data data;
+} global_constants;
+
+layout( push_constant ) uniform constants
+{
+    ivec2 size;
+} control;
+
+#define MAX_FRAME_NUMBER_WITH_HISTORY_FIX 4
+
+float saturate(float x)
+{
+    return clamp(x, 0.0, 1.0);
+}
+
+struct Bilinear 
+{ 
+    vec2 origin;
+    vec2 weights; 
+};
+
+Bilinear get_bilinear_filter( vec2 uv, vec2 tex_size )
+{
+    Bilinear result;
+    result.origin = floor( uv * tex_size - 0.5 );
+    result.weights = fract( uv * tex_size - 0.5 );
+    return result;
+}
+
+vec4 get_bilinear_custom_weights( Bilinear f, vec4 custom_weights )
+{
+    vec4 weights;
+    weights.x = ( 1.0 - f.weights.x ) * ( 1.0 - f.weights.y );
+    weights.y = f.weights.x * ( 1.0 - f.weights.y );
+    weights.z = ( 1.0 - f.weights.x ) * f.weights.y;
+    weights.w = f.weights.x * f.weights.y;
+    return weights * custom_weights;
+}
+
+vec4 get_bilateral_weight(vec4 view_z, float real_z)
+{
+    const float thresh = 0.05;
+    vec4 relative_diff = abs(view_z - real_z) / real_z;
+    vec4 weights = 1.0 - smoothstep(0.0, thresh, relative_diff);
+    return weights;
+}
+
+vec4 apply_bilinear_custom_weights(vec4 s00, vec4 s10, vec4 s01, vec4 s11, vec4 w, bool normalize)
+{
+    vec4 r = s00 * w.x + s10 * w.y + s01 * w.z + s11 * w.w;
+    return r * ( normalize ? 1.0 / ( dot( w, vec4(1.0) ) ) : 1.0 );
+}
+
+void main()
+{
+    ivec3 p = ivec3(gl_GlobalInvocationID);
+    if (any(greaterThanEqual(p.xy, control.size)))
+        return;
+
+    if (global_constants.data.history_fix == 0)
+        return;
+
+    vec4 in_radiance = imageLoad(accumulated_input_output, p.xy);
+
+    float history_length = in_radiance.a - 1.0;
+    float norm_accumulated_frame_num = clamp(history_length / MAX_FRAME_NUMBER_WITH_HISTORY_FIX, 0.0, 1.0);
+
+    if (norm_accumulated_frame_num == 1.0)
+        return;
+
+    uint mip_level = uint(4.0 * (1.0 - norm_accumulated_frame_num));
+
+    mip_level = clamp(mip_level, 0, 4);
+
+    vec2 uv = vec2(p.xy + 0.5) / control.size;
+
+    float real_z = texelFetch(history_fix_view_z, p.xy, 0).r;
+    if (isinf(real_z))
+        return;
+
+    const ivec2 offsets[4] = {
+        ivec2(0, 0),
+        ivec2(1, 0),
+        ivec2(0, 1),
+        ivec2(1, 1)
+    };
+
+    // if (p.xy == ivec2(0, 0))
+    // {
+    //     debugPrintfEXT("mip: %d", mip_level);
+    // }
+
+#if 1
+    vec4 fixed_hist = in_radiance;
+
+#if 1
+    while (mip_level > 0)
+    {
+        ivec2 mip_size = control.size >> mip_level;
+        Bilinear f = get_bilinear_filter( uv, mip_size );
+        
+        vec4 view_zs;
+        vec4 in_rads[4];
+        for (int i = 0; i < 4; ++i)
+        {
+            ivec2 p_ = ivec2(f.origin) + offsets[i];
+            view_zs[i] = texelFetch(history_fix_view_z, p_.xy, int(mip_level)).r;
+            in_rads[i] = texelFetch(history_fix, p_.xy, int(mip_level));
+        }
+
+        vec4 bilateral_weights = get_bilateral_weight(view_zs, real_z);
+        vec4 bilinear_weights = get_bilinear_custom_weights(f, vec4(1.0));
+        float bilateral_sum = dot(bilateral_weights, vec4(0.25));
+        if (p.xy == ivec2(0, 0))
+        {
+           // debugPrintfEXT("mip: %d, view w: %f %f %f %f, real_z: %f", mip_level, view_zs.x, view_zs.y, view_zs.z, view_zs.w, real_z);
+            //debugPrintfEXT("bilateral w: %f %f %f %f, weighted_sum: %f", bilateral_weights.x, bilateral_weights.y, bilateral_weights.z, bilateral_weights.w, bilateral_sum);
+        }
+
+        vec4 weights = bilinear_weights * bilateral_weights;
+
+        if (bilateral_sum > 0.1)
+        {
+            fixed_hist = apply_bilinear_custom_weights(in_rads[0], in_rads[1], in_rads[2], in_rads[3], weights, true);
+            // float mippimus = mip_level / 4.0;
+            // fixed_hist = vec4(viridis_quintic(mippimus), in_radiance.a);
+            break;
+        }
+
+        mip_level--;
+    }
+#endif
+#else
+    vec4 fixed_hist = textureLod(history_fix, uv, mip_level);
+#endif
+   
+    imageStore(accumulated_input_output, p.xy, vec4(fixed_hist.rgb, in_radiance.a));
+    //imageStore(accumulated_input_output, p.xy, vec4(viridis_quintic(0.0), in_radiance.a));
+}

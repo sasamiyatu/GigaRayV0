@@ -15,11 +15,16 @@ layout(local_size_x = 4, local_size_y = 8, local_size_z = 1) in;
 
 layout(binding = 0, set = 0, rgba32f) uniform image2D indirect_diffuse;
 layout(binding = 1, set = 0, rgba32f) uniform image2D normal_roughness;
-layout(binding = 3, set = 0, rgba32f) uniform image2D basecolor_metalness;
+layout(binding = 3, set = 0) uniform sampler2D basecolor_metalness;
 layout(binding = 4, set = 0) uniform sampler2D depth;
 layout(binding = 5, set = 0) uniform accelerationStructureEXT scene;
 layout(binding = 6, set = 0) uniform samplerCube env_map;
 layout(binding = 7, set = 0) uniform sampler2D blue_noise;
+layout(binding = 8, set = 0) readonly buffer global_constants_t
+{
+    Global_Constants_Data data;
+} global_constants;
+
 
 layout( push_constant ) uniform constants
 {
@@ -79,7 +84,7 @@ void main()
 
     vec3 ray_origin = offset_ray(X, N);
     //ray_origin = X + N * 0.1;
-    float z_scale = 0.03 + abs( view_space.z ) * 0.005;
+    float z_scale = 0.0003 + abs( view_space.z ) * 0.0005;
     float NoV0 = abs( dot( N, V ) );
     ray_origin += V * z_scale;
     ray_origin += N * pow5( NoV0 ) * z_scale;
@@ -110,6 +115,19 @@ void main()
             ray_origin = offset_ray(v.pos, v.geometric_normal);
             // if (dot(v.geometric_normal, -ray_dir) < 0.0) 
             //     break;
+
+            float frustum_size = global_constants.data.min_rect_dim_mul_unproject * abs(view_space.z);
+            float hit_dist_normalization = global_constants.data.hit_dist_params.x + global_constants.data.hit_dist_params.y * abs(view_space.z);
+            float normalized_hit_dist = clamp(hit_t / hit_dist_normalization, 0.0, 1.0);
+            float reconstructed_hit_t = normalized_hit_dist * hit_dist_normalization;
+            float blur_radius_mul = clamp(reconstructed_hit_t / frustum_size, 0.0, 1.0);
+            // if (p.xy == ivec2(640, 360))
+            // {
+            //     debugPrintfEXT("hit_t: %f, norm: %f, reconst: %f, frustum size: %f, blur_mul: %f", hit_t, normalized_hit_dist, reconstructed_hit_t, frustum_size, blur_radius_mul);
+            // }
+
+            // imageStore(indirect_diffuse, p.xy, vec4(vec3(normalized_hit_dist), 1.0));
+            // return;
 
 #if 0
             // Self intersection debugging
@@ -149,6 +167,8 @@ void main()
         else
         {
             //radiance += throughput * texture(env_map, ray_dir).rgb;
+            imageStore(indirect_diffuse, p.xy, vec4(1.0, 1.0, 1.0, 1.0));
+            return;
 #if MAX_BOUNCES != 1
             break;
 #endif
@@ -168,6 +188,6 @@ void main()
 #endif
 #endif
     imageStore(indirect_diffuse, p.xy, vec4(out_color.xyz, 1.0));
-    //imageStore(indirect_diffuse, p.xy, vec4(dir.xyz, 1.0));
+    //imageStore(indirect_diffuse, p.xy, vec4(albedo.xyz, 1.0));
     //imageStore(indirect_diffuse, p.xy, vec4(N * 0.5 + 0.5, 1.0));
 }

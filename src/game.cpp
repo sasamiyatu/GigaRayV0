@@ -1,8 +1,16 @@
 #include "game.h"
 #include "input.h"
+#include "settings.h"
 
 void Game_State::simulate(float dt)
 {
+	if (g_settings.menu_open)
+	{
+		mouse_state.xrel = 0;
+		mouse_state.yrel = 0;
+		return;
+	}
+
 	auto vel = ecs->get_component<Velocity_Component>(player_entity);
 	auto xform = ecs->get_component<Transform_Component>(player_entity);
 
@@ -26,7 +34,6 @@ void Game_State::simulate(float dt)
 
 	xform->rotation = glm::toQuat(orientation);
 
-	const float fly_speed = 150.f;
 	vel->velocity = glm::vec3(0.0);
 	if (keys[SDL_SCANCODE_A])
 		vel->velocity -= glm::vec3(orientation[0]) * 1.f;
@@ -38,13 +45,19 @@ void Game_State::simulate(float dt)
 		vel->velocity += glm::vec3(orientation[2]) * 1.f;
 	if (keys[SDL_SCANCODE_SPACE])
 		vel->velocity += glm::vec3(0.0f, 1.0f, 0.0f) * 1.f;
-	else if (keys[SDL_SCANCODE_LCTRL])
+	if (keys[SDL_SCANCODE_LCTRL])
 		vel->velocity -= glm::vec3(0.0f, 1.0f, 0.0f) * 1.f;
 
 	xform->pos += vel->velocity * dt * fly_speed;
 
-
 	auto cam = ecs->get_component<Camera_Component>(player_entity);
 	if (yaw_delta != 0.f || pitch_delta != 0.f || glm::dot(vel->velocity, vel->velocity) != 0.f)
 		cam->set_transform(xform);
+}
+
+void Game_State::handle_mouse_scroll(int delta)
+{
+	float change = (float)delta * 0.05f;
+	fly_speed += change;
+	fly_speed = std::max(0.0f, fly_speed);
 }

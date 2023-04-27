@@ -186,7 +186,7 @@ struct Vk_Context
 	Vk_Pipeline create_compute_pipeline(const char* shaderpat, VkDescriptorSetLayout bindless_layout = VK_NULL_HANDLE);
 	VkDescriptorSetLayout create_layout_from_spirv(u8* bytecode, u32 size);
 	Vk_Allocated_Image load_texture_hdri(const char* filepath, VkImageUsageFlags usage = (VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT));
-	Vk_Allocated_Image load_texture(const char* filepath, bool flip_y = false);
+	Vk_Allocated_Image load_texture(const char* filepath, bool flip_y = false, bool generate_mipmaps = false);
 	Vk_Allocated_Image load_texture_async(const char* filepath, u64* timeline_semaphore_value);
 	Cubemap create_cubemap(u32 size, VkFormat format);
 	VkDescriptorSetLayout create_descriptor_set_layout(u32 num_shaders, struct Shader* shaders);

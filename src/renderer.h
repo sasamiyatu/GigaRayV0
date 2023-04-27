@@ -16,6 +16,8 @@
 #include "sh.h"
 #include "texture.h"
 #include "scene.h"
+#include "g_math.h"
+#include "uioverlay.h"
 
 #define VK_CHECK(x)                                                 \
 	do                                                              \
@@ -65,6 +67,15 @@ struct Framebuffer
 	Render_Target render_targets[MAX_RENDER_TARGETS];
 };
 
+constexpr u32 HISTORY_FIX_MIP_LEVELS = 5;
+
+struct History_Fix
+{
+	Vk_Allocated_Image radiance_image;
+	Vk_Allocated_Image view_z_image;
+	VkImageView radiance_mip_views[HISTORY_FIX_MIP_LEVELS];
+	VkImageView view_z_mip_views[HISTORY_FIX_MIP_LEVELS];
+};
 
 enum Pipelines
 {
@@ -77,13 +88,19 @@ enum Pipelines
 	INDIRECT_DIFFUSE_PIPELINE,
 	COMPOSITION_PIPELINE,
 	TEMPORAL_ACCUMULATION,
+	HISTORY_FIX_MIP_GEN,
+	HISTORY_FIX,
+	PRE_BLUR,
 	PIPELINE_COUNT,
 };
 
 enum Samplers
 {
 	POINT_SAMPLER = 0,
-	BILINEAR_SAMPLER,
+	BILINEAR_SAMPLER_WRAP,
+	BILINEAR_SAMPLER_CLAMP,
+	ANISOTROPIC_SAMPLER,
+	BICUBIC_SAMPLER,
 	CUBEMAP_SAMPLER,
 	SAMPLER_COUNT
 };
@@ -92,20 +109,14 @@ enum Samplers
 
 struct Renderer
 {
-	enum Render_Mode {
-		PATH_TRACER = 0,
-		RASTER,
-		SIDE_BY_SIDE
-	};
-	
 	i32 window_width, window_height;
 	float aspect_ratio;
 	Vk_Context* context;
 	Platform* platform;
 	bool initialized = false;
 
-	Vk_Pipeline pipelines[PIPELINE_COUNT];
-	VkSampler samplers[SAMPLER_COUNT];
+	Vk_Pipeline pipelines[PIPELINE_COUNT] = {};
+	VkSampler samplers[SAMPLER_COUNT] = {};
 
 	Raytracing_Pipeline primary_ray_pipeline;
 
@@ -125,8 +136,6 @@ struct Renderer
 	Scene scene;
 	GPU_Buffer gpu_camera_data;
 	Vk_Allocated_Image environment_map;
-	VkSampler bilinear_sampler;
-	VkSampler bilinear_sampler_clamp;
 	VkQueryPool query_pools[FRAMES_IN_FLIGHT];
 	Vk_Allocated_Image brdf_lut;
 	Vk_Allocated_Image prefiltered_envmap;
@@ -134,18 +143,26 @@ struct Renderer
 	Cubemap cubemap;
 	GPU_Buffer indirect_draw_buffer;
 	GPU_Buffer instance_data_buffer;
+	Vk_Allocated_Buffer global_constants_buffer;
+	Global_Constants_Data* global_constants_data;
 
-	Render_Mode render_mode = PATH_TRACER;
+	History_Fix history_fix;
+
+	UI_Overlay ui_overlay;
 
 	double current_frame_gpu_time;
 	double cpu_frame_begin;
 	double cpu_frame_end;
+
+	u32 magic_uint = 0;
 
 	Resource_Manager<Mesh>* mesh_manager;
 	Resource_Manager<Texture>* texture_manager;
 	Resource_Manager<Material>* material_manager;
 
 	Probe_System probe_system;
+
+	math::pcg32_random_t rng_state;
 
 	Timer* timer;
 
@@ -178,14 +195,14 @@ struct Renderer
 
 	void create_lookup_textures();
 	void create_cubemap_from_envmap();
-	void do_frame(ECS* ecs);
+	void do_frame(ECS* ecs, float dt);
 	void init_scene(ECS* ecs);
 	void pre_frame();
 	void begin_frame();
 	void render_gbuffer();
 	void trace_primary_rays();
 	void end_frame();
-	void draw(ECS* ecs);
+	void draw(ECS* ecs, float dt);
 	void trace_rays(VkCommandBuffer cmd);
 	void tonemap(VkCommandBuffer cmd);
 	void rasterize(VkCommandBuffer cmd, ECS* ecs);

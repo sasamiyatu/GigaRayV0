@@ -35,6 +35,7 @@ struct Mesh_Primitive
 	u32 vertex_count;
 	u32 material_id;
 	std::optional<Acceleration_Structure> acceleration_structure;
+	glm::mat4 model;
 };
 
 struct Mesh
@@ -62,13 +63,6 @@ struct Mesh
 		VkAccelerationStructureBuildGeometryInfoKHR* build_info,
 		VkAccelerationStructureGeometryKHR* geometry,
 		VkAccelerationStructureBuildRangeInfoKHR* range_info);
-};
-
-struct Primitive_Info
-{
-	u32 material_index;
-	u32 vertex_count;
-	u32 vertex_offset;
 };
 
 struct Geometry

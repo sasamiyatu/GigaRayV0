@@ -3,6 +3,8 @@
 #include "defines.h"
 #include <vector>
 
+#define DEFAULT_FENCE_TIMEOUT 100000000000
+
 namespace vkinit
 {
 	inline VkAccelerationStructureInstanceKHR acceleration_structure_instance(uint64_t acceleration_structure_ref)
@@ -126,19 +128,14 @@ namespace vkinit
 		return info;
 	}
 
-	inline VkPipelineViewportStateCreateInfo pipeline_viewport_state_create_info(u32 viewport_count, VkViewport* viewports, u32 scissor_count, VkRect2D* scissors, bool dynamic)
+	inline VkPipelineViewportStateCreateInfo pipeline_viewport_state_create_info(u32 viewport_count, VkViewport* viewports, u32 scissor_count, VkRect2D* scissors)
 	{
 		VkPipelineViewportStateCreateInfo info{ VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO };
 		
 		info.viewportCount = viewport_count;
 		info.scissorCount = scissor_count;
-		if (!dynamic)
-		{
-			assert(viewports);
-			assert(scissors);
-			info.pScissors = scissors;
-			info.pViewports = viewports;
-		}
+		info.pScissors = scissors;
+		info.pViewports = viewports;
 
 		return info;
 	}
@@ -493,5 +490,167 @@ namespace vkinit
 		return write;
 	}
 
+	inline VkWriteDescriptorSet write_descriptor_set(VkDescriptorImageInfo* image_info, u32 binding, u32 dst_array_element, VkDescriptorSet dst_set)
+	{
+		VkWriteDescriptorSet write{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+		write.descriptorCount = 1;
+		write.descriptorType = image_info->sampler != VK_NULL_HANDLE ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+		write.dstArrayElement = dst_array_element;
+		write.dstBinding = binding;
+		write.dstSet = dst_set;
+		write.pImageInfo = image_info;
+		return write;
+	}
 
+	inline void set_image_layout(
+		VkCommandBuffer cmd,
+		VkImage image,
+		VkImageAspectFlags aspect_mask,
+		VkImageLayout old_layout,
+		VkImageLayout new_layout,
+		VkPipelineStageFlags src_stage_mask,
+		VkPipelineStageFlags dst_stage_mask,
+		VkAccessFlags src_access_mask,
+		VkAccessFlags dst_access_mask)
+	{
+		VkImageSubresourceRange range = {};
+		range.aspectMask = aspect_mask;
+		range.baseMipLevel = 0;
+		range.levelCount = 1;
+		range.layerCount = 1;
+
+		VkImageMemoryBarrier image_memory_barrier = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+		image_memory_barrier.oldLayout = old_layout;
+		image_memory_barrier.newLayout = new_layout;
+		image_memory_barrier.image = image;
+		image_memory_barrier.subresourceRange = range;
+		image_memory_barrier.srcAccessMask = src_access_mask;
+		image_memory_barrier.dstAccessMask = dst_access_mask;
+
+		vkCmdPipelineBarrier(cmd,
+			src_stage_mask,
+			dst_stage_mask,
+			0,
+			0, nullptr,
+			0, nullptr,
+			1, &image_memory_barrier);
+	}
+
+	inline VkFenceCreateInfo fence_create_info(VkFenceCreateFlags flags = 0)
+	{
+		VkFenceCreateInfo fence_create_info = { VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
+		fence_create_info.flags = flags;
+		return fence_create_info;
+	}
+
+	inline VkDescriptorPoolSize descriptor_pool_size(
+		VkDescriptorType type,
+		u32 descriptor_count)
+	{
+		VkDescriptorPoolSize descriptor_pool_size = {};
+		descriptor_pool_size.type = type;
+		descriptor_pool_size.descriptorCount = descriptor_count;
+		return descriptor_pool_size;
+	}
+
+	inline VkDescriptorPoolCreateInfo descriptor_pool_create_info(
+		VkDescriptorPoolSize* pool_sizes,
+		u32 count,
+		u32 max_sets)
+	{
+		VkDescriptorPoolCreateInfo descriptor_pool_info = { VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
+		descriptor_pool_info.poolSizeCount = count;
+		descriptor_pool_info.pPoolSizes = pool_sizes;
+		descriptor_pool_info.maxSets = max_sets;
+		return descriptor_pool_info;
+	}
+
+	inline VkDescriptorSetLayoutCreateInfo descriptor_set_layout_create_info(
+		VkDescriptorSetLayoutBinding* bindings, 
+		u32 count)
+	{
+		VkDescriptorSetLayoutCreateInfo info = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
+		info.bindingCount = count;
+		info.flags = 0;
+		info.pBindings = bindings;
+
+		return info;
+	}
+
+	inline VkDescriptorSetAllocateInfo descriptor_set_allocate_info(VkDescriptorPool pool, VkDescriptorSetLayout* layouts, u32 count)
+	{
+		VkDescriptorSetAllocateInfo info = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
+		info.descriptorPool = pool;
+		info.descriptorSetCount = count;
+		info.pSetLayouts = layouts;
+
+		return info;
+	}
+
+	inline VkDescriptorImageInfo descriptor_image_info(VkSampler sampler, VkImageView view, VkImageLayout layout)
+	{
+		VkDescriptorImageInfo info = {};
+		info.sampler = sampler;
+		info.imageView = view;
+		info.imageLayout = layout;
+
+		return info;
+	}
+
+	inline VkPipelineRasterizationStateCreateInfo pipeline_rasterization_state_create_info(
+		VkPolygonMode polygon_mode, 
+		VkCullModeFlags cull_mode,
+		VkFrontFace front_face,
+		VkPipelineRasterizationStateCreateFlags flags = 0)
+	{
+		VkPipelineRasterizationStateCreateInfo info = { VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO };
+		info.polygonMode = polygon_mode;
+		info.cullMode = cull_mode;
+		info.frontFace = front_face;
+		info.flags = flags;
+		info.lineWidth = 1.0f;
+
+		return info;
+	}
+
+	inline VkPipelineDepthStencilStateCreateInfo pipeline_depth_stencil_state_create_info(
+		VkBool32 depth_test_enable,
+		VkBool32 depth_write_enable,
+		VkCompareOp compare_op
+	)
+	{
+		VkPipelineDepthStencilStateCreateInfo info = { VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO };
+		info.depthTestEnable = depth_test_enable;
+		info.depthWriteEnable = depth_write_enable;
+		info.depthCompareOp = compare_op;
+		info.back.compareOp = VK_COMPARE_OP_ALWAYS;
+
+		return info;
+	}
+
+	inline VkVertexInputBindingDescription vertex_input_binding_description(
+		u32 binding,
+		u32 stride,
+		VkVertexInputRate input_rate)
+	{
+		VkVertexInputBindingDescription desc{};
+		desc.binding = binding;
+		desc.stride = stride;
+		desc.inputRate = input_rate;
+		return desc;
+	}
+
+	inline VkVertexInputAttributeDescription vertex_input_attribute_description(
+		u32 binding,
+		u32 location,
+		VkFormat format,
+		u32 offset)
+	{
+		VkVertexInputAttributeDescription desc{};
+		desc.location = location;
+		desc.binding = binding;
+		desc.format = format;
+		desc.offset = offset;
+		return desc;
+	}
 }

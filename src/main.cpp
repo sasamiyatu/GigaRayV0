@@ -25,7 +25,7 @@
 #include "imgui/imgui.h"
 #include "imgui/imgui_impl_sdl2.h"
 #include "imgui/imgui_impl_vulkan.h"
-
+#include "settings.h"
 
 constexpr int WINDOW_WIDTH = 1280;
 constexpr int WINDOW_HEIGHT = 720;
@@ -75,6 +75,7 @@ int main(int argc, char** argv)
 	Camera_Component cam{};
 	cam.fov = 75.f;
 	Renderable_Component r{ &renderer, false};
+	
 
 	Game_State game_state;
 	game_state.ecs = &ecs;
@@ -128,39 +129,54 @@ int main(int argc, char** argv)
 				g_event_system->fire_event(ev);
 				if (event.key.keysym.scancode == SDL_SCANCODE_ESCAPE)
 					goto here;
-				if (event.key.keysym.scancode == SDL_SCANCODE_F1 && !event.key.repeat && event.type == SDL_KEYDOWN)
+				else if (!event.key.repeat)
 				{
-					if (renderer.render_mode == Renderer::PATH_TRACER)
-						renderer.render_mode = Renderer::RASTER;
-					else
-						renderer.render_mode = Renderer::PATH_TRACER;
-
-					renderer.frames_accumulated = 0;
-				}
-				if (event.key.keysym.scancode == SDL_SCANCODE_F2 && !event.key.repeat && event.type == SDL_KEYDOWN)
-					renderer.render_mode = Renderer::SIDE_BY_SIDE;
-				if (!event.key.repeat)
+					if (event.type == SDL_KEYDOWN)
+					{
+						switch (event.key.keysym.scancode)
+						{
+						case SDL_SCANCODE_F1:
+							g_settings.rendering_mode = Rendering_Mode(((int)g_settings.rendering_mode + 1) % (int)Rendering_Mode::MAX_RENDER_MODES);
+							renderer.frames_accumulated = 0;
+							break;
+						case SDL_SCANCODE_F2:
+							//renderer.render_mode = Renderer::SIDE_BY_SIDE;
+							break;
+						case SDL_SCANCODE_UP:
+							//renderer.magic_uint++;
+							g_settings.temporal_filter = (Temporal_Filtering_Mode)(((int)g_settings.temporal_filter + 1) % (int)Temporal_Filtering_Mode::COUNT);
+							break;
+						case SDL_SCANCODE_DOWN:
+							//renderer.magic_uint--;
+							break;
+						case SDL_SCANCODE_M:
+							g_settings.menu_open = !g_settings.menu_open;
+							SDL_SetRelativeMouseMode(g_settings.menu_open ? SDL_FALSE : SDL_TRUE);
+							break;
+						default: 
+							break;
+						}
+					}
 					handle_key_event(event);
+				}
 			}
 			else if (event.type == SDL_MOUSEMOTION)
 			{
 				handle_mouse_event(event);
 			}
+			else if (event.type == SDL_MOUSEWHEEL)
+			{
+				game_state.handle_mouse_scroll(event.wheel.y);
+			}
 		}
 
 		float dt = timer.update();
+
+		//ImGui_ImplSDL2_NewFrame(platform.window.window);
 		
 		game_state.simulate(dt);
 
-		//imgui new frame
-		ImGui_ImplVulkan_NewFrame();
-		ImGui_ImplSDL2_NewFrame(platform.window.window);
-
-		ImGui::NewFrame();
-
-		//ImGui::ShowDemoWindow();
-
-		renderer.do_frame(&ecs);
+		renderer.do_frame(&ecs, dt);
 		//lightmap_renderer.render();
 
 		double end = timer.get_current_time();

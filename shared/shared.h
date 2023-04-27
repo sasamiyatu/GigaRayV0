@@ -38,3 +38,38 @@ struct Camera_Data
     mat4 viewproj;
     uvec4 frame_index;
 };
+
+struct Primitive_Info
+{
+    uint material_index;
+    uint vertex_count;
+    uint vertex_offset;
+    /*uint pad;
+    mat4 model;*/
+};
+
+struct Global_Constants_Data
+{
+    vec3 sun_direction;
+    float sun_intensity;
+    vec3 sun_color;
+    float exposure;
+    vec4 hit_dist_params;
+    float unproject;
+    float min_rect_dim_mul_unproject;
+    float prepass_blur_radius;
+    float blur_radius;
+    int temporal_accumulation;
+    int history_fix;
+    int temporal_filtering_mode; // 0 = bilinear, 1 = bicubic
+    float bicubic_sharpness;
+    int screen_output;
+};
+
+// Screen output defines
+#define FINAL 0
+#define NOISY_INPUT 1
+#define DENOISED 2
+#define HIT_DISTANCE 3
+#define BLUR_RADIUS 4
+#define HISTORY_LENGTH 5

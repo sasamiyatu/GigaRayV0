@@ -170,7 +170,7 @@ void main()
     vec3 L = normalize(vec3(0.0, 1.0, 0.2));
 
     float shadow = 1.0;
-#if 1
+#if 0
     rayQueryEXT rq;
 
     rayQueryInitializeEXT(rq, scene, gl_RayFlagsTerminateOnFirstHitEXT, 0xFF, frag_pos + normal * 0.001, 0.0, L, 10000.0);
@@ -197,7 +197,7 @@ void main()
     vec3 evaluated_sh = vec3(0.0);
 #endif
 
-    vec4 base_color = mat.base_color_tex != -1 ? texture(textures[mat.base_color_tex], texcoord, 0) : mat.base_color_factor;
+    vec4 base_color = mat.base_color_tex != -1 ? texture(textures[mat.base_color_tex], texcoord) : mat.base_color_factor;
     if (base_color.a < 0.5) discard;
     vec3 metallic_roughness = texture(textures[mat.metallic_roughness_tex], texcoord).rgb;
     vec3 albedo = pow(base_color.rgb, vec3(2.2));
@@ -234,16 +234,22 @@ void main()
     mat_props.emissive = vec3(0.0);
     mat_props.transmissivness = 0.0;
     mat_props.opacity = 0.0;
-    vec3 brdf = evalCombinedBRDF(N, L, V, mat_props);
+    const float light_intensity = 100.0f;
+    vec3 brdf = evalCombinedBRDF(N, L, V, mat_props) * light_intensity;
     //vec3 total = (kS + kD) * NoL;
     vec3 total = brdf * shadow;
     vec3 indirect = evaluated_sh * diffuse;
     //ckRoughness(NdotV, SILVER, roughness);
     //vec3 specular = env * (specular_color * t.x + t.y);
-    color = vec4(total + indirect, 1.0);
+    //color = vec4(total + indirect, 1.0);
+    color = vec4(total, 1.0);
     //color = vec4(evaluated_sh, 1.0);
     normal_roughness = vec4(encode_unit_vector(N, false), mat_props.roughness, 1.0);
-    basecolor_metalness = vec4(mat_props.baseColor.rgb, mat_props.roughness);
+    basecolor_metalness = vec4(mat_props.baseColor.rgb, mat_props.metalness);
+    // if (gl_FragCoord.xy == vec2(0.5))
+    // {
+    //     debugPrintfEXT("base_color: %f %f %f", mat_props.baseColor.x, mat_props.baseColor.y, mat_props.baseColor.z);
+    // }
     world_position = vec4(frag_pos, 1.0);
 
     // color = vec4(envmap_sample, 1.0);

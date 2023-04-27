@@ -15,6 +15,7 @@
 #include "random.glsl"
 #include "test.glsl"
 #include "brdf.glsl"
+#include "../shared/shared.h"
 
 layout (local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 

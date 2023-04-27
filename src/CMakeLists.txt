@@ -6,6 +6,7 @@ add_executable(GigaRayV0
     defines.h
     ecs.h
     ecs.cpp
+    enumbuilder.h
     events.h
     events.cpp
     g_math.h
@@ -44,6 +45,8 @@ add_executable(GigaRayV0
     sampling.cpp
     scene.h
     scene.cpp
+    settings.h
+    settings.cpp
     sh.h
     sh.cpp
     shaders.h 
@@ -52,6 +55,8 @@ add_executable(GigaRayV0
     texture.cpp
     timer.h 
     timer.cpp
+    uioverlay.h
+    uioverlay.cpp
     vk_helpers.h
     imgui/imconfig.h
     imgui/imgui.cpp

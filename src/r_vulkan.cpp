@@ -38,7 +38,6 @@ Vk_Context::Vk_Context(Platform* platform)
 	init_mem_allocator();
 	create_swapchain(platform);
 	create_sync_objects();
-	init_imgui();
 }
 
 void Vk_Context::create_instance(Platform_Window* window)
@@ -118,7 +117,8 @@ void Vk_Context::find_physical_device()
 		VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME,
 		VK_KHR_SWAPCHAIN_EXTENSION_NAME,
 		VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME,
-		VK_KHR_SHADER_NON_SEMANTIC_INFO_EXTENSION_NAME
+		VK_KHR_SHADER_NON_SEMANTIC_INFO_EXTENSION_NAME,
+		//VK_IMG_FILTER_CUBIC_EXTENSION_NAME
 	};
 
 	// Additional extensions that will be used if they exist but are not required
@@ -1137,7 +1137,7 @@ Vk_Pipeline Vk_Context::create_raster_pipeline(VkShaderModule vertex_shader, VkS
 	VkPipelineInputAssemblyStateCreateInfo input_assembly = vkinit::pipeline_input_assembly_state_create_info(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, VK_FALSE);
 
 	// Dynamic scissor and viewport
-	VkPipelineViewportStateCreateInfo viewport_state = vkinit::pipeline_viewport_state_create_info(1, nullptr, 1, nullptr, true);
+	VkPipelineViewportStateCreateInfo viewport_state = vkinit::pipeline_viewport_state_create_info(1, nullptr, 1, nullptr);
 
 	VkPipelineRasterizationStateCreateInfo raster_state{ VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO };
 	raster_state.polygonMode = raster_opt.polygon_mode;
@@ -1349,7 +1349,7 @@ Vk_Pipeline Vk_Context::create_raster_pipeline(const char* vertex_shader, const 
 	return pipeline;
 }
 
-Vk_Allocated_Image Vk_Context::load_texture(const char* filepath, bool flip_y)
+Vk_Allocated_Image Vk_Context::load_texture(const char* filepath, bool flip_y, bool generate_mipmaps)
 {
 	constexpr int required_n_comps = 4; // GIVE ME 4 CHANNELS!!!
 
@@ -1358,13 +1358,23 @@ Vk_Allocated_Image Vk_Context::load_texture(const char* filepath, bool flip_y)
 	u8* data = stbi_load(filepath, &x, &y, &comp, required_n_comps);
 	assert(data);
 
+	u32 mip_levels = 1;
+	if (generate_mipmaps)
+	{
+		mip_levels = (u32)(std::floor(std::log2(std::max(x, y)))) + 1;
+	}
+
+	VkImageUsageFlags usage_flags = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+	if (generate_mipmaps)
+		usage_flags |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 	u32 required_size = (x * y * required_n_comps) * sizeof(u8);
 	Vk_Allocated_Image img = allocate_image(
 		{ (u32)x, (u32)y, 1 },
 		VK_FORMAT_R8G8B8A8_UNORM,
-		VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+		usage_flags,
 		VK_IMAGE_ASPECT_COLOR_BIT,
-		VK_IMAGE_TILING_OPTIMAL
+		VK_IMAGE_TILING_OPTIMAL,
+		mip_levels
 	);
 	Vk_Allocated_Buffer staging_buffer = allocate_buffer(
 		required_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_AUTO, VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
@@ -1407,14 +1417,92 @@ Vk_Allocated_Image Vk_Context::load_texture(const char* filepath, bool flip_y)
 
 	vkCmdCopyBufferToImage(cmd, staging_buffer.buffer, img.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &regions);
 
-	vkinit::vk_transition_layout(cmd, img.image,
-		VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-		0, VK_ACCESS_SHADER_READ_BIT,
-		VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-		VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
-		| VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
-		| VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_NV
-	);
+	if (generate_mipmaps)
+	{
+		VkImageMemoryBarrier barrier{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+		barrier.image = img.image;
+		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		barrier.subresourceRange.baseArrayLayer = 0;
+		barrier.subresourceRange.layerCount = 1;
+		barrier.subresourceRange.levelCount = 1;
+
+		i32 mip_width = x;
+		i32 mip_height = y;
+
+		for (u32 i = 1; i < mip_levels; ++i)
+		{
+			barrier.subresourceRange.baseMipLevel = i - 1;
+			barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+			barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+			barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+			barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+
+			vkCmdPipelineBarrier(cmd,
+				VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+				0, nullptr,
+				0, nullptr,
+				1, &barrier);
+
+			VkImageBlit blit{};
+			blit.srcOffsets[0] = { 0, 0, 0 };
+			blit.srcOffsets[1] = { mip_width, mip_height, 1 };
+			blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+			blit.srcSubresource.mipLevel = i - 1;
+			blit.srcSubresource.baseArrayLayer = 0;
+			blit.srcSubresource.layerCount = 1;
+			blit.dstOffsets[0] = { 0, 0, 0 };
+			blit.dstOffsets[1] = { mip_width > 1 ? mip_width / 2 : 1, mip_height > 1 ? mip_height / 2 : 1, 1 };
+			blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+			blit.dstSubresource.mipLevel = i;
+			blit.dstSubresource.baseArrayLayer = 0;
+			blit.dstSubresource.layerCount = 1;
+
+			vkCmdBlitImage(cmd,
+				img.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+				img.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+				1, &blit,
+				VK_FILTER_LINEAR);
+
+			barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+			barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+			barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+			barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+			vkCmdPipelineBarrier(cmd,
+				VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
+				0, nullptr,
+				0, nullptr,
+				1, &barrier);
+
+			mip_width = mip_width > 1 ? mip_width / 2 : mip_width;
+			mip_height = mip_height > 1 ? mip_height / 2 : mip_height;
+		}
+
+		barrier.subresourceRange.baseMipLevel = mip_levels - 1;
+		barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+		barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+		barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+		barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+		vkCmdPipelineBarrier(cmd,
+			VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
+			0, nullptr,
+			0, nullptr,
+			1, &barrier);
+	}
+	else
+	{
+		vkinit::vk_transition_layout(cmd, img.image,
+			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+			0, VK_ACCESS_SHADER_READ_BIT,
+			VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+			VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+			| VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
+			| VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_NV
+		);
+	}
 
 	vkEndCommandBuffer(cmd);
 
@@ -1520,3 +1608,4 @@ void Garbage_Collector::shutdown()
 
 static Garbage_Collector collector;
 Garbage_Collector* g_garbage_collector = &collector;
+

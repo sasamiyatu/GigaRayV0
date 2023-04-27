@@ -50,6 +50,15 @@ glm::vec3 random_vector(u64 seed)
     return glm::vec3(rand) * ldexpf(1.0f, -32);
 }
 
+glm::vec3 polar_to_unit_vec(float azimuth, float zenith)
+{
+    // X is east, Y is up, -Z is north
+    const float theta = azimuth - PI_OVER_2; // 0 azimuth is north but 0 theta would be along the X-axis
+    const float phi = zenith;
+    const float sin_phi = sinf(phi);
+    return glm::vec3(cosf(theta)*sin_phi, cosf(phi), sinf(theta)*sin_phi);
+}
+
 
 }
 

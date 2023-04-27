@@ -1,0 +1,121 @@
+#version 460
+
+#extension GL_GOOGLE_include_directive : enable
+#extension GL_EXT_debug_printf : enable
+
+#include "blur_common.glsl"
+#include "math.glsl"
+#include "../shared/shared.h"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(binding = 0, set = 0, rgba32f) uniform image2D noisy_input;
+layout(binding = 1, set = 0, rgba32f) uniform image2D normal_roughness;
+layout(binding = 2, set = 0, rgba32f) uniform image2D world_position;
+layout(binding = 3, set = 0) uniform sampler2D depth;
+layout(binding = 4, set = 0, rgba32f) uniform image2D blurred_output;
+layout(binding = 5, set = 0) readonly buffer global_constants_t
+{
+    Global_Constants_Data data;
+} global_constants;
+
+layout( push_constant ) uniform constants
+{
+    mat2 rot;
+    ivec2 size;
+    float depth_scale;
+} control;
+
+float gaussian[3] = {0.27, 0.44, 0.27};
+
+void main()
+{
+    ivec3 p = ivec3(gl_GlobalInvocationID);
+    if (any(greaterThan(p.xy, control.size)))
+        return;
+
+    vec4 center = imageLoad(noisy_input, p.xy);
+
+    if (global_constants.data.prepass_blur_radius == 0.0f)
+    {
+        imageStore(blurred_output, p.xy, center);
+        return;
+    }
+
+    const float blur_radius = global_constants.data.prepass_blur_radius;
+
+    vec3 p0 = imageLoad(world_position, p.xy).xyz;
+    vec4 n0r0 = imageLoad(normal_roughness, p.xy);
+    vec3 n0 = decode_unit_vector(n0r0.xy, false, true);
+    float hist_len = center.a;
+    float d0 = texelFetch(depth, p.xy, 0).r;
+    float z0 = control.depth_scale / d0;
+    
+    float plane_dist_norm = 4.0 / (1.0 + z0);
+
+    float sum = 1.0;
+    vec3 diff = center.xyz;
+#if 1
+    for (int i = 0; i < NUM_SAMPLES; ++i)
+    {
+        vec3 offset = poisson_samples[i];
+
+        vec2 sample_pos = vec2(p.xy + 0.5) + control.rot * offset.xy * blur_radius;
+        ivec2 q = ivec2(sample_pos);
+
+        vec3 s = imageLoad(noisy_input, q.xy).xyz;
+        vec3 pos = imageLoad(world_position, q.xy).xyz;
+        vec3 nr = imageLoad(normal_roughness, q.xy).xyz;
+        vec3 n = decode_unit_vector(nr.xy, false, true);
+        float w = get_gaussian_weight(offset.z);
+        float is_in_screen = float((all(greaterThanEqual(q.xy, ivec2(0, 0))) && all(lessThan(q.xy, control.size))));
+        w *= is_in_screen;
+
+        vec3 ray = pos - p0;
+        float dist_to_plane = abs(dot(ray, n0));
+        float relative_plane_dist = dist_to_plane / z0;
+        float w_plane = 1.0 - smoothstep(0.0, 0.005, relative_plane_dist);
+
+        float w_n = smoothstep(0.7, 1.0,abs(dot(n, n0)));
+        //float w_plane = saturate(1.0 - dist_to_plane * plane_dist_norm);
+
+        w *= w_plane;
+        w *= w_n;
+
+        // if (p.xy == ivec2(640, 360))
+        // {
+        //     debugPrintfEXT("plane_dist: %f, w_plane: %f, z0: %f", relative_plane_dist, w_plane, z0);
+        // }
+        
+        sum += w;
+        diff += s * w;
+    }
+#endif
+
+#if 0
+    float sum = 0.0;
+    vec3 diff = vec3(0.0);
+    const int r = 3;
+    for (int y = -r; y <= r; ++y)
+    {
+        for (int x = -r; x <= r; ++x)
+        {
+            ivec2 q = p.xy + ivec2(x, y);
+            //float w = gaussian[y + 1] * gaussian[x + 1];
+            float w = 1.0;
+            float is_in_screen = float((all(greaterThanEqual(q.xy, ivec2(0, 0))) && all(lessThan(q.xy, control.size))));
+            w *= is_in_screen;
+
+            vec3 s = imageLoad(noisy_input, q.xy).rgb;
+
+            sum += w;
+            diff += s * w;
+        }
+    }
+
+#endif
+
+    diff /= sum;
+
+    imageStore(blurred_output, p.xy, vec4(diff, hist_len));
+}

@@ -3,6 +3,8 @@
 
 namespace math
 {
+constexpr float PI = 3.14159265359f;
+constexpr float PI_OVER_2 = 1.57079632679f;
 
 typedef struct { uint64_t state;  uint64_t inc; } pcg32_random_t;
 
@@ -14,5 +16,7 @@ glm::vec3 forward_vector(glm::quat q);
 glm::mat4 make_infinite_reverse_z_proj_rh(float fovy, float aspect, float z_near);
 
 glm::vec3 random_vector(u64 seed);
+
+glm::vec3 polar_to_unit_vec(float azimuth, float zenith);
 
 }

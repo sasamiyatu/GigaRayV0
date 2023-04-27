@@ -37,6 +37,11 @@ layout( push_constant ) uniform constants
 layout(location = 0) rayPayloadEXT Ray_Payload pay;
 layout(location = 1) rayPayloadEXT Miss_Payload miss_payload;
 layout(binding = 0, set = 0, rgba32f) uniform image2D output_image;
+layout(binding = 5, set = 0) readonly buffer global_constants_t
+{
+    Global_Constants_Data data;
+} global_constants;
+
 
 vec3 sample_environment_map(vec3 dir, sampler2D s)
 {
@@ -58,10 +63,10 @@ float get_specular_probability(Material_Properties material, vec3 V, vec3 shadin
     return clamp(p, 0.1f, 0.9f);
 }
 
-vec3 L = normalize(vec3(0.0, 1.0, 0.2));
 
 void main()
 {
+    vec3 L = global_constants.data.sun_direction;
     pay.instance_id = -1;
     pay.prim_id = -1;
     uvec4 seed = uvec4( gl_LaunchIDEXT.xy, control.frames_accumulated, 1);

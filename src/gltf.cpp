@@ -64,7 +64,7 @@ Mesh2 load_gltf_from_file(const char* filepath, Vk_Context* ctx, Resource_Manage
                 i32 id = texture_manager->get_id_from_string(file_path);
                 if (id == -1)
                 {
-                    Vk_Allocated_Image image = ctx->load_texture(file_path.c_str());
+                    Vk_Allocated_Image image = ctx->load_texture(file_path.c_str(), false, true);
                     Texture t = { image };
                     id = texture_manager->register_resource(t, file_path);
                 }
@@ -89,7 +89,7 @@ Mesh2 load_gltf_from_file(const char* filepath, Vk_Context* ctx, Resource_Manage
                 i32 id = texture_manager->get_id_from_string(file_path);
                 if (id == -1)
                 {
-                    Vk_Allocated_Image image = ctx->load_texture(file_path.c_str());
+                    Vk_Allocated_Image image = ctx->load_texture(file_path.c_str(), false, true);
                     Texture t = { image };
                     id = texture_manager->register_resource(t, file_path);
                 }
@@ -111,110 +111,116 @@ Mesh2 load_gltf_from_file(const char* filepath, Vk_Context* ctx, Resource_Manage
 
     free(stripped);
 
-    // One mesh = one draw call?
-    for (int i = 0; i < data->meshes_count; ++i)
+    for (int n = 0; n < data->nodes_count; ++n)
     {
-        for (int j = 0; j < data->meshes[i].primitives_count; ++j)
+        cgltf_node* node = &data->nodes[n];
+        glm::mat4 model;
+        cgltf_node_transform_world(node, (float*)&model);
+        if (node->mesh)
         {
-            cgltf_primitive* prim = &data->meshes[i].primitives[j];
-            
-            // Read indices
-            std::vector<u32> indices(prim->indices->count);
-            cgltf_buffer_view* idx_buf_view = prim->indices->buffer_view;
-            i32 index_count = (i32)prim->indices->count;
-            i32 index_offset = (i32)prim->indices->offset;
-            u32 stride = (u32)prim->indices->stride;
-            cgltf_buffer* buffer = idx_buf_view->buffer;
-            u8* buf_data = buffers[buffer->uri];
-            u8* start = buf_data + idx_buf_view->offset + index_offset;
-            u8* end = start + idx_buf_view->size;
-            assert(stride != 1);
-
-            int index = 0;
-            for (u8* ptr = start; ptr != end && index < index_count; ptr += stride, index++)
+            cgltf_mesh* mesh = node->mesh;
+            for (int j = 0; j < mesh->primitives_count; ++j)
             {
-                if (stride == 2)
-                {
-                    u16 idx = *(u16*)ptr;
-                    indices[index] = (u32)idx;
-                }
-                else if (stride == 4)
-                {
-                    indices[index] = *(u32*)ptr;
-                }
-                else
-                {
-                    assert(false);
-                }
-            }
+                cgltf_primitive* prim = &mesh->primitives[j];
+                // Read indices
+                std::vector<u32> indices(prim->indices->count);
+                cgltf_buffer_view* idx_buf_view = prim->indices->buffer_view;
+                i32 index_count = (i32)prim->indices->count;
+                i32 index_offset = (i32)prim->indices->offset;
+                u32 stride = (u32)prim->indices->stride;
+                cgltf_buffer* buffer = idx_buf_view->buffer;
+                u8* buf_data = buffers[buffer->uri];
+                u8* start = buf_data + idx_buf_view->offset + index_offset;
+                u8* end = start + idx_buf_view->size;
+                assert(stride != 1);
 
-            std::vector<glm::vec3> normals;
-            std::vector<glm::vec3> positions;
-            std::vector<glm::vec2> texcoords;
-            std::vector<glm::vec4> tangents;
-            u32 attr_count = (u32)data->meshes[i].primitives[j].attributes_count;
-            for (u32 attr = 0; attr < attr_count; ++attr)
-            {
-                cgltf_attribute a = data->meshes[i].primitives[j].attributes[attr];
-                cgltf_accessor* acc = a.data;
-                if (a.type == cgltf_attribute_type_normal)
+                int index = 0;
+                for (u8* ptr = start; ptr != end && index < index_count; ptr += stride, index++)
                 {
-                    assert(acc->type == cgltf_type_vec3);
-                    assert(acc->count != 0);
-                    assert(acc->component_type == cgltf_component_type_r_32f);
-                    normals.resize(acc->count);
-                    read_data(acc, (u32)acc->stride, buffers, normals.data());
+                    if (stride == 2)
+                    {
+                        u16 idx = *(u16*)ptr;
+                        indices[index] = (u32)idx;
+                    }
+                    else if (stride == 4)
+                    {
+                        indices[index] = *(u32*)ptr;
+                    }
+                    else
+                    {
+                        assert(false);
+                    }
                 }
-                else if (a.type == cgltf_attribute_type_position)
-                {
-                    assert(acc->type == cgltf_type_vec3);
-                    assert(acc->count != 0);
-                    assert(acc->component_type == cgltf_component_type_r_32f);
-                    positions.resize(acc->count);
-                    read_data(acc, (u32)acc->stride, buffers, positions.data());
-                }
-                else if (a.type == cgltf_attribute_type_texcoord)
-                {
-                    assert(acc->type == cgltf_type_vec2);
-                    assert(acc->count != 0);
-                    assert(acc->component_type == cgltf_component_type_r_32f);
-                    texcoords.resize(acc->count);
-                    read_data(acc, (u32)acc->stride, buffers, texcoords.data());
-                }
-                else if (a.type == cgltf_attribute_type_tangent)
-                {
-                    assert(acc->type == cgltf_type_vec4);
-                    assert(acc->count != 0);
-                    assert(acc->component_type == cgltf_component_type_r_32f);
-                    tangents.resize(acc->count);
-                    read_data(acc, (u32)acc->stride, buffers, tangents.data());
-                }
-                else
-                {
-                    assert(false && !"We don't know what the fuck this attribute type is");
-                }
-            }
 
-            if (swap_y_and_z)
-            {
-                for (auto& pos : positions)
-                    pos = glm::vec3(pos.x, pos.z, -pos.y);
-                for (auto& normal : normals)
-                    normal = glm::vec3(normal.x, normal.z, -normal.y);
-            }
-               
-            //assert(!tangents.empty());
-            Vertex_Group vg{};
-            vg.pos = std::move(positions);
-            vg.normal = std::move(normals);
-            vg.texcoord = std::move(texcoords);
-            vg.indices = std::move(indices);
-            vg.tangent = std::move(tangents);
+                std::vector<glm::vec3> normals;
+                std::vector<glm::vec3> positions;
+                std::vector<glm::vec2> texcoords;
+                std::vector<glm::vec4> tangents;
+                u32 attr_count = (u32)mesh->primitives[j].attributes_count;
+                for (u32 attr = 0; attr < attr_count; ++attr)
+                {
+                    cgltf_attribute a = mesh->primitives[j].attributes[attr];
+                    cgltf_accessor* acc = a.data;
+                    if (a.type == cgltf_attribute_type_normal)
+                    {
+                        assert(acc->type == cgltf_type_vec3);
+                        assert(acc->count != 0);
+                        assert(acc->component_type == cgltf_component_type_r_32f);
+                        normals.resize(acc->count);
+                        read_data(acc, (u32)acc->stride, buffers, normals.data());
+                    }
+                    else if (a.type == cgltf_attribute_type_position)
+                    {
+                        assert(acc->type == cgltf_type_vec3);
+                        assert(acc->count != 0);
+                        assert(acc->component_type == cgltf_component_type_r_32f);
+                        positions.resize(acc->count);
+                        read_data(acc, (u32)acc->stride, buffers, positions.data());
+                    }
+                    else if (a.type == cgltf_attribute_type_texcoord)
+                    {
+                        assert(acc->type == cgltf_type_vec2);
+                        assert(acc->count != 0);
+                        assert(acc->component_type == cgltf_component_type_r_32f);
+                        texcoords.resize(acc->count);
+                        read_data(acc, (u32)acc->stride, buffers, texcoords.data());
+                    }
+                    else if (a.type == cgltf_attribute_type_tangent)
+                    {
+                        assert(acc->type == cgltf_type_vec4);
+                        assert(acc->count != 0);
+                        assert(acc->component_type == cgltf_component_type_r_32f);
+                        tangents.resize(acc->count);
+                        read_data(acc, (u32)acc->stride, buffers, tangents.data());
+                    }
+                    else
+                    {
+                        assert(false && !"We don't know what the fuck this attribute type is");
+                    }
+                }
 
-            i32 material_id = local_material_map.at(prim->material);
-            //i32 material_id = material_manager->get_id_from_string(prim->material->name);
-            ret.materials.push_back(material_id);
-            ret.meshes.push_back(vg);
+                if (swap_y_and_z)
+                {
+                    for (auto& pos : positions)
+                        pos = glm::vec3(pos.x, pos.z, -pos.y);
+                    for (auto& normal : normals)
+                        normal = glm::vec3(normal.x, normal.z, -normal.y);
+                }
+
+                //assert(!tangents.empty());
+                Vertex_Group vg{};
+                vg.pos = std::move(positions);
+                vg.normal = std::move(normals);
+                vg.texcoord = std::move(texcoords);
+                vg.indices = std::move(indices);
+                vg.tangent = std::move(tangents);
+                vg.model = model;
+
+                i32 material_id = local_material_map.at(prim->material);
+                //i32 material_id = material_manager->get_id_from_string(prim->material->name);
+                ret.materials.push_back(material_id);
+                ret.meshes.push_back(vg);
+            }
         }
     }
 
@@ -247,7 +253,9 @@ void create_from_mesh2(Mesh2* m, u32 mesh_count, Mesh* out_meshes)
         for (u32 j = 0; j < vertex_count; ++j)
         {
             Vertex new_vert{};
-            new_vert.pos = m->meshes[i].pos[j];
+            glm::vec4 transformed_pos = m->meshes[i].model * glm::vec4(m->meshes[i].pos[j], 1.0f);
+            //new_vert.pos = m->meshes[i].pos[j];
+            new_vert.pos = glm::vec3(transformed_pos);
             new_vert.normal = m->meshes[i].normal[j];
             if (j < m->meshes[i].texcoord.size())
                 new_vert.texcoord = m->meshes[i].texcoord[j];
