@@ -19,6 +19,7 @@ layout(binding = 5, set = 0, scalar) readonly buffer global_constants_t
 {
     Global_Constants_Data data;
 } global_constants;
+layout(binding = 6, set = 0, rgba32f) uniform image2D history_length;
 
 layout( push_constant ) uniform constants
 {
@@ -31,13 +32,14 @@ float gaussian[3] = {0.27, 0.44, 0.27};
 
 void main()
 {
+    return;
     ivec3 p = ivec3(gl_GlobalInvocationID);
     if (any(greaterThan(p.xy, control.size)))
         return;
 
     vec4 center = imageLoad(noisy_input, p.xy);
 
-    if (global_constants.data.prepass_blur_radius == 0.0f)
+    if (global_constants.data.blur_radius == 0.0f)
     {
         imageStore(blurred_output, p.xy, center);
         return;
@@ -47,16 +49,19 @@ void main()
     vec4 n0r0 = imageLoad(normal_roughness, p.xy);
     vec3 n0 = decode_unit_vector(n0r0.xy, false, true);
     float d0 = texelFetch(depth, p.xy, 0).r;
+    float accumulated_frames = imageLoad(history_length, p.xy).r * 255.0;
+    float blur_radius_scale = 1.0 / accumulated_frames;
 
     vec3 X = (p0 - global_constants.data.camera_origin);
 
     float z0 = control.depth_scale / d0;
-    float blur_radius = global_constants.data.prepass_blur_radius;
+    float blur_radius = global_constants.data.blur_radius;
     float hit_dist_normalization = global_constants.data.hit_dist_params.x + global_constants.data.hit_dist_params.y * abs(z0);
     float frustum_size = global_constants.data.min_rect_dim_mul_unproject * abs(z0);
     float hit_t = center.a * hit_dist_normalization;
     float hit_dist_factor = clamp(hit_t / frustum_size, 0.0, 1.0);
     blur_radius *= hit_dist_factor;
+    blur_radius *= blur_radius_scale;
     
     float a = 0.25 / ( global_constants.data.plane_distance_sensitivity * frustum_size );
     float b = -dot( n0, X ) * a;
@@ -93,7 +98,8 @@ void main()
         vec3 Xs = pos - global_constants.data.camera_origin;
         vec3 nr = imageLoad(normal_roughness, q.xy).xyz;
         vec3 n = decode_unit_vector(nr.xy, false, true);
-        float w = get_gaussian_weight(offset.z);
+        //float w = get_gaussian_weight(offset.z);
+        float w = 1.0;
         bool is_in_screen = (all(greaterThanEqual(q.xy, ivec2(0, 0))) && all(lessThan(q.xy, control.size)));
 
         float ndotx = dot(Xs, n);

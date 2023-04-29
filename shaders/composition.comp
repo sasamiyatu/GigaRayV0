@@ -32,6 +32,7 @@ layout(binding = 10, set = 0) readonly buffer global_constants_t
 {
     Global_Constants_Data data;
 } global_constants;
+layout(binding = 11, set = 0, rgba32f) uniform image2D history_length;
 
 layout( push_constant ) uniform constants
 {
@@ -104,14 +105,14 @@ void main()
         case 2: // denoised indirect diffuse
             final_output = denoised.rgb;
             break;
-        case 3: // hit distance (not implemented)
-            final_output = vec3(1.0, 0.0, 1.0);
+        case 3: // hit distance
+            final_output = vec3(denoised.a);
             break;
         case 4: // blur radius (not implemented)
             final_output = vec3(1.0, 0.0, 1.0);
             break;
         case 5: // history length
-            final_output = viridis_quintic(1.0 - denoised.a / 32.0);
+            final_output = viridis_quintic(1.0 - imageLoad(history_length, p.xy).r * 255.0 / 32.0);
             break;
         case 6:
             final_output = normal * 0.5 + 0.5;

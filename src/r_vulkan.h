@@ -69,6 +69,7 @@ struct Raster_Options
 	VkCompareOp depth_compare_op = VK_COMPARE_OP_GREATER;
 	bool depth_test_enable = true;
 	bool depth_write_enable = true;
+	bool alpha_to_coverage = false;
 	u32 color_attachment_count = 1;
 	std::array<VkFormat, 8> color_formats = {VK_FORMAT_R32G32B32A32_SFLOAT};
 };

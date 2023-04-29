@@ -4,8 +4,6 @@
 #extension GL_GOOGLE_include_directive : enable
 #extension GL_EXT_debug_printf : enable
 
-#pragma optionNV (unroll all)
-
 #include "../shared/shared.h"
 #include "math.glsl"
 #include "misc.glsl"
@@ -32,6 +30,8 @@ layout(binding = 12, set = 0) readonly buffer global_constants_t
 {
     Global_Constants_Data data;
 } global_constants;
+layout(binding = 13, set = 0) uniform sampler2D previous_history_length;
+layout(binding = 14, set = 0, rgba32f) uniform image2D out_history_length;
 
 layout( push_constant ) uniform constants
 {
@@ -95,7 +95,8 @@ void main()
 
     if (global_constants.data.temporal_accumulation == 0)
     {
-        imageStore(accumulated_output, p.xy, vec4(radiance.rgb, 1.0));
+        imageStore(accumulated_output, p.xy, radiance);
+        imageStore(out_history_length, p.xy, vec4(1.0 / 255.0));
         return;
     }
 
@@ -106,6 +107,7 @@ void main()
     if (curr_depth == 0.0)
     {
         imageStore(accumulated_output, p.xy, vec4(0.0));
+        imageStore(out_history_length, p.xy, vec4(1.0 / 255.0));
         return;
     }
 
@@ -172,6 +174,10 @@ void main()
     vec4 occlusion_weights = bilinear_weights * valids;
     float w_sum = dot(occlusion_weights, vec4(1.0));
 
+    vec4 history_lengths = textureGather(previous_history_length, vec2(X_clip_uv)).wzxy * 255.0;
+    float history_length = dot(history_lengths, occlusion_weights);
+    history_length = w_sum < 0.001 ? 0.0 : history_length / w_sum;
+
     vec4 prev_color = vec4(0.0);
     if (allow_bicubic)
     {
@@ -199,8 +205,8 @@ void main()
     footprint_quality = sqrt(clamp(footprint_quality, 0.0, 1.0));
     footprint_quality *= size_quality;
 
-    vec3 final_color = prev_color.rgb;
-    float accum_speed_prev = prev_color.a;
+    vec4 final_color = prev_color;
+    float accum_speed_prev = history_length;
 
     float accum_speed = min(accum_speed_prev, 32.0);
     accum_speed *= mix(footprint_quality, 1.0, 1.0 / (accum_speed + 1.0));
@@ -208,7 +214,8 @@ void main()
 
     float alpha = 1.0 / accum_speed;
 
-    radiance.rgb = mix(final_color.rgb, radiance.rgb, alpha);
+    radiance = mix(final_color, radiance, alpha);
 
-    imageStore(accumulated_output, p.xy, vec4(radiance.rgb, accum_speed));
+    imageStore(out_history_length, p.xy, vec4(accum_speed / 255.0));
+    imageStore(accumulated_output, p.xy, radiance);
 }

@@ -1145,6 +1145,7 @@ Vk_Pipeline Vk_Context::create_raster_pipeline(VkShaderModule vertex_shader, VkS
 	raster_state.frontFace = raster_opt.front_face;
 
 	VkPipelineMultisampleStateCreateInfo multisample_state = vkinit::pipeline_multisample_state_create_info(VK_SAMPLE_COUNT_1_BIT);
+	multisample_state.alphaToCoverageEnable = (VkBool32)raster_opt.alpha_to_coverage;
 
 	VkPipelineDepthStencilStateCreateInfo depth_stencil_state{ VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO };
 	depth_stencil_state.depthTestEnable = raster_opt.depth_test_enable;

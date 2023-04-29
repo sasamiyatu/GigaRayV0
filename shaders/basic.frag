@@ -242,7 +242,7 @@ void main()
     //ckRoughness(NdotV, SILVER, roughness);
     //vec3 specular = env * (specular_color * t.x + t.y);
     //color = vec4(total + indirect, 1.0);
-    color = vec4(total, 1.0);
+    color = vec4(total, base_color.a);
     //color = vec4(evaluated_sh, 1.0);
     normal_roughness = vec4(encode_unit_vector(N, false), mat_props.roughness, 1.0);
     basecolor_metalness = vec4(mat_props.baseColor.rgb, mat_props.metalness);

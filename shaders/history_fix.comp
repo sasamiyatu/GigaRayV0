@@ -16,6 +16,7 @@ layout(binding = 3, set = 0) readonly buffer global_constants_t
 {
     Global_Constants_Data data;
 } global_constants;
+layout(binding = 4, set = 0, rgba32f) uniform image2D history_length;
 
 layout( push_constant ) uniform constants
 {
@@ -76,13 +77,13 @@ void main()
     if (global_constants.data.history_fix == 0)
         return;
 
-    vec4 in_radiance = imageLoad(accumulated_input_output, p.xy);
-
-    float history_length = in_radiance.a - 1.0;
+    float history_length = imageLoad(history_length, p.xy).r * 255.0 - 1.0;
     float norm_accumulated_frame_num = clamp(history_length / MAX_FRAME_NUMBER_WITH_HISTORY_FIX, 0.0, 1.0);
 
     if (norm_accumulated_frame_num == 1.0)
         return;
+
+    vec4 in_radiance = imageLoad(accumulated_input_output, p.xy);
 
     uint mip_level = uint(4.0 * (1.0 - norm_accumulated_frame_num));
 

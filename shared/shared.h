@@ -64,6 +64,10 @@ struct Global_Constants_Data
     int temporal_filtering_mode; // 0 = bilinear, 1 = bicubic
     float bicubic_sharpness;
     int screen_output;
+    float plane_distance_sensitivity;
+    vec3 camera_origin;
+    uint frame_number;
+    uint blur_kernel_rotation_mode;
 };
 
 // Screen output defines

@@ -291,6 +291,10 @@ void UI_Overlay::update_and_render(VkCommandBuffer cmd, float dt)
 			ImGui::SliderFloat("Sun zenith (deg)", &g_settings.sun_zenith, 0.0f, 180.0f, "%.2f");
 			ImGui::SliderFloat("Sun intensity", &g_settings.sun_intensity, 0.0f, 999.0f, "%.1f");
 		}
+		if (ImGui::CollapsingHeader("Indirect diffuse", ImGuiTreeNodeFlags_CollapsingHeader | ImGuiTreeNodeFlags_DefaultOpen))
+		{
+			ImGui::Checkbox("Animate noise", &g_settings.animate_noise);
+		}
 		if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_CollapsingHeader | ImGuiTreeNodeFlags_DefaultOpen))
 		{
 			static const char* on_screen_modes[] = { "Final output", "Indirect diffuse", "Denoised", "Hit distance", "Blur radius", "History length", "Normal"};
@@ -304,8 +308,11 @@ void UI_Overlay::update_and_render(VkCommandBuffer cmd, float dt)
 			ImGui::Checkbox("Temporal accumulation", &g_settings.temporal_accumulation);
 			ImGui::Checkbox("History fix", &g_settings.history_fix);
 			ImGui::SliderFloat2("Hit distance params", (float*)&g_settings.hit_distance_params, 0.001f, 100.0f, "%.3f");
-			ImGui::Combo("Temporal filter", (int*)&g_settings.temporal_filter, temporal_filter_modes, (int)std::size(temporal_filter_modes));
-			ImGui::SliderFloat("Bicubic sharpness", &g_settings.bicubic_sharpness, 0.0f, 1.0f, "%.2f");
+			//ImGui::Combo("Temporal filter", (int*)&g_settings.temporal_filter, temporal_filter_modes, (int)std::size(temporal_filter_modes));
+			//ImGui::SliderFloat("Bicubic sharpness", &g_settings.bicubic_sharpness, 0.0f, 1.0f, "%.2f");
+			ImGui::SliderFloat("Plane distance sensitivity (%)", &g_settings.plane_dist_sensitivity, 0.1f, 5.0f, "%.1f");
+			static const char* blur_kernel_rotation_modes[] = { "None", "Per frame", "Per pixel" };
+			ImGui::Combo("Blur kernel rotation", &g_settings.blur_kernel_rotation_mode, blur_kernel_rotation_modes, (int)std::size(blur_kernel_rotation_modes));
 		}
 
 		ImGui::PopItemWidth();

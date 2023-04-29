@@ -42,6 +42,10 @@ struct Settings
     int screen_output = DENOISED; // Screen_Output
     Temporal_Filtering_Mode temporal_filter = Temporal_Filtering_Mode::BICUBIC;
     float bicubic_sharpness = 0.5f;
+    bool animate_noise = true;
+    float plane_dist_sensitivity = 0.5f; // percentage
+    float occlusion_threshold = 0.005f;
+    int blur_kernel_rotation_mode = 1; // 0 = None, 1 = Per frame, 2 = Per pixel
 };
 
 extern Settings g_settings;

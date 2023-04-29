@@ -28,6 +28,77 @@ constexpr VkFormat BASECOLOR_METALNESS_FORMAT = VK_FORMAT_R8G8B8A8_UNORM;
 
 constexpr u32 MAX_INDIRECT_DRAWS = 1'000'000;
 constexpr int MAX_BINDLESS_RESOURCES = 16536;
+
+#define PING 0
+#define PONG 1
+
+constexpr float van_der_corput_base_2[64] = {
+	0.000000f,
+	0.500000f,
+	0.250000f,
+	0.750000f,
+	0.125000f,
+	0.625000f,
+	0.375000f,
+	0.875000f,
+	0.062500f,
+	0.562500f,
+	0.312500f,
+	0.812500f,
+	0.187500f,
+	0.687500f,
+	0.437500f,
+	0.937500f,
+	0.031250f,
+	0.531250f,
+	0.281250f,
+	0.781250f,
+	0.156250f,
+	0.656250f,
+	0.406250f,
+	0.906250f,
+	0.093750f,
+	0.593750f,
+	0.343750f,
+	0.843750f,
+	0.218750f,
+	0.718750f,
+	0.468750f,
+	0.968750f,
+	0.015625f,
+	0.515625f,
+	0.265625f,
+	0.765625f,
+	0.140625f,
+	0.640625f,
+	0.390625f,
+	0.890625f,
+	0.078125f,
+	0.578125f,
+	0.328125f,
+	0.828125f,
+	0.203125f,
+	0.703125f,
+	0.453125f,
+	0.953125f,
+	0.046875f,
+	0.546875f,
+	0.296875f,
+	0.796875f,
+	0.171875f,
+	0.671875f,
+	0.421875f,
+	0.921875f,
+	0.109375f,
+	0.609375f,
+	0.359375f,
+	0.859375f,
+	0.234375f,
+	0.734375f,
+	0.484375f,
+	0.984375f
+};
+
 // FIXME: We're gonna need more stuff than this 
 void Renderer::create_bindless_descriptor_set_layout()
 {
@@ -377,6 +448,7 @@ void Renderer::initialize()
 	pipelines[HISTORY_FIX_MIP_GEN] = context->create_compute_pipeline("shaders/spirv/history_fix_mip_gen.comp.spv");
 	pipelines[HISTORY_FIX] = context->create_compute_pipeline("shaders/spirv/history_fix.comp.spv");
 	pipelines[PRE_BLUR] = context->create_compute_pipeline("shaders/spirv/preblur.comp.spv");
+	pipelines[BLUR] = context->create_compute_pipeline("shaders/spirv/blur.comp.spv");
 	
 	create_samplers();
 
@@ -722,6 +794,10 @@ void Renderer::pre_frame()
 	global_constants_data->temporal_filtering_mode = (int)g_settings.temporal_filter;
 	global_constants_data->bicubic_sharpness = g_settings.bicubic_sharpness;
 	global_constants_data->screen_output = g_settings.screen_output;
+	global_constants_data->plane_distance_sensitivity = g_settings.plane_dist_sensitivity / 100.0f;
+	global_constants_data->camera_origin = scene.active_camera->origin;
+	global_constants_data->frame_number = (u32)frame_counter;
+	global_constants_data->blur_kernel_rotation_mode = (u32)g_settings.blur_kernel_rotation_mode;
 }
 
 void Renderer::begin_frame()
@@ -1014,6 +1090,7 @@ void Renderer::tonemap(VkCommandBuffer cmd)
 			Descriptor_Info(samplers[BILINEAR_SAMPLER_CLAMP], history_fix.radiance_image.image_view, VK_IMAGE_LAYOUT_GENERAL),
 			Descriptor_Info(samplers[BILINEAR_SAMPLER_CLAMP], history_fix.view_z_image.image_view, VK_IMAGE_LAYOUT_GENERAL),
 			Descriptor_Info(global_constants_buffer.buffer, 0, VK_WHOLE_SIZE),
+			Descriptor_Info(0, framebuffer.render_targets[DENOISER_HISTORY_LENGTH].images[current_frame_gbuffer_index].image_view, VK_IMAGE_LAYOUT_GENERAL),
 			//Descriptor_Info(0, brdf_lut.image_view, VK_IMAGE_LAYOUT_GENERAL)
 			//Descriptor_Info(0, prefiltered_envmap.image_view, VK_IMAGE_LAYOUT_GENERAL)
 		};
@@ -1218,7 +1295,7 @@ end_rendering:
 			Descriptor_Info(samplers[BILINEAR_SAMPLER_CLAMP], framebuffer.render_targets[DEPTH].images[current_frame_gbuffer_index].image_view, VK_IMAGE_LAYOUT_GENERAL),
 			Descriptor_Info(scene.tlas.value().acceleration_structure),
 			Descriptor_Info(samplers[BILINEAR_SAMPLER_CLAMP], cubemap.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
-			Descriptor_Info(samplers[BILINEAR_SAMPLER_CLAMP], blue_noise[frame_counter % BLUE_NOISE_TEXTURE_COUNT].image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
+			Descriptor_Info(samplers[BILINEAR_SAMPLER_CLAMP], blue_noise[g_settings.animate_noise ? frame_counter % BLUE_NOISE_TEXTURE_COUNT : 0].image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
 			Descriptor_Info(global_constants_buffer.buffer, 0, VK_WHOLE_SIZE),
 			//Descriptor_Info(samplers[BILINEAR_SAMPLER_CLAMP], blue_noise[0].image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
 
@@ -1280,7 +1357,7 @@ end_rendering:
 				float depth_scale;
 			} pc;
 
-			float angle = 2.0f * (float)M_PI * (float)math::pcg32_random_r(&rng_state) * ldexpf(1.0f, -32);
+			float angle = 0.5f * (float)M_PI * van_der_corput_base_2[(frame_counter + 17) % 64];
 
 			//printf("angle: %f\n", angle);
 			//angle = 0.0f;
@@ -1330,6 +1407,8 @@ end_rendering:
 				Descriptor_Info(0, framebuffer.render_targets[DENOISER_OUTPUT].images[current_frame_gbuffer_index].image_view, VK_IMAGE_LAYOUT_GENERAL),
 				Descriptor_Info(samplers[BILINEAR_SAMPLER_CLAMP], framebuffer.render_targets[DENOISER_OUTPUT].images[previous_frame_gbuffer_index].image_view, VK_IMAGE_LAYOUT_GENERAL),
 				Descriptor_Info(global_constants_buffer.buffer, 0, VK_WHOLE_SIZE),
+				Descriptor_Info(samplers[BILINEAR_SAMPLER_CLAMP], framebuffer.render_targets[DENOISER_HISTORY_LENGTH].images[previous_frame_gbuffer_index].image_view, VK_IMAGE_LAYOUT_GENERAL),
+				Descriptor_Info(0, framebuffer.render_targets[DENOISER_HISTORY_LENGTH].images[current_frame_gbuffer_index].image_view, VK_IMAGE_LAYOUT_GENERAL),
 			};
 
 			struct
@@ -1424,6 +1503,7 @@ end_rendering:
 				Descriptor_Info(samplers[BILINEAR_SAMPLER_CLAMP], history_fix.radiance_image.image_view, VK_IMAGE_LAYOUT_GENERAL),
 				Descriptor_Info(samplers[BILINEAR_SAMPLER_CLAMP], history_fix.view_z_image.image_view, VK_IMAGE_LAYOUT_GENERAL),
 				Descriptor_Info(global_constants_buffer.buffer, 0, VK_WHOLE_SIZE),
+				Descriptor_Info(0, framebuffer.render_targets[DENOISER_HISTORY_LENGTH].images[current_frame_gbuffer_index].image_view, VK_IMAGE_LAYOUT_GENERAL),
 			};
 
 			struct
@@ -1435,6 +1515,54 @@ end_rendering:
 			vkCmdPushConstants(cmd, pipelines[HISTORY_FIX].layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
 
 			vkCmdPushDescriptorSetWithTemplateKHR(cmd, pipelines[HISTORY_FIX].update_template, pipelines[HISTORY_FIX].layout, 0, descriptor_info);
+			vkCmdDispatch(cmd, group_count.x, group_count.y, 1);
+		}
+
+		vkCmdPipelineBarrier(cmd,
+			VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+			VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+			0,
+			1, &memory_barrier,
+			0, nullptr,
+			0, nullptr
+		);
+
+		{
+			// Main blur pass
+
+			constexpr glm::uvec3 group_size = glm::uvec3(8, 8, 1);
+			glm::uvec3 size = glm::uvec3(window_width, window_height, 1);
+			glm::uvec3 group_count = (size + (group_size - 1u)) & ~(group_size - 1u);
+			group_count /= group_size;
+
+			vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelines[BLUR].pipeline);
+
+			Descriptor_Info descriptor_info[] =
+			{
+				Descriptor_Info(0, framebuffer.render_targets[DENOISER_OUTPUT].images[current_frame_gbuffer_index].image_view, VK_IMAGE_LAYOUT_GENERAL),
+				Descriptor_Info(0, framebuffer.render_targets[NORMAL_ROUGHNESS].images[current_frame_gbuffer_index].image_view, VK_IMAGE_LAYOUT_GENERAL),
+				Descriptor_Info(0, framebuffer.render_targets[WORLD_POSITION].images[current_frame_gbuffer_index].image_view, VK_IMAGE_LAYOUT_GENERAL),
+				Descriptor_Info(samplers[BILINEAR_SAMPLER_CLAMP], framebuffer.render_targets[DEPTH].images[current_frame_gbuffer_index].image_view, VK_IMAGE_LAYOUT_GENERAL),
+				Descriptor_Info(0, framebuffer.render_targets[DENOISER_OUTPUT].images[previous_frame_gbuffer_index].image_view, VK_IMAGE_LAYOUT_GENERAL),
+				Descriptor_Info(global_constants_buffer.buffer, 0, VK_WHOLE_SIZE),
+				Descriptor_Info(0, framebuffer.render_targets[DENOISER_HISTORY_LENGTH].images[current_frame_gbuffer_index].image_view, VK_IMAGE_LAYOUT_GENERAL)
+			};
+
+			struct
+			{
+				glm::mat2 rot;
+				glm::ivec2 size;
+				float depth_scale;
+			} pc;
+
+			float angle = 0.5f * (float)M_PI * van_der_corput_base_2[(frame_counter + 17) % 64];
+
+			pc.size = glm::ivec2(window_width, window_height);
+			pc.rot = glm::mat2(cosf(angle), sinf(angle), -sinf(angle), cosf(angle));
+			pc.depth_scale = scene.current_frame_camera.proj[3][2];
+			vkCmdPushConstants(cmd, pipelines[BLUR].layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+
+			vkCmdPushDescriptorSetWithTemplateKHR(cmd, pipelines[BLUR].update_template, pipelines[BLUR].layout, 0, descriptor_info);
 			vkCmdDispatch(cmd, group_count.x, group_count.y, 1);
 		}
 	}
@@ -1584,6 +1712,18 @@ void Renderer::create_render_targets(VkCommandBuffer cmd)
 		);
 	}
 
+	Render_Target denoiser_history_length;
+	denoiser_history_length.format = VK_FORMAT_R8_UNORM;
+	for (u32 i = 0; i < GBUFFER_LAYERS; ++i)
+	{
+		denoiser_history_length.images[i] = context->allocate_image(
+			{ (u32)w, (u32)h, 1 },
+			denoiser_history_length.format,
+			VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+			VK_IMAGE_ASPECT_COLOR_BIT
+		);
+	}
+
 	history_fix.radiance_image = context->allocate_image(
 		{ (u32)w, (u32)h, 1 },
 		VK_FORMAT_R32G32B32A32_SFLOAT,
@@ -1627,7 +1767,7 @@ void Renderer::create_render_targets(VkCommandBuffer cmd)
 			VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
 	}
 
-	for (size_t i = 0; i < std::size(color_attachments); ++i)
+	for (size_t i = 0; i < GBUFFER_LAYERS; ++i)
 	{
 		vk_transition_layout(cmd, depth_attachment.images[i].image,
 			VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
@@ -1641,7 +1781,7 @@ void Renderer::create_render_targets(VkCommandBuffer cmd)
 		0, VK_ACCESS_SHADER_WRITE_BIT,
 		VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
 
-	for (size_t i = 0; i < std::size(color_attachments); ++i)
+	for (size_t i = 0; i < GBUFFER_LAYERS; ++i)
 	{
 		vk_transition_layout(cmd, normal_attachment.images[i].image,
 			VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
@@ -1649,7 +1789,7 @@ void Renderer::create_render_targets(VkCommandBuffer cmd)
 			VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 	}
 
-	for (size_t i = 0; i < std::size(color_attachments); ++i)
+	for (size_t i = 0; i < GBUFFER_LAYERS; ++i)
 	{
 		vk_transition_layout(cmd, albedo_attachment.images[i].image,
 			VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
@@ -1658,7 +1798,7 @@ void Renderer::create_render_targets(VkCommandBuffer cmd)
 	}
 
 
-	for (size_t i = 0; i < std::size(color_attachments); ++i)
+	for (size_t i = 0; i < GBUFFER_LAYERS; ++i)
 	{
 		vk_transition_layout(cmd, denoiser_output.images[i].image,
 			VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
@@ -1666,7 +1806,7 @@ void Renderer::create_render_targets(VkCommandBuffer cmd)
 			VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 	}
 
-	for (size_t i = 0; i < std::size(color_attachments); ++i)
+	for (size_t i = 0; i < GBUFFER_LAYERS; ++i)
 	{
 		vk_transition_layout(cmd, world_pos_attachment.images[i].image,
 			VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
@@ -1674,6 +1814,13 @@ void Renderer::create_render_targets(VkCommandBuffer cmd)
 			VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 	}
 
+	for (size_t i = 0; i < GBUFFER_LAYERS; ++i)
+	{
+		vk_transition_layout(cmd, denoiser_history_length.images[i].image,
+			VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+			0, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+			VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+	}
 
 	vk_transition_layout(cmd, indirect_diffuse_attachment.images[0].image,
 		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
@@ -1703,6 +1850,7 @@ void Renderer::create_render_targets(VkCommandBuffer cmd)
 	framebuffer.render_targets[INDIRECT_DIFFUSE] = indirect_diffuse_attachment;
 	framebuffer.render_targets[DENOISER_OUTPUT] = denoiser_output;
 	framebuffer.render_targets[WORLD_POSITION] = world_pos_attachment;
+	framebuffer.render_targets[DENOISER_HISTORY_LENGTH] = denoiser_history_length;
 }
 
 static bool check_extensions(const std::vector<const char*>& device_exts, const std::vector<VkExtensionProperties>& props)
