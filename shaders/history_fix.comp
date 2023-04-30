@@ -4,6 +4,7 @@
 #extension GL_KHR_shader_subgroup_basic : enable
 #extension GL_KHR_shader_subgroup_arithmetic : enable
 #extension GL_GOOGLE_include_directive : enable
+#extension GL_EXT_scalar_block_layout : enable
 
 #include "../shared/shared.h"
 
@@ -12,7 +13,7 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 layout(binding = 0, set = 0, rgba32f) uniform image2D accumulated_input_output;
 layout(binding = 1, set = 0) uniform sampler2D history_fix;
 layout(binding = 2, set = 0) uniform sampler2D history_fix_view_z;
-layout(binding = 3, set = 0) readonly buffer global_constants_t
+layout(binding = 3, set = 0, scalar) readonly buffer global_constants_t
 {
     Global_Constants_Data data;
 } global_constants;
@@ -151,6 +152,6 @@ void main()
     vec4 fixed_hist = textureLod(history_fix, uv, mip_level);
 #endif
    
-    imageStore(accumulated_input_output, p.xy, vec4(fixed_hist.rgb, in_radiance.a));
+    imageStore(accumulated_input_output, p.xy, vec4(fixed_hist));
     //imageStore(accumulated_input_output, p.xy, vec4(viridis_quintic(0.0), in_radiance.a));
 }

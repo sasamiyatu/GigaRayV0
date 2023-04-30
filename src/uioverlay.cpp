@@ -304,7 +304,9 @@ void UI_Overlay::update_and_render(VkCommandBuffer cmd, float dt)
 		if (ImGui::CollapsingHeader("Denoising", ImGuiTreeNodeFlags_CollapsingHeader | ImGuiTreeNodeFlags_DefaultOpen))
 		{
 			static const char* temporal_filter_modes[] = { "Bilinear", "Bicubic" };
-			ImGui::SliderFloat("Pre-pass blur radius", &g_settings.prepass_blur_radius, 0.0f, 100.0f, "%.0f");
+			ImGui::SliderFloat("Pre-pass blur radius", &g_settings.prepass_blur_radius, 0.0f, 100.0f, "%.1f");
+			ImGui::SliderFloat("blur radius", &g_settings.blur_radius, 0.0f, 100.0f, "%.1f");
+			ImGui::SliderFloat("post blur radius scale", &g_settings.post_blur_radius_scale, 0.0f, 5.0f, "%.1f");
 			ImGui::Checkbox("Temporal accumulation", &g_settings.temporal_accumulation);
 			ImGui::Checkbox("History fix", &g_settings.history_fix);
 			ImGui::SliderFloat2("Hit distance params", (float*)&g_settings.hit_distance_params, 0.001f, 100.0f, "%.3f");
@@ -313,6 +315,18 @@ void UI_Overlay::update_and_render(VkCommandBuffer cmd, float dt)
 			ImGui::SliderFloat("Plane distance sensitivity (%)", &g_settings.plane_dist_sensitivity, 0.1f, 5.0f, "%.1f");
 			static const char* blur_kernel_rotation_modes[] = { "None", "Per frame", "Per pixel" };
 			ImGui::Combo("Blur kernel rotation", &g_settings.blur_kernel_rotation_mode, blur_kernel_rotation_modes, (int)std::size(blur_kernel_rotation_modes));
+			ImGui::Checkbox("Frame count radius scaling", &g_settings.frame_num_scaling);
+			ImGui::Checkbox("Hit distance radius scaling", &g_settings.hit_dist_scaling);
+			ImGui::Checkbox("Use gaussian weight", &g_settings.use_gaussian_weight);
+			ImGui::Checkbox("Screen space sampling", &g_settings.screen_space_sampling);
+			ImGui::Checkbox("Use quadratic distribution", &g_settings.use_quadratic_distribution);
+			ImGui::Checkbox("Use geometry weight", &g_settings.use_geometry_weight);
+			ImGui::Checkbox("Use normal weight", &g_settings.use_normal_weight);
+			ImGui::Checkbox("Use hit distance weight", &g_settings.use_hit_distance_weight);
+			ImGui::SliderFloat("Plane dist scale", &g_settings.plane_dist_norm_scale, 0.01f, 10.0f, "%.2f");
+			ImGui::SliderFloat("Lobe percentage", &g_settings.lobe_percentage, 0.01f, 1.0f, "%.2f");
+			ImGui::SliderFloat("Hit distance scale", &g_settings.hit_distance_scale, 0.01f, 10.0f, "%.2f");
+			ImGui::SliderFloat("Stabilization strength", &g_settings.stabilization_strength, 0.0f, 1.0f, "%.2f");
 		}
 
 		ImGui::PopItemWidth();

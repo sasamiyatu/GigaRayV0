@@ -32,7 +32,6 @@ layout( push_constant ) uniform constants
     mat2 rot;
     ivec2 size;
     float depth_scale;
-    float blur_radius_scale;
 } control;
 
 float gaussian[3] = {0.27, 0.44, 0.27};
@@ -66,11 +65,13 @@ void main()
     vec4 center = imageLoad(noisy_input, p.xy);
     float accumulated_frames = imageLoad(history_length, p.xy).r * 255.0;
 
-    if (global_constants.data.blur_radius == 0.0f)
+    if (global_constants.data.blur_radius == 0.0f || global_constants.data.post_blur_radius_scale == 0.0f)
     {
         imageStore(blurred_output, p.xy, center);
         return;
     }
+
+    //if (p.xy == ivec2(0, 0)) debugPrintfEXT("im here");
     
     vec3 p0 = imageLoad(world_position, p.xy).xyz;
     vec4 n0r0 = imageLoad(normal_roughness, p.xy);
@@ -93,7 +94,7 @@ void main()
     float frustum_size = global_constants.data.min_rect_dim_mul_unproject * abs(Z);
     float hit_t = center.a * hit_dist_normalization;
     float hit_dist_factor = clamp(hit_t / frustum_size, 0.0, 1.0);
-    //hit_dist_factor = mix(hit_dist_factor, 1.0, smoothstep(4.0, 2.0, accumulated_frames));
+    hit_dist_factor = mix(hit_dist_factor, 1.0, 1.0 / accumulated_frames);
     float hit_t0 = center.a;
 
     if (global_constants.data.hit_distance_scaling == 1)
@@ -106,6 +107,7 @@ void main()
     }
 
     blur_radius += 1.0; // Avoid underblurring
+    blur_radius *= global_constants.data.post_blur_radius_scale;
 
     mat3 tbn = create_tangent_space(N);
     float world_radius = blur_radius * global_constants.data.unproject * Z;

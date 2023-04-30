@@ -18,6 +18,10 @@ layout(set = 0, binding = 5, scalar) buffer SH_sample_buffer
     SH_2 probes[];
 } SH_probes;
 layout(set = 0, binding = 6) uniform accelerationStructureEXT scene;
+layout(set = 0, binding = 7) readonly buffer global_constants_t
+{
+    Global_Constants_Data data;
+} global_constants;
 
 layout(location = 0) in vec3 in_normal;
 layout(location = 1) in vec3 base_color;
@@ -167,10 +171,10 @@ void main()
     vec3 V = normalize(camera_pos - frag_pos);
     vec3 R = reflect(-V, normal);
 
-    vec3 L = normalize(vec3(0.0, 1.0, 0.2));
+    vec3 L = global_constants.data.sun_direction;
 
     float shadow = 1.0;
-#if 0
+#if 1
     rayQueryEXT rq;
 
     rayQueryInitializeEXT(rq, scene, gl_RayFlagsTerminateOnFirstHitEXT, 0xFF, frag_pos + normal * 0.001, 0.0, L, 10000.0);
@@ -234,7 +238,7 @@ void main()
     mat_props.emissive = vec3(0.0);
     mat_props.transmissivness = 0.0;
     mat_props.opacity = 0.0;
-    const float light_intensity = 100.0f;
+    const float light_intensity = global_constants.data.sun_intensity;
     vec3 brdf = evalCombinedBRDF(N, L, V, mat_props) * light_intensity;
     //vec3 total = (kS + kD) * NoL;
     vec3 total = brdf * shadow;

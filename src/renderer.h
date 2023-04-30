@@ -60,6 +60,10 @@ enum Render_Targets
 	INDIRECT_DIFFUSE,
 	DENOISER_OUTPUT,
 	DENOISER_HISTORY_LENGTH,
+	DENOISER_PING_PONG, // Used internally inside each frame to pass data between different passes,
+	DEBUG,				// Not part of any algorithms, used to write arbitrary debug data for visualization
+	TEMPORAL_STABILIZATION_HISTORY,
+	INTERNAL_OCCLUSION_DATA,
 	MAX_RENDER_TARGETS
 };
 
@@ -93,6 +97,8 @@ enum Pipelines
 	HISTORY_FIX,
 	PRE_BLUR,
 	BLUR,
+	POST_BLUR,
+	TEMPORAL_STABILIZATION,
 	PIPELINE_COUNT,
 };
 

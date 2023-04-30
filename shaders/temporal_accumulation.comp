@@ -26,12 +26,13 @@ layout(binding = 8, set = 0) uniform sampler2D previous_depth;
 layout(binding = 9, set = 0, rgba32f) uniform image2D noisy_input;
 layout(binding = 10, set = 0, rgba32f) uniform image2D accumulated_output;
 layout(binding = 11, set = 0) uniform sampler2D history;
-layout(binding = 12, set = 0) readonly buffer global_constants_t
+layout(binding = 12, set = 0, scalar) readonly buffer global_constants_t
 {
     Global_Constants_Data data;
 } global_constants;
 layout(binding = 13, set = 0) uniform sampler2D previous_history_length;
 layout(binding = 14, set = 0, rgba32f) uniform image2D out_history_length;
+layout(binding = 15, set = 0, r8ui) uniform uimage2D occlusion_data;
 
 layout( push_constant ) uniform constants
 {
@@ -40,50 +41,6 @@ layout( push_constant ) uniform constants
     uint frames_accumulated;
 } control;
 
-struct Bilinear
-{
-    vec2 origin;
-    vec2 weights;
-};
-
-Bilinear get_bilinear_filter(vec2 uv /*[0, 1]*/, vec2 tex_size)
-{
-    Bilinear result;
-    result.origin = floor(uv * tex_size - vec2(0.5, 0.5));
-    result.weights = fract(uv * tex_size - vec2(0.5, 0.5));
-    return result;
-}
-
-vec4 bicubic_filter(sampler2D tex, vec2 uv, vec4 render_target_params)
-{
-    vec2 pos = render_target_params.zw * uv; // zw: width and height
-    vec2 center_pos = floor(pos - 0.5) + 0.5; // 
-    vec2 f = pos - center_pos;
-    vec2 f2 = f * f;
-    vec2 f3 = f * f2;
-
-    float c = global_constants.data.bicubic_sharpness;
-    vec2 w0 =        -c  * f3 +  2.0 * c        * f2 - c * f;
-    vec2 w1 =  (2.0 - c) * f3 - (3.0 - c)       * f2         + 1.0;
-    vec2 w2 = -(2.0 - c) * f3 + (3.0 - 2.0 * c) * f2 + c * f;
-    vec2 w3 =         c  * f3 -               c * f2;
-
-    vec2 w12 = w1 + w2;
-    vec2 tc12 = render_target_params.xy * (center_pos + w2 / w12);
-    vec4 center_color = texture(tex, vec2(tc12.x, tc12.y));
-
-    vec2 tc0 = render_target_params.xy * (center_pos - 1.0);
-    vec2 tc3 = render_target_params.xy * (center_pos + 2.0);
-    vec4 color = texture(tex, vec2(tc12.x, tc0.y)) * (w12.x * w0.y) + 
-        texture(tex, vec2(tc0.x, tc12.y)) * (w0.x * w12.y) +
-        center_color * (w12.x * w12.y) + 
-        texture(tex, vec2(tc3.x, tc12.y)) * (w3.x * w12.y) +
-        texture(tex, vec2(tc12.x, tc3.y)) * (w12.x * w3.y);
-
-    float total_w =  (w12.x * w0.y) + (w0.x * w12.y) + (w12.x * w12.y) + (w3.x * w12.y) + (w12.x * w3.y);
-
-    return color / total_w;
-}
 
 void main()
 {
@@ -216,6 +173,9 @@ void main()
 
     radiance = mix(final_color, radiance, alpha);
 
+    uint packed_occlusion_data = int(allow_bicubic) | (int(valids[0]) << 1) | (int(valids[1]) << 2) | (int(valids[2]) << 3) | (int(valids[3]) << 4);
+
     imageStore(out_history_length, p.xy, vec4(accum_speed / 255.0));
     imageStore(accumulated_output, p.xy, radiance);
+    imageStore(occlusion_data, p.xy, uvec4(packed_occlusion_data));
 }

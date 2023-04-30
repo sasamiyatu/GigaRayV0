@@ -45,7 +45,7 @@ vec3 get_view_pos(vec3 uv_depth, mat4 proj)
 
 vec3 viridis_quintic( float x )
 {
-	x = saturate( x );
+	x = clamp(x, 0.0, 1.0);
 	vec4 x1 = vec4( 1.0, x, x * x, x * x * x ); // 1 x x2 x3
 	vec4 x2 = x1 * x1.w * x; // x4 x5 x6 x7
 	return vec3(
@@ -56,7 +56,7 @@ vec3 viridis_quintic( float x )
 
 vec3 plasma_quintic( float x )
 {
-	x = saturate( x );
+	x = clamp(x, 0.0, 1.0);
 	vec4 x1 = vec4( 1.0, x, x * x, x * x * x ); // 1 x x2 x3
 	vec4 x2 = x1 * x1.w * x; // x4 x5 x6 x7
 	return vec3(
@@ -65,5 +65,49 @@ vec3 plasma_quintic( float x )
 		dot( x1.xyzw, vec4( +0.513275779, +1.580255060, -5.164414457, +4.559573646 ) ) + dot( x2.xy, vec2( -1.916810682, +0.570638854 ) ) );
 }
 
+struct Bilinear
+{
+    vec2 origin;
+    vec2 weights;
+};
+
+Bilinear get_bilinear_filter(vec2 uv /*[0, 1]*/, vec2 tex_size)
+{
+    Bilinear result;
+    result.origin = floor(uv * tex_size - vec2(0.5, 0.5));
+    result.weights = fract(uv * tex_size - vec2(0.5, 0.5));
+    return result;
+}
+
+vec4 bicubic_filter(sampler2D tex, vec2 uv, vec4 render_target_params)
+{
+    vec2 pos = render_target_params.zw * uv; // zw: width and height
+    vec2 center_pos = floor(pos - 0.5) + 0.5; // 
+    vec2 f = pos - center_pos;
+    vec2 f2 = f * f;
+    vec2 f3 = f * f2;
+
+    float c = 0.5;
+    vec2 w0 =        -c  * f3 +  2.0 * c        * f2 - c * f;
+    vec2 w1 =  (2.0 - c) * f3 - (3.0 - c)       * f2         + 1.0;
+    vec2 w2 = -(2.0 - c) * f3 + (3.0 - 2.0 * c) * f2 + c * f;
+    vec2 w3 =         c  * f3 -               c * f2;
+
+    vec2 w12 = w1 + w2;
+    vec2 tc12 = render_target_params.xy * (center_pos + w2 / w12);
+    vec4 center_color = texture(tex, vec2(tc12.x, tc12.y));
+
+    vec2 tc0 = render_target_params.xy * (center_pos - 1.0);
+    vec2 tc3 = render_target_params.xy * (center_pos + 2.0);
+    vec4 color = texture(tex, vec2(tc12.x, tc0.y)) * (w12.x * w0.y) + 
+        texture(tex, vec2(tc0.x, tc12.y)) * (w0.x * w12.y) +
+        center_color * (w12.x * w12.y) + 
+        texture(tex, vec2(tc3.x, tc12.y)) * (w3.x * w12.y) +
+        texture(tex, vec2(tc12.x, tc3.y)) * (w12.x * w3.y);
+
+    float total_w =  (w12.x * w0.y) + (w0.x * w12.y) + (w12.x * w12.y) + (w3.x * w12.y) + (w12.x * w3.y);
+
+    return color / total_w;
+}
 
 #endif

@@ -1,0 +1,90 @@
+#version 460
+
+#extension GL_EXT_scalar_block_layout : enable
+#extension GL_GOOGLE_include_directive : enable
+#extension GL_EXT_debug_printf : enable
+
+#include "../shared/shared.h"
+#include "misc.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(binding = 0, set = 0, rgba32f) uniform image2D denoised_input;
+layout(binding = 1, set = 0) uniform sampler2D stabilized_history;
+layout(binding = 2, set = 0, rgba32f) uniform image2D stabilized_output;
+layout(binding = 3, set = 0, rgba32f) uniform image2D current_world_position;
+layout(binding = 4, set = 0, scalar) readonly buffer global_constants_t
+{
+    Global_Constants_Data data;
+} global_constants;
+layout(binding = 5, set = 0, scalar) uniform camera_buffer{
+    Camera_Data current;
+    Camera_Data previous;
+} camera_data;
+layout(binding = 6, set = 0, rgba32f) uniform image2D history_length;
+layout(binding = 7, set = 0, r8ui) uniform uimage2D occlusion_data;
+
+layout( push_constant ) uniform constants
+{
+    ivec2 size;
+} control;
+
+void main()
+{
+    ivec3 p = ivec3(gl_GlobalInvocationID);
+    if (any(greaterThanEqual(p.xy, control.size)))
+        return;
+
+    vec4 radiance = imageLoad(denoised_input, p.xy);
+
+    uint occlusion_data = imageLoad(occlusion_data, p.xy).r;
+
+    bool allow_bicubic = bool(occlusion_data & 1);
+
+    vec3 X = imageLoad(current_world_position, p.xy).xyz;
+
+    vec4 X_clip_prev = camera_data.previous.viewproj * vec4(X, 1.0);
+    X_clip_prev /= X_clip_prev.w;
+    X_clip_prev.y = -X_clip_prev.y;
+
+    float accumulated_frames = imageLoad(history_length, p.xy).r * 255.0;
+
+    vec2 uv = X_clip_prev.xy * 0.5 + 0.5;
+
+    Bilinear bilinear = get_bilinear_filter(uv, vec2(control.size));
+    vec4 bilinear_weights = {
+        (1.0 - bilinear.weights.x) * (1.0 - bilinear.weights.y), (bilinear.weights.x) * (1.0 - bilinear.weights.y),
+        (1.0 - bilinear.weights.x) * (bilinear.weights.y), (bilinear.weights.x) * (bilinear.weights.y)
+    };
+
+    vec4 occlusions = vec4((occlusion_data >> 1) & 1, (occlusion_data >> 2) & 1, (occlusion_data >> 3) & 1, (occlusion_data >> 4) & 1);
+    vec4 occlusion_weights = occlusions * bilinear_weights;
+    float footprint_quality = dot(bilinear_weights, occlusions);
+
+    float w_sum = dot(occlusion_weights, vec4(1.0));
+
+    float is_in_screen = float(uv == clamp(uv, 0.0, 1.0));
+    footprint_quality *= is_in_screen;
+
+    vec4 prev_radiance;
+    if (allow_bicubic)
+    {
+        vec4 rt_params = vec4(1.0 / vec2(control.size), vec2(control.size));
+        prev_radiance = bicubic_filter(stabilized_history, uv, rt_params);
+        prev_radiance = max(vec4(0.0), prev_radiance);
+    }
+    else
+    {        
+        vec4 s00 = texelFetch(stabilized_history, ivec2(bilinear.origin + vec2(0, 0)), 0);
+        vec4 s10 = texelFetch(stabilized_history, ivec2(bilinear.origin + vec2(1, 0)), 0);
+        vec4 s01 = texelFetch(stabilized_history, ivec2(bilinear.origin + vec2(0, 1)), 0);
+        vec4 s11 = texelFetch(stabilized_history, ivec2(bilinear.origin + vec2(1, 1)), 0);
+
+        prev_radiance = s00 * occlusion_weights.x + s10 * occlusion_weights.y + s01 * occlusion_weights.z + s11 * occlusion_weights.w;
+        prev_radiance = w_sum < 0.001 ? vec4(0.0) : prev_radiance / w_sum;
+    }
+
+    float history_weight = (accumulated_frames / (1.0 + accumulated_frames)) * global_constants.data.stabilization_strength * footprint_quality;
+    vec4 stabilized = mix(radiance, prev_radiance, history_weight);
+    imageStore(stabilized_output, p.xy, stabilized);
+}

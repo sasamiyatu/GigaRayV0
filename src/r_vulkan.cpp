@@ -8,7 +8,7 @@
 #include "imgui/imgui_impl_sdl2.h"
 #include "imgui/imgui_impl_vulkan.h"
 
-#define VSYNC 1
+#define VSYNC 0
 #define VALIDATION_VERBOSE
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL debug_callback(

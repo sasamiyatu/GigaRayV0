@@ -1,6 +1,7 @@
 #version 460
 #extension GL_EXT_debug_printf : enable
 #extension GL_GOOGLE_include_directive : enable
+#extension GL_EXT_scalar_block_layout : enable
 #include "brdf.h"
 #include "math.glsl"
 #include "../shared/shared.h"
@@ -28,11 +29,12 @@ layout(binding = 6, set = 0, rgba32f) uniform image2D denoiser_output;
 layout(binding = 7, set = 0, rgba32f) uniform image2D output_image;
 layout(binding = 8, set = 0) uniform sampler2D history_fix;
 layout(binding = 9, set = 0) uniform sampler2D history_fix_depth;
-layout(binding = 10, set = 0) readonly buffer global_constants_t
+layout(binding = 10, set = 0, scalar) readonly buffer global_constants_t
 {
     Global_Constants_Data data;
 } global_constants;
 layout(binding = 11, set = 0, rgba32f) uniform image2D history_length;
+layout(binding = 12, set = 0, rgba32f) uniform image2D debug_output;
 
 layout( push_constant ) uniform constants
 {
@@ -68,10 +70,17 @@ void main()
 
     vec3 albedo = basecolor.rgb * (1.0 - basecolor.a);
 
+    vec4 debug = imageLoad(debug_output, p.xy);
 
     vec4 history_fix = textureLod(history_fix, uv, control.history_lod);
     if (control.history_lod == 0)
         history_fix = denoised;
+
+    vec3 F0 = mix(vec3(0.04), basecolor.rgb, basecolor.a);
+    albedo = albedo * (1.0 - F0) + F0;
+
+    if (p.x >= split_pixel)
+        color.rgb += denoised.rgb * albedo;
 
     // Reinhardt tonemapping
     color.rgb = color.rgb / (color.rgb + 1.0);
@@ -108,8 +117,8 @@ void main()
         case 3: // hit distance
             final_output = vec3(denoised.a);
             break;
-        case 4: // blur radius (not implemented)
-            final_output = vec3(1.0, 0.0, 1.0);
+        case 4: // blur radius
+            final_output = denoised.rgb + debug.rgb;
             break;
         case 5: // history length
             final_output = viridis_quintic(1.0 - imageLoad(history_length, p.xy).r * 255.0 / 32.0);

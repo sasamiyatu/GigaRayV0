@@ -37,6 +37,7 @@ struct Settings
     glm::vec4 hit_distance_params = glm::vec4(3.0f, 0.1f, 20.0f, 25.0f);
     float prepass_blur_radius = 15.0f;
     float blur_radius = 7.5f;
+    float post_blur_radius_scale = 0.0f;
     bool temporal_accumulation = true;
     bool history_fix = true;
     int screen_output = DENOISED; // Screen_Output
@@ -46,6 +47,18 @@ struct Settings
     float plane_dist_sensitivity = 0.5f; // percentage
     float occlusion_threshold = 0.005f;
     int blur_kernel_rotation_mode = 1; // 0 = None, 1 = Per frame, 2 = Per pixel
+    bool frame_num_scaling = true;
+    bool hit_dist_scaling = true;
+    bool use_gaussian_weight = true;
+    bool screen_space_sampling = false;
+    bool use_quadratic_distribution = true;
+    bool use_geometry_weight = true;
+    bool use_normal_weight = true;
+    bool use_hit_distance_weight = true;
+    float plane_dist_norm_scale = 1.0f;
+    float lobe_percentage = 1.0f;
+    float hit_distance_scale = 1.0f;
+    float stabilization_strength = 1.0;
 };
 
 extern Settings g_settings;

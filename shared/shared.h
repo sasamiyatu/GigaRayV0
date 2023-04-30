@@ -59,6 +59,7 @@ struct Global_Constants_Data
     float min_rect_dim_mul_unproject;
     float prepass_blur_radius;
     float blur_radius;
+    float post_blur_radius_scale;
     int temporal_accumulation;
     int history_fix;
     int temporal_filtering_mode; // 0 = bilinear, 1 = bicubic
@@ -68,6 +69,18 @@ struct Global_Constants_Data
     vec3 camera_origin;
     uint frame_number;
     uint blur_kernel_rotation_mode;
+    uint frame_num_scaling;
+    uint hit_distance_scaling;
+    uint use_gaussian_weight; 
+    uint screen_space_sampling;
+    uint use_quadratic_distribution;
+    uint use_geometry_weight;
+    uint use_normal_weight;
+    uint use_hit_distance_weight;
+    float plane_dist_norm_scale;
+    float lobe_percentage;
+    float hit_distance_scale;
+    float stabilization_strength;
 };
 
 // Screen output defines

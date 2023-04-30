@@ -45,23 +45,34 @@ void main()
     
     vec3 p0 = imageLoad(world_position, p.xy).xyz;
     vec4 n0r0 = imageLoad(normal_roughness, p.xy);
-    vec3 n0 = decode_unit_vector(n0r0.xy, false, true);
+    vec3 N = decode_unit_vector(n0r0.xy, false, true);
     float d0 = texelFetch(depth, p.xy, 0).r;
+
+    if (d0 == 0.0)
+    {
+        imageStore(blurred_output, p.xy, center);
+        return;
+    }
 
     vec3 X = (p0 - global_constants.data.camera_origin);
 
-    float z0 = control.depth_scale / d0;
+    float Z = control.depth_scale / d0;
     float blur_radius = global_constants.data.prepass_blur_radius;
-    float hit_dist_normalization = global_constants.data.hit_dist_params.x + global_constants.data.hit_dist_params.y * abs(z0);
-    float frustum_size = global_constants.data.min_rect_dim_mul_unproject * abs(z0);
+    float hit_dist_normalization = global_constants.data.hit_dist_params.x + global_constants.data.hit_dist_params.y * abs(Z);
+    float frustum_size = global_constants.data.min_rect_dim_mul_unproject * abs(Z);
     float hit_t = center.a * hit_dist_normalization;
+    float hit_t0 = center.a;
     float hit_dist_factor = clamp(hit_t / frustum_size, 0.0, 1.0);
     blur_radius *= hit_dist_factor;
     
     float a = 0.25 / ( global_constants.data.plane_distance_sensitivity * frustum_size );
-    float b = -dot( n0, X ) * a;
+    float b = -dot( N, X ) * a;
 
-    float plane_dist_norm = 4.0 / (1.0 + z0);
+
+    float spec_half_angle = M_PI * 0.5;
+    float a0 = global_constants.data.lobe_percentage * spec_half_angle;
+
+    float plane_dist_norm = global_constants.data.plane_dist_norm_scale / (1.0 + Z * global_constants.data.unproject);
 
     float sum = 1.0;
     vec4 diff = center;
@@ -92,26 +103,29 @@ void main()
         vec3 pos = imageLoad(world_position, q.xy).xyz;
         vec3 Xs = pos - global_constants.data.camera_origin;
         vec3 nr = imageLoad(normal_roughness, q.xy).xyz;
-        vec3 n = decode_unit_vector(nr.xy, false, true);
+        vec3 Ns = decode_unit_vector(nr.xy, false, true);
         float w = get_gaussian_weight(offset.z);
         bool is_in_screen = (all(greaterThanEqual(q.xy, ivec2(0, 0))) && all(lessThan(q.xy, control.size)));
 
-        float ndotx = dot(Xs, n);
-        float plane_dist_w = abs(ndotx * a + b);
-
-        float w_plane = exp(-3.0 * plane_dist_w);
-
-        // if (p.xy == ivec2(640, 360))
-        //     debugPrintfEXT("plane w: %f", w_plane);
-
+        float cosa = clamp(dot(Ns, N), 0.0, 1.0);
+        float a = acos(cosa);
+        float w_n = smoothstep(a0, 0.0, a);
 
         vec3 ray = pos - p0;
-        float dist_to_plane = abs(dot(ray, n0));
-        float relative_plane_dist = dist_to_plane / z0;
+        float dist_to_plane = abs(dot(ray, N));
+        float relative_plane_dist = dist_to_plane / Z;
+        float w_ = clamp(1.0 - abs(dist_to_plane) * plane_dist_norm, 0.0, 1.0);
 
-        float w_n = smoothstep(0.7, 1.0,abs(dot(n, n0)));
+        float w_hit_dist = exp(-3.0 * abs(s.a - hit_t0) * global_constants.data.hit_distance_scale);
 
-        //w *= w_plane;
+        if (global_constants.data.use_geometry_weight == 1)
+            w *= w_;
+
+        if (global_constants.data.use_normal_weight == 1)
+            w *= w_n;
+
+        if (global_constants.data.use_hit_distance_weight == 1)
+            w *= w_hit_dist;
 
         w = is_in_screen ? w : 0.0;
         s = is_in_screen ? s : vec4(0.0);

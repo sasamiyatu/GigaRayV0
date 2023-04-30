@@ -196,7 +196,7 @@ void main()
                 );
                 if (pay.prim_id == -1)
                 {
-                    const float light_intensity = 100.0f;
+                    const float light_intensity = global_constants.data.sun_intensity;
                     vec3 V = -rd;
 #ifdef OWN_BRDF
                     radiance += throughput * eval_combined_brdf(normal, L, V, v.material) * light_intensity;
