@@ -29,15 +29,15 @@ struct Settings
     Rendering_Mode rendering_mode = Rendering_Mode::REFERENCE_PATH_TRACER;
     bool menu_open = false;
     float camera_fov = 75.0f;
-    float exposure = 1.0f;
+    float exposure = 5.0f;
     float sun_azimuth = glm::degrees(3.14159f);
     float sun_zenith = glm::degrees(0.1974f);
-    float sun_intensity = 1.0f;
+    float sun_intensity = 20.0f;
     glm::vec3 sun_color = glm::vec3(1.0f);
     glm::vec4 hit_distance_params = glm::vec4(3.0f, 0.1f, 20.0f, 25.0f);
     float prepass_blur_radius = 15.0f;
     float blur_radius = 7.5f;
-    float post_blur_radius_scale = 0.0f;
+    float post_blur_radius_scale = 2.0f;
     bool temporal_accumulation = true;
     bool history_fix = true;
     int screen_output = DENOISED; // Screen_Output
@@ -51,14 +51,19 @@ struct Settings
     bool hit_dist_scaling = true;
     bool use_gaussian_weight = true;
     bool screen_space_sampling = false;
-    bool use_quadratic_distribution = true;
+    bool use_quadratic_distribution = false;
     bool use_geometry_weight = true;
     bool use_normal_weight = true;
     bool use_hit_distance_weight = true;
     float plane_dist_norm_scale = 1.0f;
-    float lobe_percentage = 1.0f;
+    float lobe_percentage = 0.14f;
     float hit_distance_scale = 1.0f;
     float stabilization_strength = 1.0;
+    bool use_ycocg_color_space = false;
+    bool use_alternative_history_fix = true;
+    float history_fix_stride = 14.0f;
+    bool taa = false;
+    bool jitter = false;
 };
 
 extern Settings g_settings;

@@ -297,18 +297,23 @@ void UI_Overlay::update_and_render(VkCommandBuffer cmd, float dt)
 		}
 		if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_CollapsingHeader | ImGuiTreeNodeFlags_DefaultOpen))
 		{
-			static const char* on_screen_modes[] = { "Final output", "Indirect diffuse", "Denoised", "Hit distance", "Blur radius", "History length", "Normal"};
+			static const char* on_screen_modes[] = { "Final output", "Indirect diffuse", "Denoised", "Hit distance", "Blur radius", "History length", "Normal", "Albedo"};
 			ImGui::SliderFloat("Exposure", &g_settings.exposure, 0.0f, 100.0f, "%.3f", ImGuiSliderFlags_Logarithmic);
 			ImGui::Combo("On screen", &g_settings.screen_output, on_screen_modes, (int)std::size(on_screen_modes));
+			ImGui::Checkbox("TAA", &g_settings.taa);
+			ImGui::Checkbox("Jitter", &g_settings.jitter);
 		}
 		if (ImGui::CollapsingHeader("Denoising", ImGuiTreeNodeFlags_CollapsingHeader | ImGuiTreeNodeFlags_DefaultOpen))
 		{
 			static const char* temporal_filter_modes[] = { "Bilinear", "Bicubic" };
+			ImGui::Checkbox("Use YCoCg color space", &g_settings.use_ycocg_color_space);
 			ImGui::SliderFloat("Pre-pass blur radius", &g_settings.prepass_blur_radius, 0.0f, 100.0f, "%.1f");
 			ImGui::SliderFloat("blur radius", &g_settings.blur_radius, 0.0f, 100.0f, "%.1f");
 			ImGui::SliderFloat("post blur radius scale", &g_settings.post_blur_radius_scale, 0.0f, 5.0f, "%.1f");
 			ImGui::Checkbox("Temporal accumulation", &g_settings.temporal_accumulation);
 			ImGui::Checkbox("History fix", &g_settings.history_fix);
+			ImGui::Checkbox("Alternative history fix", &g_settings.use_alternative_history_fix);
+			ImGui::SliderFloat("Alt hist fix stride", &g_settings.history_fix_stride, 1.0f, 30.0f, "%.0f");
 			ImGui::SliderFloat2("Hit distance params", (float*)&g_settings.hit_distance_params, 0.001f, 100.0f, "%.3f");
 			//ImGui::Combo("Temporal filter", (int*)&g_settings.temporal_filter, temporal_filter_modes, (int)std::size(temporal_filter_modes));
 			//ImGui::SliderFloat("Bicubic sharpness", &g_settings.bicubic_sharpness, 0.0f, 1.0f, "%.2f");

@@ -20,7 +20,7 @@ layout(binding = 4, set = 0) uniform sampler2D depth;
 layout(binding = 5, set = 0) uniform accelerationStructureEXT scene;
 layout(binding = 6, set = 0) uniform samplerCube env_map;
 layout(binding = 7, set = 0) uniform sampler2D blue_noise;
-layout(binding = 8, set = 0) readonly buffer global_constants_t
+layout(binding = 8, set = 0, scalar) readonly buffer global_constants_t
 {
     Global_Constants_Data data;
 } global_constants;
@@ -114,8 +114,11 @@ void main()
             float hit_t = rayQueryGetIntersectionTEXT(rq, true);
             Vertex v = get_interpolated_vertex(custom_instance_id, primitive_id, barycentrics);
             ray_origin = offset_ray(v.pos, v.geometric_normal);
-            // if (dot(v.geometric_normal, -ray_dir) < 0.0) 
-            //     break;
+            if (dot(v.geometric_normal, -ray_dir) < 0.0) 
+            {
+                imageStore(indirect_diffuse, p.xy, vec4(0.0));
+                return;
+            }
 
             float frustum_size = global_constants.data.min_rect_dim_mul_unproject * abs(view_space.z);
             float hit_dist_normalization = global_constants.data.hit_dist_params.x + global_constants.data.hit_dist_params.y * abs(view_space.z);
@@ -167,8 +170,9 @@ void main()
         else
         {
             //radiance += throughput * texture(env_map, ray_dir).rgb;
-            imageStore(indirect_diffuse, p.xy, vec4(0.0, 0.0, 0.0, -1.0));
-            return;
+            //hit_dist = 1.0;
+            radiance = vec3(0.0);
+            hit_dist = -1.0;
 #if MAX_BOUNCES != 1
             break;
 #endif
@@ -176,6 +180,10 @@ void main()
     }
 
     vec3 out_color = radiance;
+    if (global_constants.data.use_ycocg_color_space == 1)
+    {
+        out_color = linear_to_YCoCg(out_color);
+    }
 #if 0
     if (control.frames_accumulated != 0)
     {

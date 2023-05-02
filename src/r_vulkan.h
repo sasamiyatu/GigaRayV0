@@ -184,7 +184,7 @@ struct Vk_Context
 	VkDeviceAddress get_acceleration_structure_device_address(VkAccelerationStructureKHR as);
 	VkSemaphore create_semaphore(bool timeline = false);
 	GPU_Buffer create_gpu_buffer(u32 size, VkBufferUsageFlags usage_flags, u32 alignment = 0);
-	Vk_Pipeline create_compute_pipeline(const char* shaderpat, VkDescriptorSetLayout bindless_layout = VK_NULL_HANDLE);
+	Vk_Pipeline create_compute_pipeline(const char* shaderpat, VkDescriptorSetLayout bindless_layout = VK_NULL_HANDLE, VkSpecializationInfo* specialization_info = nullptr);
 	VkDescriptorSetLayout create_layout_from_spirv(u8* bytecode, u32 size);
 	Vk_Allocated_Image load_texture_hdri(const char* filepath, VkImageUsageFlags usage = (VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT));
 	Vk_Allocated_Image load_texture(const char* filepath, bool flip_y = false, bool generate_mipmaps = false);

@@ -1,0 +1,111 @@
+#version 460
+
+#extension GL_EXT_debug_printf : enable
+#extension GL_GOOGLE_include_directive : enable
+#extension GL_EXT_scalar_block_layout : enable
+
+#include "misc.glsl"
+#include "blur_common.glsl"
+#include "../shared/shared.h"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout( push_constant ) uniform constants
+{
+    ivec2 size;
+    float stride;
+} control;
+
+layout(binding = 0, set = 0, rgba32f) uniform image2D accumulated_input;
+layout(binding = 1, set = 0, rgba32f) uniform image2D filtered_output;
+layout(binding = 2, set = 0, rgba32f) uniform image2D history_length;
+layout(binding = 3, set = 0, rgba32f) uniform image2D normal_roughness;
+layout(binding = 4, set = 0) uniform sampler2D depth;
+layout(binding = 5, set = 0, rgba32f) uniform image2D world_position;
+layout(binding = 6, set = 0, scalar) uniform camera_buffer{
+    Camera_Data current;
+    Camera_Data previous;
+} camera_data;
+layout(binding = 7, set = 0, scalar) readonly buffer global_constants_t
+{
+    Global_Constants_Data data;
+} global_constants;
+
+void main()
+{
+    ivec3 p = ivec3(gl_GlobalInvocationID);
+    if (any(greaterThanEqual(p.xy, control.size)))
+        return;
+
+    float accumulated_frames = imageLoad(history_length, p.xy).r * 255.0;
+    float norm_hist_len = clamp((accumulated_frames - 1.0) / 4.0, 0.0, 1.0);
+
+    if (norm_hist_len == 1.0) return;
+
+    float w_sum = 1.0;
+    vec4 diff = imageLoad(accumulated_input, p.xy);
+
+    vec3 N = decode_unit_vector(imageLoad(normal_roughness, p.xy).xy, false, true);
+    vec3 Nv = mat3(camera_data.current.view) * N;
+    float D = texelFetch(depth, p.xy, 0).r;
+    float Z = camera_data.current.proj[3][2] / D;
+
+    vec3 X = imageLoad(world_position, p.xy).xyz;
+    vec3 Xv = (camera_data.current.view * vec4(X, 1.0)).xyz;
+
+    float frustum_size = global_constants.data.min_rect_dim_mul_unproject * abs(Z);
+
+    float normal_weight_params = get_normal_weight_params(1.0, 1.0);
+    float inv_accum_speed = 1.0 / accumulated_frames;
+
+    vec2 geometry_weight_params = get_geometry_weight_params(global_constants.data.plane_distance_sensitivity, frustum_size, Xv, Nv, inv_accum_speed);
+
+    float stride = control.stride / (1.0 + accumulated_frames);
+
+    const int RADIUS = 2;
+    for (int yy = -RADIUS; yy <= RADIUS; ++yy)
+    {
+        for (int xx = -RADIUS; xx <= RADIUS; ++xx)
+        {
+            if (ivec2(xx, yy) == ivec2(0, 0)) continue;
+
+            ivec2 offset = ivec2(xx, yy) * int(stride);
+            ivec2 q = p.xy + offset;
+
+            bool is_in_screen = all(greaterThanEqual(q.xy, ivec2(0))) && all(lessThan(q.xy, control.size));
+
+            vec4 s = imageLoad(accumulated_input, q.xy);
+
+            float w = 1.0;
+
+            vec3 Xs = imageLoad(world_position, q.xy).xyz;
+            vec3 Xvs = (camera_data.current.view * vec4(Xs, 1.0)).xyz;
+            vec3 Ns = decode_unit_vector(imageLoad(normal_roughness, q.xy).xy, false, true);
+            float NoX = dot(Xvs, Nv);
+            float plane_dist_w = abs(NoX * geometry_weight_params.x + geometry_weight_params.y);
+            plane_dist_w = smoothstep(1.0, 0.0, plane_dist_w);
+
+            float cosa = clamp(dot(Ns, N), 0.0, 1.0);
+            float a = acos(cosa);
+            float w_n = a * normal_weight_params;
+            w_n = smoothstep(1.0, 0.0, w_n);
+
+            if (global_constants.data.use_geometry_weight == 1)
+                w *= plane_dist_w;
+
+            if (global_constants.data.use_normal_weight == 1)
+                w *= w_n;
+
+            w = is_in_screen ? w : 0.0;
+            s = is_in_screen ? s : vec4(0.0);
+
+            diff += w * s;
+            w_sum += w;
+        }
+    }
+
+    diff /= w_sum;
+
+
+    imageStore(filtered_output, p.xy, diff);
+}

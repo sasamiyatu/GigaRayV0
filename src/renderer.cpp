@@ -28,6 +28,7 @@ constexpr VkFormat BASECOLOR_METALNESS_FORMAT = VK_FORMAT_R8G8B8A8_UNORM;
 
 constexpr u32 MAX_INDIRECT_DRAWS = 1'000'000;
 constexpr int MAX_BINDLESS_RESOURCES = 16536;
+constexpr int TAA_SAMPLE_COUNT = 8;
 
 #define PING 0
 #define PONG 1
@@ -97,6 +98,73 @@ constexpr float van_der_corput_base_2[64] = {
 	0.734375f,
 	0.484375f,
 	0.984375f
+};
+
+constexpr vec2 halton_sequence[] = {
+	vec2(0.5, 0.3333333333333333),
+	vec2(0.25, 0.6666666666666666),
+	vec2(0.75, 0.1111111111111111),
+	vec2(0.125, 0.4444444444444444),
+	vec2(0.625, 0.7777777777777778),
+	vec2(0.375, 0.2222222222222222),
+	vec2(0.875, 0.5555555555555556),
+	vec2(0.0625, 0.8888888888888888),
+	vec2(0.5625, 0.037037037037037035),
+	vec2(0.3125, 0.37037037037037035),
+	vec2(0.8125, 0.7037037037037037),
+	vec2(0.1875, 0.14814814814814814),
+	vec2(0.6875, 0.48148148148148145),
+	vec2(0.4375, 0.8148148148148148),
+	vec2(0.9375, 0.25925925925925924),
+	vec2(0.03125, 0.5925925925925926),
+	vec2(0.53125, 0.9259259259259259),
+	vec2(0.28125, 0.07407407407407407),
+	vec2(0.78125, 0.4074074074074074),
+	vec2(0.15625, 0.7407407407407407),
+	vec2(0.65625, 0.18518518518518517),
+	vec2(0.40625, 0.5185185185185185),
+	vec2(0.90625, 0.8518518518518519),
+	vec2(0.09375, 0.2962962962962963),
+	vec2(0.59375, 0.6296296296296297),
+	vec2(0.34375, 0.9629629629629629),
+	vec2(0.84375, 0.012345679012345678),
+	vec2(0.21875, 0.345679012345679),
+	vec2(0.71875, 0.6790123456790124),
+	vec2(0.46875, 0.12345679012345678),
+	vec2(0.96875, 0.4567901234567901),
+	vec2(0.015625, 0.7901234567901234),
+	vec2(0.515625, 0.2345679012345679),
+	vec2(0.265625, 0.5679012345679012),
+	vec2(0.765625, 0.9012345679012346),
+	vec2(0.140625, 0.04938271604938271),
+	vec2(0.640625, 0.38271604938271603),
+	vec2(0.390625, 0.7160493827160493),
+	vec2(0.890625, 0.16049382716049382),
+	vec2(0.078125, 0.49382716049382713),
+	vec2(0.578125, 0.8271604938271605),
+	vec2(0.328125, 0.2716049382716049),
+	vec2(0.828125, 0.6049382716049383),
+	vec2(0.203125, 0.9382716049382716),
+	vec2(0.703125, 0.08641975308641975),
+	vec2(0.453125, 0.41975308641975306),
+	vec2(0.953125, 0.7530864197530864),
+	vec2(0.046875, 0.19753086419753085),
+	vec2(0.546875, 0.5308641975308642),
+	vec2(0.296875, 0.8641975308641975),
+	vec2(0.796875, 0.30864197530864196),
+	vec2(0.171875, 0.6419753086419753),
+	vec2(0.671875, 0.9753086419753086),
+	vec2(0.421875, 0.024691358024691357),
+	vec2(0.921875, 0.35802469135802467),
+	vec2(0.109375, 0.691358024691358),
+	vec2(0.609375, 0.13580246913580246),
+	vec2(0.359375, 0.4691358024691358),
+	vec2(0.859375, 0.8024691358024691),
+	vec2(0.234375, 0.24691358024691357),
+	vec2(0.734375, 0.5802469135802469),
+	vec2(0.484375, 0.9135802469135802),
+	vec2(0.984375, 0.06172839506172839),
+	vec2(0.0078125, 0.3950617283950617),
 };
 
 // FIXME: We're gonna need more stuff than this 
@@ -422,6 +490,7 @@ void Renderer::initialize()
 		opt.color_formats[1] = NORMAL_ROUGHNESS_FORMAT;
 		opt.color_formats[2] = BASECOLOR_METALNESS_FORMAT;
 		opt.color_formats[3] = VK_FORMAT_R32G32B32A32_SFLOAT;
+		opt.cull_mode = VK_CULL_MODE_NONE;
 		pipelines[RASTER_PIPELINE] = create_raster_graphics_pipeline("shaders/spirv/basic.vert.spv", "shaders/spirv/basic.frag.spv", true, opt);
 
 		opt.depth_write_enable = VK_FALSE;
@@ -447,9 +516,25 @@ void Renderer::initialize()
 	pipelines[TEMPORAL_ACCUMULATION] = context->create_compute_pipeline("shaders/spirv/temporal_accumulation.comp.spv");
 	pipelines[HISTORY_FIX_MIP_GEN] = context->create_compute_pipeline("shaders/spirv/history_fix_mip_gen.comp.spv");
 	pipelines[HISTORY_FIX] = context->create_compute_pipeline("shaders/spirv/history_fix.comp.spv");
-	pipelines[PRE_BLUR] = context->create_compute_pipeline("shaders/spirv/preblur.comp.spv");
-	pipelines[BLUR] = context->create_compute_pipeline("shaders/spirv/blur.comp.spv");
-	pipelines[POST_BLUR] = context->create_compute_pipeline("shaders/spirv/postblur.comp.spv");
+	pipelines[HISTORY_FIX_ALTERNATIVE] = context->create_compute_pipeline("shaders/spirv/history_fix_alternative.comp.spv");
+	pipelines[TONEMAP_AND_TAA] = context->create_compute_pipeline("shaders/spirv/tonemap_and_taa.comp.spv");
+
+	VkSpecializationMapEntry map_entry = {};
+	map_entry.constantID = 0;
+	map_entry.offset = 0;
+	map_entry.size = sizeof(int);
+	VkSpecializationInfo spec_info = {};
+	int spec_data = PRE_BLUR_CONSTANT_ID;
+	spec_info.dataSize = sizeof(int);
+	spec_info.mapEntryCount = 1;
+	spec_info.pData = &spec_data;
+	spec_info.pMapEntries = &map_entry;
+	pipelines[PRE_BLUR] = context->create_compute_pipeline("shaders/spirv/blur.comp.spv", VK_NULL_HANDLE, &spec_info);
+	spec_data = BLUR_CONSTANT_ID;
+	pipelines[BLUR] = context->create_compute_pipeline("shaders/spirv/blur.comp.spv", VK_NULL_HANDLE, &spec_info);
+	spec_data = POST_BLUR_CONSTANT_ID;
+	pipelines[POST_BLUR] = context->create_compute_pipeline("shaders/spirv/blur.comp.spv", VK_NULL_HANDLE, &spec_info);
+	
 	pipelines[TEMPORAL_STABILIZATION] = context->create_compute_pipeline("shaders/spirv/temporal_stabilization.comp.spv");
 	
 	create_samplers();
@@ -768,14 +853,16 @@ void Renderer::pre_frame()
 	{
 		frames_accumulated = 0;
 		scene.active_camera->dirty = false;
-
-		scene.current_frame_camera.view = scene.active_camera->get_view_matrix();
-		scene.current_frame_camera.proj = scene.active_camera->get_projection_matrix(aspect_ratio, 0.1f, 1000.f);
-		scene.current_frame_camera.viewproj = scene.current_frame_camera.proj * scene.current_frame_camera.view;
-		scene.current_frame_camera.inverse_proj = glm::inverse(scene.current_frame_camera.proj);
-		scene.current_frame_camera.inverse_view = glm::inverse(scene.current_frame_camera.view);
 	}
+
+
+	scene.current_frame_camera.view = scene.active_camera->get_view_matrix();
+	scene.current_frame_camera.proj = scene.active_camera->get_projection_matrix(aspect_ratio, 0.1f, 1000.f);
+	scene.current_frame_camera.viewproj = scene.current_frame_camera.proj * scene.current_frame_camera.view;
+	scene.current_frame_camera.inverse_proj = glm::inverse(scene.current_frame_camera.proj);
+	scene.current_frame_camera.inverse_view = glm::inverse(scene.current_frame_camera.view);
 	scene.current_frame_camera.frame_index = glm::uvec4((u32)frame_counter);
+
 	gpu_camera_data.update_staging_buffer(context->allocator, current_frame_index, &scene.current_frame_camera, sizeof(Camera_Data));
 	gpu_camera_data.update_staging_buffer(context->allocator, current_frame_index, &scene.previous_frame_camera, sizeof(Camera_Data), sizeof(Camera_Data));
 
@@ -814,6 +901,8 @@ void Renderer::pre_frame()
 	global_constants_data->lobe_percentage = g_settings.lobe_percentage;
 	global_constants_data->hit_distance_scale = g_settings.hit_distance_scale;
 	global_constants_data->stabilization_strength = g_settings.stabilization_strength;
+	global_constants_data->use_ycocg_color_space = (u32)g_settings.use_ycocg_color_space;
+	global_constants_data->taa = (u32)g_settings.taa;
 }
 
 void Renderer::begin_frame()
@@ -1013,7 +1102,7 @@ void Renderer::draw(ECS* ecs, float dt)
 		rasterize(cmd, ecs);
 	}*/
 
-	tonemap(cmd);
+	composite_and_tonemap(cmd);
 
 	ui_overlay.update_and_render(cmd, dt);
 	
@@ -1084,16 +1173,16 @@ void Renderer::trace_rays(VkCommandBuffer cmd)
 	);
 }
 
-void Renderer::tonemap(VkCommandBuffer cmd)
-{
-	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelines[COMPOSITION_PIPELINE].pipeline);
-	// Go for groupsize 8x8?
-	constexpr u32 group_size = 8;
-	glm::uvec3 size = glm::uvec3(window_width, window_height, 1);
-	glm::uvec3 group_count = (size + (group_size - 1)) & ~(group_size - 1);
-	group_count /= group_size;
-	
+void Renderer::composite_and_tonemap(VkCommandBuffer cmd)
+{	
 	{
+		vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelines[COMPOSITION_PIPELINE].pipeline);
+		// Go for groupsize 8x8?
+		constexpr u32 group_size = 8;
+		glm::uvec3 size = glm::uvec3(window_width, window_height, 1);
+		glm::uvec3 group_count = (size + (group_size - 1)) & ~(group_size - 1);
+		group_count /= group_size;
+
 		Descriptor_Info descriptor_info[] = {
 			Descriptor_Info(0, framebuffer.render_targets[PATH_TRACER_COLOR].images[0].image_view,  VK_IMAGE_LAYOUT_GENERAL),
 			Descriptor_Info(0, framebuffer.render_targets[RASTER_COLOR].images[0].image_view,  VK_IMAGE_LAYOUT_GENERAL),
@@ -1102,7 +1191,7 @@ void Renderer::tonemap(VkCommandBuffer cmd)
 			Descriptor_Info(samplers[BILINEAR_SAMPLER_CLAMP], framebuffer.render_targets[DEPTH].images[current_frame_gbuffer_index].image_view,  VK_IMAGE_LAYOUT_GENERAL),
 			Descriptor_Info(0, framebuffer.render_targets[INDIRECT_DIFFUSE].images[0].image_view ,VK_IMAGE_LAYOUT_GENERAL),
 			Descriptor_Info(0, framebuffer.render_targets[TEMPORAL_STABILIZATION_HISTORY].images[current_frame_gbuffer_index].image_view ,VK_IMAGE_LAYOUT_GENERAL),
-			Descriptor_Info(0, final_output.image_view ,VK_IMAGE_LAYOUT_GENERAL),
+			Descriptor_Info(0, framebuffer.render_targets[COMPOSITION_OUTPUT].images[current_frame_gbuffer_index].image_view, VK_IMAGE_LAYOUT_GENERAL),
 			Descriptor_Info(samplers[BILINEAR_SAMPLER_CLAMP], history_fix.radiance_image.image_view, VK_IMAGE_LAYOUT_GENERAL),
 			Descriptor_Info(samplers[BILINEAR_SAMPLER_CLAMP], history_fix.view_z_image.image_view, VK_IMAGE_LAYOUT_GENERAL),
 			Descriptor_Info(global_constants_buffer.buffer, 0, VK_WHOLE_SIZE),
@@ -1112,28 +1201,74 @@ void Renderer::tonemap(VkCommandBuffer cmd)
 			//Descriptor_Info(0, prefiltered_envmap.image_view, VK_IMAGE_LAYOUT_GENERAL)
 		};
 		vkCmdPushDescriptorSetWithTemplateKHR(cmd, pipelines[COMPOSITION_PIPELINE].update_template, pipelines[COMPOSITION_PIPELINE].layout, 0, descriptor_info);
+
+		struct
+		{
+			glm::mat4 inv_proj;
+			glm::ivec2 size;
+			float split_pos;
+			u32 history_lod;
+		} pc;
+		pc.size = glm::ivec2(size.x, size.y);
+		pc.split_pos = g_settings.rendering_mode == Rendering_Mode::REFERENCE_PATH_TRACER ? 1.0f : 0.0f;
+		pc.inv_proj = glm::inverse(scene.current_frame_camera.proj);
+		pc.history_lod = magic_uint % 5;
+		vkCmdPushConstants(cmd, pipelines[COMPOSITION_PIPELINE].layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+		vkCmdDispatch(cmd, group_count.x, group_count.y, group_count.z);
 	}
-	
-	struct
+
+
+	VkMemoryBarrier memory_barrier{ VK_STRUCTURE_TYPE_MEMORY_BARRIER };
+	memory_barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+	memory_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+	vkCmdPipelineBarrier(cmd,
+		VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+		VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+		0,
+		1, &memory_barrier,
+		0, nullptr,
+		0, nullptr
+	);
+
 	{
-		glm::mat4 inv_proj;
-		glm::ivec2 size;
-		float split_pos;
-		u32 history_lod;
-	} pc;
-	pc.size = glm::ivec2(size.x, size.y);
-	pc.split_pos = g_settings.rendering_mode == Rendering_Mode::REFERENCE_PATH_TRACER ? 1.0f : 0.0f;
-	pc.inv_proj = glm::inverse(scene.current_frame_camera.proj);
-	pc.history_lod = magic_uint % 5;
-	vkCmdPushConstants(cmd, pipelines[COMPOSITION_PIPELINE].layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-	vkCmdDispatch(cmd, group_count.x, group_count.y, group_count.z);
+		vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelines[TONEMAP_AND_TAA].pipeline);
+		// Go for groupsize 8x8?
+		constexpr u32 group_size = 8;
+		glm::uvec3 size = glm::uvec3(window_width, window_height, 1);
+		glm::uvec3 group_count = (size + (group_size - 1)) & ~(group_size - 1);
+		group_count /= group_size;
+
+		Descriptor_Info descriptor_info[] = {
+			Descriptor_Info(0, framebuffer.render_targets[COMPOSITION_OUTPUT].images[current_frame_gbuffer_index].image_view,  VK_IMAGE_LAYOUT_GENERAL),
+			Descriptor_Info(0, final_output.image_view,  VK_IMAGE_LAYOUT_GENERAL),
+			Descriptor_Info(samplers[BILINEAR_SAMPLER_CLAMP], framebuffer.render_targets[TAA_OUTPUT].images[previous_frame_gbuffer_index].image_view,  VK_IMAGE_LAYOUT_GENERAL),
+			Descriptor_Info(0, framebuffer.render_targets[TAA_OUTPUT].images[current_frame_gbuffer_index].image_view,  VK_IMAGE_LAYOUT_GENERAL),
+			Descriptor_Info(global_constants_buffer.buffer, 0, VK_WHOLE_SIZE),
+			Descriptor_Info(gpu_camera_data.gpu_buffer.buffer, 0, VK_WHOLE_SIZE),
+			Descriptor_Info(0, framebuffer.render_targets[WORLD_POSITION].images[current_frame_gbuffer_index].image_view, VK_IMAGE_LAYOUT_GENERAL),
+		};
+
+		vkCmdPushDescriptorSetWithTemplateKHR(cmd, pipelines[TONEMAP_AND_TAA].update_template, pipelines[TONEMAP_AND_TAA].layout, 0, descriptor_info);
+
+		struct
+		{
+			glm::ivec2 size;
+		} pc;
+		pc.size = glm::ivec2(size.x, size.y);
+
+		vkCmdPushConstants(cmd, pipelines[TONEMAP_AND_TAA].layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+		vkCmdDispatch(cmd, group_count.x, group_count.y, group_count.z);
+	}
+
+	memory_barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
 	vkCmdPipelineBarrier(cmd,
 		VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
 		VK_PIPELINE_STAGE_TRANSFER_BIT,
 		0,
+		1, &memory_barrier,
 		0, nullptr,
-		0, nullptr,
-		0, nullptr);
+		0, nullptr
+	);
 }
 
 void Renderer::rasterize(VkCommandBuffer cmd, ECS* ecs)
@@ -1247,11 +1382,15 @@ void Renderer::rasterize(VkCommandBuffer cmd, ECS* ecs)
 			glm::uvec3 probe_counts;
 			float probe_spacing;
 			glm::vec3 probe_min;
+			glm::vec2 jitter;
+			glm::vec2 inverse_screen_size;
 		} pc;
 
 		pc.probe_counts = probe_system.probe_counts;
 		pc.probe_spacing = probe_system.probe_spacing;
 		pc.probe_min = probe_system.bbmin;
+		pc.jitter = g_settings.jitter ? halton_sequence[frame_counter % TAA_SAMPLE_COUNT] : glm::vec2(0.5f);
+		pc.inverse_screen_size = glm::vec2(1.0f / (float)window_width, 1.0f / (float)window_height);
 		vkCmdPushConstants(cmd, pipelines[RASTER_PIPELINE].layout, VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
 		{
 			Descriptor_Info descriptor_info[] =
@@ -1370,12 +1509,22 @@ end_rendering:
 
 			Descriptor_Info descriptor_info[] =
 			{
+				//Descriptor_Info(0, framebuffer.render_targets[INDIRECT_DIFFUSE].images[0].image_view, VK_IMAGE_LAYOUT_GENERAL),
+				//Descriptor_Info(0, framebuffer.render_targets[NORMAL_ROUGHNESS].images[current_frame_gbuffer_index].image_view, VK_IMAGE_LAYOUT_GENERAL),
+				//Descriptor_Info(0, framebuffer.render_targets[WORLD_POSITION].images[current_frame_gbuffer_index].image_view, VK_IMAGE_LAYOUT_GENERAL),
+				//Descriptor_Info(samplers[BILINEAR_SAMPLER_CLAMP], framebuffer.render_targets[DEPTH].images[current_frame_gbuffer_index].image_view, VK_IMAGE_LAYOUT_GENERAL),
+				//Descriptor_Info(0, framebuffer.render_targets[DENOISER_PING_PONG].images[PING].image_view, VK_IMAGE_LAYOUT_GENERAL),
+				//Descriptor_Info(global_constants_buffer.buffer, 0, VK_WHOLE_SIZE),
+
 				Descriptor_Info(0, framebuffer.render_targets[INDIRECT_DIFFUSE].images[0].image_view, VK_IMAGE_LAYOUT_GENERAL),
 				Descriptor_Info(0, framebuffer.render_targets[NORMAL_ROUGHNESS].images[current_frame_gbuffer_index].image_view, VK_IMAGE_LAYOUT_GENERAL),
 				Descriptor_Info(0, framebuffer.render_targets[WORLD_POSITION].images[current_frame_gbuffer_index].image_view, VK_IMAGE_LAYOUT_GENERAL),
 				Descriptor_Info(samplers[BILINEAR_SAMPLER_CLAMP], framebuffer.render_targets[DEPTH].images[current_frame_gbuffer_index].image_view, VK_IMAGE_LAYOUT_GENERAL),
 				Descriptor_Info(0, framebuffer.render_targets[DENOISER_PING_PONG].images[PING].image_view, VK_IMAGE_LAYOUT_GENERAL),
 				Descriptor_Info(global_constants_buffer.buffer, 0, VK_WHOLE_SIZE),
+				Descriptor_Info(0, framebuffer.render_targets[DENOISER_HISTORY_LENGTH].images[current_frame_gbuffer_index].image_view, VK_IMAGE_LAYOUT_GENERAL),
+				Descriptor_Info(gpu_camera_data.gpu_buffer.buffer, 0, VK_WHOLE_SIZE),
+				Descriptor_Info(0, framebuffer.render_targets[DEBUG].images[current_frame_gbuffer_index].image_view, VK_IMAGE_LAYOUT_GENERAL),
 			};
 
 			struct
@@ -1383,6 +1532,8 @@ end_rendering:
 				glm::mat2 rot;
 				glm::ivec2 size;
 				float depth_scale;
+				float blur_radius;
+				float blur_radius_scale;
 			} pc;
 
 			float angle = 0.5f * (float)M_PI * van_der_corput_base_2[(frame_counter + 17) % 64];
@@ -1393,6 +1544,8 @@ end_rendering:
 			pc.size = glm::ivec2(window_width, window_height);
 			pc.rot = glm::mat2(cosf(angle), sinf(angle), -sinf(angle), cosf(angle));
 			pc.depth_scale = scene.current_frame_camera.proj[3][2];
+			pc.blur_radius = g_settings.prepass_blur_radius;
+			pc.blur_radius_scale = 1.0;
 			vkCmdPushConstants(cmd, pipelines[PRE_BLUR].layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
 
 			vkCmdPushDescriptorSetWithTemplateKHR(cmd, pipelines[PRE_BLUR].update_template, pipelines[PRE_BLUR].layout, 0, descriptor_info);
@@ -1465,6 +1618,7 @@ end_rendering:
 			0, nullptr
 		);
 		
+
 		{
 			// History fix mip generation
 
@@ -1516,6 +1670,43 @@ end_rendering:
 			0, nullptr
 		);
 
+		if (g_settings.use_alternative_history_fix)
+		{
+			// Alternative history fix (sparse, wide spatial filter)
+
+			constexpr glm::uvec3 group_size = glm::uvec3(8, 8, 1);
+			glm::uvec3 size = glm::uvec3(window_width, window_height, 1);
+			glm::uvec3 group_count = (size + (group_size - 1u)) & ~(group_size - 1u);
+			group_count /= group_size;
+
+			vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelines[HISTORY_FIX_ALTERNATIVE].pipeline);
+			Descriptor_Info descriptor_info[] =
+			{
+				Descriptor_Info(0, history_fix.radiance_mip_views[0], VK_IMAGE_LAYOUT_GENERAL),
+				Descriptor_Info(0, framebuffer.render_targets[DENOISER_PING_PONG].images[PING].image_view, VK_IMAGE_LAYOUT_GENERAL),
+				Descriptor_Info(0, framebuffer.render_targets[DENOISER_HISTORY_LENGTH].images[current_frame_gbuffer_index].image_view, VK_IMAGE_LAYOUT_GENERAL),
+				Descriptor_Info(0, framebuffer.render_targets[NORMAL_ROUGHNESS].images[current_frame_gbuffer_index].image_view, VK_IMAGE_LAYOUT_GENERAL),
+				Descriptor_Info(samplers[BILINEAR_SAMPLER_CLAMP], framebuffer.render_targets[DEPTH].images[current_frame_gbuffer_index].image_view, VK_IMAGE_LAYOUT_GENERAL),
+				Descriptor_Info(0, framebuffer.render_targets[WORLD_POSITION].images[current_frame_gbuffer_index].image_view, VK_IMAGE_LAYOUT_GENERAL),
+				Descriptor_Info(gpu_camera_data.gpu_buffer.buffer, 0, VK_WHOLE_SIZE),
+				Descriptor_Info(global_constants_buffer.buffer, 0, VK_WHOLE_SIZE),
+			};
+
+			struct
+			{
+				glm::ivec2 size;
+				float stride;
+			} pc;
+
+			pc.size = glm::ivec2(size.x, size.y);
+			pc.stride = g_settings.history_fix_stride;
+
+			vkCmdPushConstants(cmd, pipelines[HISTORY_FIX_ALTERNATIVE].layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+
+			vkCmdPushDescriptorSetWithTemplateKHR(cmd, pipelines[HISTORY_FIX_ALTERNATIVE].update_template, pipelines[HISTORY_FIX_ALTERNATIVE].layout, 0, descriptor_info);
+			vkCmdDispatch(cmd, group_count.x, group_count.y, 1);
+		}
+		else
 		{
 			// History fix
 
@@ -1584,6 +1775,8 @@ end_rendering:
 				glm::mat2 rot;
 				glm::ivec2 size;
 				float depth_scale;
+				float blur_radius;
+				float blur_radius_scale;
 			} pc;
 
 			float angle = 0.5f * (float)M_PI * van_der_corput_base_2[(frame_counter + 17) % 64];
@@ -1591,6 +1784,8 @@ end_rendering:
 			pc.size = glm::ivec2(window_width, window_height);
 			pc.rot = glm::mat2(cosf(angle), sinf(angle), -sinf(angle), cosf(angle));
 			pc.depth_scale = scene.current_frame_camera.proj[3][2];
+			pc.blur_radius = g_settings.blur_radius;
+			pc.blur_radius_scale = 1.0f;
 			vkCmdPushConstants(cmd, pipelines[BLUR].layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
 
 			vkCmdPushDescriptorSetWithTemplateKHR(cmd, pipelines[BLUR].update_template, pipelines[BLUR].layout, 0, descriptor_info);
@@ -1634,6 +1829,8 @@ end_rendering:
 				glm::mat2 rot;
 				glm::ivec2 size;
 				float depth_scale;
+				float blur_radius;
+				float blur_radius_scale;
 			} pc;
 
 			float angle = 0.5f * (float)M_PI * van_der_corput_base_2[(frame_counter + 17) % 64];
@@ -1641,6 +1838,8 @@ end_rendering:
 			pc.size = glm::ivec2(window_width, window_height);
 			pc.rot = glm::mat2(cosf(angle), sinf(angle), -sinf(angle), cosf(angle));
 			pc.depth_scale = scene.current_frame_camera.proj[3][2];
+			pc.blur_radius = g_settings.blur_radius;
+			pc.blur_radius_scale = g_settings.post_blur_radius_scale;
 			vkCmdPushConstants(cmd, pipelines[POST_BLUR].layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
 
 			vkCmdPushDescriptorSetWithTemplateKHR(cmd, pipelines[POST_BLUR].update_template, pipelines[POST_BLUR].layout, 0, descriptor_info);
@@ -1896,6 +2095,30 @@ void Renderer::create_render_targets(VkCommandBuffer cmd)
 		);
 	}
 
+	Render_Target composition_output;
+	composition_output.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+	for (u32 i = 0; i < GBUFFER_LAYERS; ++i)
+	{
+		composition_output.images[i] = context->allocate_image(
+			{ (u32)w, (u32)h, 1 },
+			composition_output.format,
+			VK_IMAGE_USAGE_STORAGE_BIT,
+			VK_IMAGE_ASPECT_COLOR_BIT
+		);
+	}
+
+	Render_Target taa_output;
+	taa_output.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+	for (u32 i = 0; i < GBUFFER_LAYERS; ++i)
+	{
+		taa_output.images[i] = context->allocate_image(
+			{ (u32)w, (u32)h, 1 },
+			taa_output.format,
+			VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+			VK_IMAGE_ASPECT_COLOR_BIT
+		);
+	}
+
 	history_fix.radiance_image = context->allocate_image(
 		{ (u32)w, (u32)h, 1 },
 		VK_FORMAT_R32G32B32A32_SFLOAT,
@@ -2026,6 +2249,22 @@ void Renderer::create_render_targets(VkCommandBuffer cmd)
 			VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
 	}
 
+	for (size_t i = 0; i < GBUFFER_LAYERS; ++i)
+	{
+		vk_transition_layout(cmd, composition_output.images[i].image,
+			VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+			0, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+			VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+	}
+
+	for (size_t i = 0; i < GBUFFER_LAYERS; ++i)
+	{
+		vk_transition_layout(cmd, taa_output.images[i].image,
+			VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+			0, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+			VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+	}
+
 	vk_transition_layout(cmd, indirect_diffuse_attachment.images[0].image,
 		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
 		0, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
@@ -2059,6 +2298,8 @@ void Renderer::create_render_targets(VkCommandBuffer cmd)
 	framebuffer.render_targets[DEBUG] = debug;
 	framebuffer.render_targets[TEMPORAL_STABILIZATION_HISTORY] = temporal_stabilization;
 	framebuffer.render_targets[INTERNAL_OCCLUSION_DATA] = occlusion_data;
+	framebuffer.render_targets[COMPOSITION_OUTPUT] = composition_output;
+	framebuffer.render_targets[TAA_OUTPUT] = taa_output;
 }
 
 static bool check_extensions(const std::vector<const char*>& device_exts, const std::vector<VkExtensionProperties>& props)

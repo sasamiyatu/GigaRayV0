@@ -37,6 +37,40 @@ void main()
 
     vec4 radiance = imageLoad(denoised_input, p.xy);
 
+    vec3 m1 = radiance.rgb;
+    vec3 m2 = m1 * m1;
+
+    float w_mu = 1.0;
+
+    const int RADIUS = 3;
+    for (int yy = -RADIUS; yy <= RADIUS; ++yy)
+    {
+        for (int xx = -RADIUS; xx <= RADIUS; ++xx)
+        {
+            if (ivec2(xx, yy) == ivec2(0.0)) continue;
+            ivec2 q = p.xy + ivec2(xx, yy);
+            bool is_in_screen = all(greaterThanEqual(q.xy, ivec2(0))) && all(lessThan(q.xy, control.size));
+
+            float w = is_in_screen ? 1.0 : 0.0;
+
+            vec4 s = imageLoad(denoised_input, q.xy);
+
+            m1 += s.rgb * w;
+            m2 += s.rgb * s.rgb * w;
+
+            w_mu += w;
+        }
+    }
+
+    float accumulated_frames = imageLoad(history_length, p.xy).r * 255.0;
+
+    m1 /= w_mu;
+    m2 /= w_mu;
+    vec3 sigma = sqrt(m2 - m1 * m1);
+    float gamma = 2.0 + 6.0 * (1.0 / accumulated_frames);
+    vec3 minc = m1 - gamma * sigma;
+    vec3 maxc = m1 + gamma * sigma;
+
     uint occlusion_data = imageLoad(occlusion_data, p.xy).r;
 
     bool allow_bicubic = bool(occlusion_data & 1);
@@ -46,8 +80,6 @@ void main()
     vec4 X_clip_prev = camera_data.previous.viewproj * vec4(X, 1.0);
     X_clip_prev /= X_clip_prev.w;
     X_clip_prev.y = -X_clip_prev.y;
-
-    float accumulated_frames = imageLoad(history_length, p.xy).r * 255.0;
 
     vec2 uv = X_clip_prev.xy * 0.5 + 0.5;
 
@@ -71,7 +103,7 @@ void main()
     {
         vec4 rt_params = vec4(1.0 / vec2(control.size), vec2(control.size));
         prev_radiance = bicubic_filter(stabilized_history, uv, rt_params);
-        prev_radiance = max(vec4(0.0), prev_radiance);
+        prev_radiance = clamp_negative_to_zero(prev_radiance, bool(global_constants.data.use_ycocg_color_space));
     }
     else
     {        
@@ -83,8 +115,11 @@ void main()
         prev_radiance = s00 * occlusion_weights.x + s10 * occlusion_weights.y + s01 * occlusion_weights.z + s11 * occlusion_weights.w;
         prev_radiance = w_sum < 0.001 ? vec4(0.0) : prev_radiance / w_sum;
     }
+    
+    prev_radiance.rgb = clamp(prev_radiance.rgb, minc, maxc);
 
-    float history_weight = (accumulated_frames / (1.0 + accumulated_frames)) * global_constants.data.stabilization_strength * footprint_quality;
+    float prev_accum_frames = accumulated_frames - 1; // Accumulated frames is always >= 1
+    float history_weight = (prev_accum_frames / (1.0 + prev_accum_frames)) * global_constants.data.stabilization_strength * footprint_quality;
     vec4 stabilized = mix(radiance, prev_radiance, history_weight);
     imageStore(stabilized_output, p.xy, stabilized);
 }

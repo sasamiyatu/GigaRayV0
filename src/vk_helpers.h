@@ -653,4 +653,5 @@ namespace vkinit
 		desc.offset = offset;
 		return desc;
 	}
+
 }

@@ -6,6 +6,7 @@
 
 #include "test.glsl"
 #include "../shared/shared.h"
+#include "misc.glsl"
 
 layout(set = 0, binding = 2, scalar) uniform camera_buffer{
     Camera_Data current;
@@ -73,7 +74,7 @@ Vertex get_interpolated_vertex(int custom_instance_id, int primitive_id, vec2 ba
 
     Material_Properties matprop;
     vec3 albedo = mat.base_color_tex != -1 ? textureLod(textures[mat.base_color_tex], v.texcoord, 0).rgb : mat.base_color_factor.rgb;
-    albedo = pow(albedo, vec3(2.2));
+    albedo = srgb_to_linear(albedo);
 
     vec2 metallic_roughness = mat.metallic_roughness_tex != -1 ? textureLod(textures[mat.metallic_roughness_tex], v.texcoord, 0).bg : vec2(mat.metallic_factor, mat.roughness_factor);
 

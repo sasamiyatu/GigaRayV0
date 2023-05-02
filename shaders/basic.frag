@@ -10,6 +10,7 @@
 #include "brdf.h"
 #include "sh.glsl"
 #include "random.glsl"
+#include "misc.glsl"
 
 layout(set = 0, binding = 0) uniform sampler2D brdf_lut;
 layout(set = 0, binding = 1) uniform sampler2D prefiltered_envmap;
@@ -44,11 +45,12 @@ vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness)
     return F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
-layout( push_constant ) uniform constants
+layout( push_constant, scalar ) uniform constants
 {
     uvec3 probe_counts;
     float probe_spacing;
     vec3 probe_min;
+    vec2 jitter;
 } control;
 
 uint get_probe_linear_index(ivec3 p)
@@ -204,7 +206,7 @@ void main()
     vec4 base_color = mat.base_color_tex != -1 ? texture(textures[mat.base_color_tex], texcoord) : mat.base_color_factor;
     if (base_color.a < 0.5) discard;
     vec3 metallic_roughness = texture(textures[mat.metallic_roughness_tex], texcoord).rgb;
-    vec3 albedo = pow(base_color.rgb, vec3(2.2));
+    vec3 albedo = srgb_to_linear(base_color.rgb);
     float metallic = metallic_roughness.b;
     float alpha = metallic_roughness.g * metallic_roughness.g;
     float alpha2 = alpha * alpha;

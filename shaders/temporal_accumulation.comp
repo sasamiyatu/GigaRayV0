@@ -140,7 +140,7 @@ void main()
     {
         vec4 rt_params = vec4(1.0 / vec2(control.size), vec2(control.size));
         prev_color = bicubic_filter(history, X_clip_uv, rt_params);
-        prev_color = max(vec4(0.0), prev_color);
+        prev_color = clamp_negative_to_zero(prev_color, bool(global_constants.data.use_ycocg_color_space));
     }
     else
     {        

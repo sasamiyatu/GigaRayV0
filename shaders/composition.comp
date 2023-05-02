@@ -5,17 +5,7 @@
 #include "brdf.h"
 #include "math.glsl"
 #include "../shared/shared.h"
-
-vec3 viridis_quintic( float x )
-{
-	x = saturate( x );
-	vec4 x1 = vec4( 1.0, x, x * x, x * x * x ); // 1 x x2 x3
-	vec4 x2 = x1 * x1.w * x; // x4 x5 x6 x7
-	return vec3(
-		dot( x1.xyzw, vec4( +0.280268003, -0.143510503, +2.225793877, -14.815088879 ) ) + dot( x2.xy, vec2( +25.212752309, -11.772589584 ) ),
-		dot( x1.xyzw, vec4( -0.002117546, +1.617109353, -1.909305070, +2.701152864 ) ) + dot( x2.xy, vec2( -1.685288385, +0.178738871 ) ),
-		dot( x1.xyzw, vec4( +0.300805501, +2.614650302, -12.019139090, +28.933559110 ) ) + dot( x2.xy, vec2( -33.491294770, +13.762053843 ) ) );
-}
+#include "misc.glsl"
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -53,7 +43,7 @@ void main()
     int split_pixel = int(float(control.size.x) * control.image_split_pos);
     const float exposure = 1.0;
     vec4 color = vec4(0.0);
-    if (p.x <= split_pixel)
+    if (p.x < split_pixel)
         color = imageLoad(path_tracer_input_image, p.xy);
     else
         color = imageLoad(raster_input_image, p.xy);
@@ -65,8 +55,13 @@ void main()
     vec3 normal = decode_unit_vector(normal_roughness.rg, false, true);
     float depth = texelFetch(depth, p.xy, 0).r;
     vec4 indirect_diffuse = imageLoad(indirect_diffuse, p.xy);
-
     vec4 denoised = imageLoad(denoiser_output, p.xy);
+
+    if (global_constants.data.use_ycocg_color_space == 1)
+    {
+        denoised.rgb = YCoCg_to_linear(denoised.rgb);
+        indirect_diffuse.rgb = YCoCg_to_linear(indirect_diffuse.rgb);
+    }
 
     vec3 albedo = basecolor.rgb * (1.0 - basecolor.a);
 
@@ -76,16 +71,12 @@ void main()
     if (control.history_lod == 0)
         history_fix = denoised;
 
-    vec3 F0 = mix(vec3(0.04), basecolor.rgb, basecolor.a);
-    albedo = albedo * (1.0 - F0) + F0;
+    //vec3 F0 = mix(vec3(0.04), basecolor.rgb, basecolor.a);
+    //albedo = albedo * (1.0 - F0) + F0;
 
-    if (p.x >= split_pixel)
+    if (split_pixel == 0)
         color.rgb += denoised.rgb * albedo;
 
-    // Reinhardt tonemapping
-    color.rgb = color.rgb / (color.rgb + 1.0);
-    color.rgb *= exposure;
-    vec3 gamma_corrected = pow(color.rgb, vec3(0.4545));
     //vec3 gamma_corrected = color.rgb;
 
     //imageStore(output_image, p.xy, vec4(normal * 0.5 + 0.5, 1.0));
@@ -106,7 +97,7 @@ void main()
     switch (global_constants.data.screen_output)
     {
         case 0: // final composition
-            final_output = gamma_corrected.rgb;
+            final_output = color.rgb;
             break;
         case 1: // noisy indirect diffuse
             final_output = indirect_diffuse.rgb;
@@ -125,30 +116,16 @@ void main()
             break;
         case 6:
             final_output = normal * 0.5 + 0.5;
+            break;
+        case 7:
+            final_output = albedo;
+            break;
         default:
             break;
     }
 
     if (p.x < split_pixel)
-        imageStore(output_image, p.xy, vec4(gamma_corrected.rgb, 1.0));
+        imageStore(output_image, p.xy, vec4(color.rgb, depth));
     else
-    {
-        //imageStore(output_image, p.xy, vec4(history_fix.rgb, 1.0));
-        float norm_history = (denoised.a - 1.0) / 4.0;
-        norm_history = clamp(norm_history, 0.0, 1.0);
-#if 0
-        if (norm_history < 1.0)
-            imageStore(output_image, p.xy, vec4(vec3(viridis_quintic(1.0 - norm_history)), 1.0));
-        else
-#endif
-        //imageStore(output_image, p.xy, vec4(viridis_quintic(1.0 - denoised.a / 32.0), 1.0));
-        imageStore(output_image, p.xy, vec4(final_output.rgb, 1.0));
-        //imageStore(output_image, p.xy, vec4(vec3(history_fix_z / 1000.0), 1.0));
-        //imageStore(output_image, p.xy, vec4(gamma_corrected.rgb, 1.0));
-        //imageStore(output_image, p.xy, vec4((vec3(basecolor.rgb), 1.0)));
-    }
-
-    //vec4 v = imageLoad(test_img, p.xy + ivec2(0, 500));
-    //imageStore(output_image, p.xy, v);
-    //imageStore(output_image, p.xy, vec4(1.0, 0.0, 1.0, 1.0));
+        imageStore(output_image, p.xy, vec4(final_output.rgb, depth));
 }

@@ -8,7 +8,7 @@
 #include "imgui/imgui_impl_sdl2.h"
 #include "imgui/imgui_impl_vulkan.h"
 
-#define VSYNC 0
+#define VSYNC 1
 #define VALIDATION_VERBOSE
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL debug_callback(
@@ -776,7 +776,7 @@ VkDescriptorSetLayout Vk_Context::create_descriptor_set_layout(u32 num_shaders, 
 	return layout;
 }
 
-Vk_Pipeline Vk_Context::create_compute_pipeline(const char* shaderpath, VkDescriptorSetLayout bindless_layout)
+Vk_Pipeline Vk_Context::create_compute_pipeline(const char* shaderpath, VkDescriptorSetLayout bindless_layout, VkSpecializationInfo* specialization_info)
 {
 	Shader shader;
 	bool success = load_shader_from_file(&shader, device, shaderpath);
@@ -788,6 +788,7 @@ Vk_Pipeline Vk_Context::create_compute_pipeline(const char* shaderpath, VkDescri
 	shader_stage_cinfo.module = shader.shader;
 	shader_stage_cinfo.pName = "main";
 	shader_stage_cinfo.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+	shader_stage_cinfo.pSpecializationInfo = specialization_info;
 
 	VkDescriptorSetLayout set_layout = create_descriptor_set_layout(1, &shader);
 

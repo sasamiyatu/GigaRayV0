@@ -64,6 +64,8 @@ enum Render_Targets
 	DEBUG,				// Not part of any algorithms, used to write arbitrary debug data for visualization
 	TEMPORAL_STABILIZATION_HISTORY,
 	INTERNAL_OCCLUSION_DATA,
+	COMPOSITION_OUTPUT,
+	TAA_OUTPUT,
 	MAX_RENDER_TARGETS
 };
 
@@ -95,10 +97,12 @@ enum Pipelines
 	TEMPORAL_ACCUMULATION,
 	HISTORY_FIX_MIP_GEN,
 	HISTORY_FIX,
+	HISTORY_FIX_ALTERNATIVE,
 	PRE_BLUR,
 	BLUR,
 	POST_BLUR,
 	TEMPORAL_STABILIZATION,
+	TONEMAP_AND_TAA,
 	PIPELINE_COUNT,
 };
 
@@ -212,7 +216,7 @@ struct Renderer
 	void end_frame();
 	void draw(ECS* ecs, float dt);
 	void trace_rays(VkCommandBuffer cmd);
-	void tonemap(VkCommandBuffer cmd);
+	void composite_and_tonemap(VkCommandBuffer cmd);
 	void rasterize(VkCommandBuffer cmd, ECS* ecs);
 	void cleanup();
 };

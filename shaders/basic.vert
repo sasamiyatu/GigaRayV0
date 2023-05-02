@@ -14,6 +14,15 @@ layout (location = 5) flat out float roughness;
 layout (location = 6) out vec3 view_z;
 layout (location = 7) flat out Material mat;
 
+layout( push_constant, scalar ) uniform constants
+{
+    uvec3 probe_counts;
+    float probe_spacing;
+    vec3 probe_min;
+    vec2 jitter;
+    vec2 screen_size;
+} control;
+
 void main()
 {
     int geom_id = int((gl_InstanceIndex) & 0x3FFF);
@@ -22,7 +31,11 @@ void main()
 
     Material mat = material_array.materials[material_id];
     base_color = mat.base_color_factor.rgb;
-    mat4 xform =  camera_data.current.viewproj;
+    mat4 proj = camera_data.current.proj;
+    //proj[2][0] += (control.jitter.x - 0.5) * control.screen_size.x;
+    //proj[2][1] += (control.jitter.y - 0.5) * control.screen_size.y;
+
+    mat4 xform =  proj * camera_data.current.view;
     vec3 pos = vertex_buffer_array[geom_id].verts[gl_VertexIndex].pos;
     //pos *= 0.01;
     normal = vertex_buffer_array[geom_id].verts[gl_VertexIndex].normal;

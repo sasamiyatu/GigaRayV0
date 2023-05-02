@@ -27,11 +27,14 @@ layout(binding = 7, set = 0, scalar) uniform camera_buffer{
 } camera_data;
 layout(binding = 8, set = 0, rgba32f) uniform image2D debug_output;
 
+layout (constant_id = 0) const int BLUR_PASS = 1;
+
 layout( push_constant ) uniform constants
 {
     mat2 rot;
     ivec2 size;
     float depth_scale;
+    float blur_radius;
     float blur_radius_scale;
 } control;
 
@@ -64,13 +67,14 @@ void main()
         return;
 
     vec4 center = imageLoad(noisy_input, p.xy);
-    float accumulated_frames = imageLoad(history_length, p.xy).r * 255.0;
 
-    if (global_constants.data.blur_radius == 0.0f)
+    if (control.blur_radius == 0.0 || control.blur_radius_scale == 0.0)
     {
         imageStore(blurred_output, p.xy, center);
         return;
     }
+
+    float accumulated_frames = imageLoad(history_length, p.xy).r * 255.0;
     
     vec3 p0 = imageLoad(world_position, p.xy).xyz;
     vec4 n0r0 = imageLoad(normal_roughness, p.xy);
@@ -83,43 +87,51 @@ void main()
         return;
     }
 
-    float blur_radius_scale = 1.0 / accumulated_frames;
+    float inv_accum_speed = 1.0 / accumulated_frames;
+    if (BLUR_PASS == PRE_BLUR_CONSTANT_ID)
+        inv_accum_speed = 1.0;
 
     vec3 X = (p0 - global_constants.data.camera_origin);
 
     float Z = control.depth_scale / d0;
-    float blur_radius = global_constants.data.blur_radius;
     float hit_dist_normalization = global_constants.data.hit_dist_params.x + global_constants.data.hit_dist_params.y * abs(Z);
     float frustum_size = global_constants.data.min_rect_dim_mul_unproject * abs(Z);
     float hit_t = center.a * hit_dist_normalization;
     float hit_dist_factor = clamp(hit_t / frustum_size, 0.0, 1.0);
-    //hit_dist_factor = mix(hit_dist_factor, 1.0, smoothstep(4.0, 2.0, accumulated_frames));
     float hit_t0 = center.a;
-
-    if (global_constants.data.hit_distance_scaling == 1)
-        blur_radius *= hit_dist_factor;
-
-    if (global_constants.data.frame_num_scaling == 1)
+    float blur_radius = control.blur_radius;
+    if (BLUR_PASS == PRE_BLUR_CONSTANT_ID)
     {
-        float frame_count_scale = 1.0 - smoothstep(2.0, 4.0, accumulated_frames);
-        blur_radius *= (1.0 + 2.0 * frame_count_scale) / 3.0;
+        if (global_constants.data.hit_distance_scaling == 1)
+            blur_radius *= hit_dist_factor;
     }
+    else
+    {
+        hit_dist_factor = mix(hit_dist_factor, 1.0, smoothstep(20.0, 4.0, accumulated_frames));
+        if (global_constants.data.hit_distance_scaling == 1)
+            blur_radius *= hit_dist_factor;
 
-    blur_radius += 1.0; // Avoid underblurring
+        if (global_constants.data.frame_num_scaling == 1)
+        {
+            float frame_count_scale = smoothstep(20.0, 4.0, accumulated_frames);
+            blur_radius *= (1.0 + 2.0 * frame_count_scale) / 3.0;
+        }
+
+        blur_radius += 1.0; // Avoid underblurring
+        blur_radius *= control.blur_radius_scale;
+    }
 
     mat3 tbn = create_tangent_space(N);
     float world_radius = blur_radius * global_constants.data.unproject * Z;
 
-    // if (p.xy == ivec2(640, 360))
-    //     debugPrintfEXT("blur radius scale: %f, radius: %f, world_radius: %f", blur_radius_scale, blur_radius, world_radius);
-
-    float a = 0.25 / ( global_constants.data.plane_distance_sensitivity * frustum_size );
-    float b = -dot( N, X ) * a;
-
-    float spec_half_angle = M_PI * 0.5;
-    float a0 = global_constants.data.lobe_percentage * spec_half_angle;
+    float normal_weight_params = get_normal_weight_params(inv_accum_speed, global_constants.data.lobe_percentage);
 
     float plane_dist_norm = global_constants.data.plane_dist_norm_scale / (1.0 + Z * global_constants.data.unproject);
+    vec3 Xv = (camera_data.current.view * vec4(p0, 1.0)).xyz;
+    vec3 Nv = mat3(camera_data.current.view) * N;
+    vec2 geometry_weight_params = get_geometry_weight_params(global_constants.data.plane_distance_sensitivity, frustum_size, Xv, Nv, inv_accum_speed);
+
+    vec2 hit_distance_weight_params = get_hit_distance_weight_params(hit_t0, inv_accum_speed);
 
     float sum = 1.0;
     vec4 diff = center;
@@ -144,8 +156,10 @@ void main()
         vec3 offset = poisson_samples[i];
 
         vec2 sample_pos;
-        if (global_constants.data.screen_space_sampling == 1)
+        if (BLUR_PASS == PRE_BLUR_CONSTANT_ID)
+        {
             sample_pos = vec2(p.xy + 0.5) + rotation * offset.xy * blur_radius;
+        }
         else
             sample_pos = get_sample_pos(p0, world_radius, offset, tbn[0], tbn[1], camera_data.current.viewproj, rotation);
 
@@ -153,11 +167,13 @@ void main()
 
         bool is_in_screen = (all(greaterThanEqual(q.xy, ivec2(0, 0))) && all(lessThan(q.xy, control.size)));
 
+#if 1
         if (p.xy == ivec2(640, 360) && is_in_screen)
         {
             //debugPrintfEXT("q: %d %d", q.x, q.y);
             imageStore(debug_output, q.xy, vec4(viridis_quintic(offset.z), 1.0));
         }
+#endif
 
         vec4 s = imageLoad(noisy_input, q.xy);
         vec3 pos = imageLoad(world_position, q.xy).xyz;
@@ -168,8 +184,11 @@ void main()
         if (global_constants.data.use_gaussian_weight == 1)
             w = get_gaussian_weight(offset.z);
 
-        float ndotx = dot(Xs, Ns);
-        float plane_dist_w = abs(ndotx * a + b);
+        vec3 Nvs = mat3(camera_data.current.view) * Ns;
+        vec3 Xvs = (camera_data.current.view * vec4(pos, 1.0)).xyz;
+        float ndotx = dot(Xvs, Nv);
+        float plane_dist_w = abs(ndotx * geometry_weight_params.x + geometry_weight_params.y);
+        plane_dist_w = smoothstep(1.0, 0.0, plane_dist_w);
 
         //float w_plane = smoothstep(saturate(1))
 
@@ -178,17 +197,20 @@ void main()
 
         float cosa = clamp(dot(Ns, N), 0.0, 1.0);
         float a = acos(cosa);
-        float w_n = smoothstep(a0, 0.0, a);
+        float w_n = a * normal_weight_params;
+        w_n = smoothstep(1.0, 0.0, w_n);
 
         vec3 ray = pos - p0;
         float dist_to_plane = abs(dot(ray, N));
         float relative_plane_dist = dist_to_plane / Z;
         float w_ = clamp(1.0 - abs(dist_to_plane) * plane_dist_norm, 0.0, 1.0);
 
-        float w_hit_dist = exp(-3.0 * abs(s.a - hit_t0) * global_constants.data.hit_distance_scale);
+        float w_hit_dist = exp(-3.0 * abs(s.a * hit_distance_weight_params.x + hit_distance_weight_params.y));
+        w_hit_dist = mix(0.1, 1.0, w_hit_dist);
 
         if (global_constants.data.use_geometry_weight == 1)
-            w *= w_;
+            //w *= w_;
+            w *= plane_dist_w;
 
         if (global_constants.data.use_normal_weight == 1)
             w *= w_n;

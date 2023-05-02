@@ -110,4 +110,68 @@ vec4 bicubic_filter(sampler2D tex, vec2 uv, vec4 render_target_params)
     return color / total_w;
 }
 
+vec3 linear_to_YCoCg(vec3 rgb) 
+{
+#if 0
+    float Y = dot(rgb, vec3(0.25, 0.5, 0.25));
+    float Co = dot(rgb, vec3(0.5, 0.00, -0.5));
+    float Cg = dot(rgb, vec3(-0.25, 0.5, -0.25));
+#else
+    float Co = rgb.r - rgb.b;
+    float t = rgb.b + Co * 0.5;
+    float Cg = rgb.g - t;
+    float Y = t + Cg * 0.5;
+#endif
+    return vec3(Y, Co, Cg);
+}
+
+vec3 YCoCg_to_linear(vec3 ycocg)
+{
+#if 0
+    float t = ycocg.x - ycocg.z;
+
+    vec3 r;
+    r.y = ycocg.x + ycocg.z;
+    r.x = t + ycocg.y;
+    r.z = t - ycocg.y;
+    return max(vec3(0.0), r);
+#else
+    float t = ycocg.x - ycocg.z * 0.5;
+    float g = ycocg.z + t;
+    float b = t - ycocg.y * 0.5;
+    float r = b + ycocg.y;
+    return max(vec3(0.0), vec3(r, g, b));
+#endif
+}
+
+vec4 clamp_negative_to_zero(vec4 color, bool ycocg_color_space)
+{
+    if (ycocg_color_space)
+    {
+        color.rgb = YCoCg_to_linear(color.rgb);
+        color = max(vec4(0), color);
+        color.rgb = linear_to_YCoCg(color.rgb);
+        return color;        
+    }
+    else
+        return max(vec4(0), color);
+}
+
+
+    vec3 linear_to_srgb(vec3 color)
+    {
+        const vec4 consts = vec4(1.055, 0.41666, -0.055, 12.92);
+        color = clamp(color, 0.0, 1.0);
+
+        return mix(consts.x * pow(color, consts.yyy) + consts.zzz, consts.w * color, step(color, vec3(0.0031308)));
+    }
+
+    vec3 srgb_to_linear(vec3 color)
+    {
+        const vec4 consts = vec4(1.0 / 12.92, 1.0 / 1.055, 0.055 / 1.055, 2.4);
+        color = clamp(color, 0.0, 1.0);
+
+        return mix(color * consts.x, pow(color * consts.y + consts.zzz, consts.www), step(vec3(0.04045), color));
+    }
+
 #endif

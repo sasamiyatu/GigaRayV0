@@ -81,6 +81,8 @@ struct Global_Constants_Data
     float lobe_percentage;
     float hit_distance_scale;
     float stabilization_strength;
+    uint use_ycocg_color_space;
+    uint taa;
 };
 
 // Screen output defines
@@ -91,3 +93,7 @@ struct Global_Constants_Data
 #define BLUR_RADIUS 4
 #define HISTORY_LENGTH 5
 #define NORMAL
+
+#define PRE_BLUR_CONSTANT_ID 0
+#define BLUR_CONSTANT_ID 1
+#define POST_BLUR_CONSTANT_ID 2
