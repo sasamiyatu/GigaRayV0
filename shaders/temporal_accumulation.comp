@@ -334,7 +334,6 @@ void main()
     Avirt = 1.0 / a - 1.0;
 
     vec4 current_virt = mix(history_virt, specular_radiance, 1.0 / (1.0 + Avirt));
-
     vec4 current_result = mix(current_surf, current_virt, amount);
     a = mix(1.0 / (1.0 + Asurf), 1.0 / (1.0 + Avirt), amount);
     float Acurr = 1.0 / a;

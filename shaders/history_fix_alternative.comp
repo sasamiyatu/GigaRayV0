@@ -44,9 +44,10 @@ void main()
 
     vec4 diff = imageLoad(accumulated_input, p.xy);
 
-    if (norm_hist_len == 1.0)
+    if (norm_hist_len == 1.0 || global_constants.data.history_fix == 0)
     {
         imageStore(filtered_output, p.xy, diff);
+        return;
     }
 
     float w_sum = 1.0;

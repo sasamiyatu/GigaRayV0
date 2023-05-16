@@ -63,7 +63,7 @@ void main()
 
     mat3 tbn = create_tangent_space(N);
 
-#if 0
+#if 1
     uvec4 seed = uvec4(p.xy, control.frame_number, 42);
     vec4 rand = vec4(pcg4d(seed)) *  ldexp(1.0, -32);
     vec2 u = rand.xy;
@@ -115,7 +115,7 @@ void main()
             mat_props.opacity = 0.0;
             const float light_intensity = global_constants.data.sun_intensity;
 
-            vec3 brdf = evalCombinedBRDF(N, L, V, mat_props) * light_intensity;
+            vec3 brdf = evalCombinedBRDF(v.normal, L, -ray_dir, mat_props) * light_intensity;
             radiance += throughput * brdf;
         }
     }

@@ -189,6 +189,8 @@ void main()
         vec3 Xs = pos - global_constants.data.camera_origin;
         vec3 nr = imageLoad(normal_roughness, q.xy).xyz;
         vec3 Ns = decode_unit_vector(nr.xy, false, true);
+        float sample_roughness = BLUR_CHANNEL == BLUR_CHANNEL_SPECULAR ? nr.b : 1.0;
+
         float w = 1.0;
         if (global_constants.data.use_gaussian_weight == 1)
             w = get_gaussian_weight(offset.z);
@@ -226,6 +228,8 @@ void main()
 
         if (global_constants.data.use_hit_distance_weight == 1)
             w *= w_hit_dist;
+
+        //w *= get_roughness_weight(roughness, sample_roughness);
 
         w = is_in_screen ? w : 0.0;
         s = is_in_screen ? s : vec4(0.0);

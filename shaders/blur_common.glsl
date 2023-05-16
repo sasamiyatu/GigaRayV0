@@ -63,6 +63,14 @@ vec2 get_hit_distance_weight_params(float hit_dist, float inv_accum_speed)
     return vec2(a, -b);
 }
 
+float get_roughness_weight(float roughness0, float roughness)
+{
+    float norm = roughness0 * roughness0 * 0.99 + 0.01;
+    float w = abs(roughness0 - roughness) / norm;
+
+    return clamp(1.0 - w, 0.0, 1.0);
+}
+
 mat3 get_kernel_basis(vec3 V, vec3 N, float roughness)
 {
     mat3 tbn = create_tangent_space(N);
