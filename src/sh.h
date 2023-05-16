@@ -23,16 +23,17 @@ struct Probe_System
     glm::uvec3 probe_counts;
     VkDescriptorSet bindless_descriptor_set;
     GPU_Buffer* gpu_camera_data;
+    Vk_Allocated_Buffer* constant_buffer;
     Scene* scene;
 
-    const float probe_spacing = 100.0;
+    const float probe_spacing = 1.0f;
     const u32 samples_per_pass = 256;
     const u32 max_samples = 16384;
     u32 samples_accumulated = 0;
 
     Mesh debug_mesh;
 
-    void init(Vk_Context* ctx, VkDescriptorSet bindless_descriptor_set, VkDescriptorSetLayout bindless_set_layout, GPU_Buffer* gpu_camera_data, Scene* scene, VkCommandBuffer cmd);
+    void init(Vk_Context* ctx, VkDescriptorSet bindless_descriptor_set, VkDescriptorSetLayout bindless_set_layout, GPU_Buffer* gpu_camera_data, Scene* scene, VkCommandBuffer cmd, Vk_Allocated_Buffer* constant_buffer);
     void init_probe_grid(glm::vec3 min, glm::vec3 max);
     void bake(VkCommandBuffer cmd, Cubemap* envmap, VkSampler sampler);
     void debug_render(VkCommandBuffer cmd);

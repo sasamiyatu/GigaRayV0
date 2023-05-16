@@ -58,11 +58,16 @@ enum Render_Targets
 	BASECOLOR_METALNESS,
 	WORLD_POSITION,
 	INDIRECT_DIFFUSE,
+	INDIRECT_DIFFUSE_SH,
+	INDIRECT_SPECULAR,
 	DENOISER_OUTPUT,
+	DENOISER_SPECULAR_OUTPUT,
 	DENOISER_HISTORY_LENGTH,
 	DENOISER_PING_PONG, // Used internally inside each frame to pass data between different passes,
+	DENOISER_SPECULAR_PING_PONG,
 	DEBUG,				// Not part of any algorithms, used to write arbitrary debug data for visualization
 	TEMPORAL_STABILIZATION_HISTORY,
+	TEMPORAL_STABILIZATION_HISTORY_SPEC,
 	INTERNAL_OCCLUSION_DATA,
 	COMPOSITION_OUTPUT,
 	TAA_OUTPUT,
@@ -93,14 +98,19 @@ enum Pipelines
 	GENERATE_CUBEMAP_PIPELINE2,
 	SKYBOX_PIPELINE,
 	INDIRECT_DIFFUSE_PIPELINE,
+	INDIRECT_SPECULAR_PIPELINE,
 	COMPOSITION_PIPELINE,
 	TEMPORAL_ACCUMULATION,
 	HISTORY_FIX_MIP_GEN,
 	HISTORY_FIX,
 	HISTORY_FIX_ALTERNATIVE,
+	HISTORY_FIX_ALTERNATIVE_SPEC,
 	PRE_BLUR,
 	BLUR,
 	POST_BLUR,
+	PRE_BLUR_SPEC,
+	BLUR_SPEC,
+	POST_BLUR_SPEC,
 	TEMPORAL_STABILIZATION,
 	TONEMAP_AND_TAA,
 	PIPELINE_COUNT,
@@ -152,6 +162,8 @@ struct Renderer
 	Vk_Allocated_Image brdf_lut;
 	Vk_Allocated_Image prefiltered_envmap;
 	Vk_Allocated_Image blue_noise[BLUE_NOISE_TEXTURE_COUNT];
+	Vk_Allocated_Image blue_noise_scalar[BLUE_NOISE_TEXTURE_COUNT];
+	Vk_Allocated_Image blue_noise_vec2[BLUE_NOISE_TEXTURE_COUNT];
 	Cubemap cubemap;
 	GPU_Buffer indirect_draw_buffer;
 	GPU_Buffer instance_data_buffer;

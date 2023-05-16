@@ -34,13 +34,13 @@ struct Settings
     float sun_zenith = glm::degrees(0.1974f);
     float sun_intensity = 20.0f;
     glm::vec3 sun_color = glm::vec3(1.0f);
-    glm::vec4 hit_distance_params = glm::vec4(3.0f, 0.1f, 20.0f, 25.0f);
+    glm::vec4 hit_distance_params = glm::vec4(3.0f, 0.1f, 20.0f, -25.0f);
     float prepass_blur_radius = 15.0f;
     float blur_radius = 7.5f;
     float post_blur_radius_scale = 2.0f;
     bool temporal_accumulation = true;
     bool history_fix = true;
-    int screen_output = DENOISED; // Screen_Output
+    int screen_output = 9; // Screen_Output
     Temporal_Filtering_Mode temporal_filter = Temporal_Filtering_Mode::BICUBIC;
     float bicubic_sharpness = 0.5f;
     bool animate_noise = true;
@@ -64,6 +64,16 @@ struct Settings
     float history_fix_stride = 14.0f;
     bool taa = false;
     bool jitter = false;
+    bool visualize_probes = false;
+    bool use_probe_normal_weight = false;
+    bool use_roughness_override = false;
+    float roughness_override = 0.5f;
+    float lobe_trim_factor = 1.0f;
+    bool demodulate_specular = true;
+    float spec_accum_base_power = 0.5f;
+    float spec_accum_curve = 1.0;
+    bool indirect_diffuse = true;
+    bool indirect_specular = true;
 };
 
 extern Settings g_settings;

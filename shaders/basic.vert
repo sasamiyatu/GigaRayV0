@@ -32,12 +32,11 @@ void main()
     Material mat = material_array.materials[material_id];
     base_color = mat.base_color_factor.rgb;
     mat4 proj = camera_data.current.proj;
-    //proj[2][0] += (control.jitter.x - 0.5) * control.screen_size.x;
-    //proj[2][1] += (control.jitter.y - 0.5) * control.screen_size.y;
+    proj[2][0] += (control.jitter.x - 0.5) * control.screen_size.x;
+    proj[2][1] += (control.jitter.y - 0.5) * control.screen_size.y;
 
     mat4 xform =  proj * camera_data.current.view;
     vec3 pos = vertex_buffer_array[geom_id].verts[gl_VertexIndex].pos;
-    //pos *= 0.01;
     normal = vertex_buffer_array[geom_id].verts[gl_VertexIndex].normal;
     texcoord = vertex_buffer_array[geom_id].verts[gl_VertexIndex].texcoord;
     vec4 view_pos = camera_data.current.view * vec4(pos, 1.0);

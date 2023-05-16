@@ -3,17 +3,21 @@
 #include "scene.h"
 #include "logging.h"
 
-void Probe_System::init(Vk_Context* ctx, VkDescriptorSet bindless_descriptor_set, VkDescriptorSetLayout bindless_set_layout, GPU_Buffer* gpu_camera_data, Scene* scene, VkCommandBuffer cmd)
+void Probe_System::init(Vk_Context* ctx, VkDescriptorSet bindless_descriptor_set, VkDescriptorSetLayout bindless_set_layout, GPU_Buffer* gpu_camera_data, Scene* scene, VkCommandBuffer cmd, Vk_Allocated_Buffer* constant_buffer)
 {
 	this->ctx = ctx;
 	this->gpu_camera_data = gpu_camera_data;
 	this->scene = scene;
+	this->constant_buffer = constant_buffer;
 
 	debug_mesh = create_sphere(4);
 
 	this->bindless_descriptor_set = bindless_descriptor_set;
 	sh_integrate_pipeline = ctx->create_compute_pipeline("shaders/spirv/integrate_sh.comp.spv", bindless_set_layout);
-	sh_debug_rendering_pipeline = ctx->create_raster_pipeline("shaders/spirv/sh_debug.vert.spv", "shaders/spirv/sh_debug.frag.spv");
+
+	Raster_Options opt = {};
+	opt.color_formats[0] = VK_FORMAT_B8G8R8A8_UNORM;
+	sh_debug_rendering_pipeline = ctx->create_raster_pipeline("shaders/spirv/sh_debug.vert.spv", "shaders/spirv/sh_debug.frag.spv", opt);
 
 	create_vertex_buffer(&debug_mesh, cmd, ctx);
 	create_index_buffer(&debug_mesh, cmd, ctx);
@@ -52,7 +56,8 @@ void Probe_System::bake(VkCommandBuffer cmd, Cubemap* envmap, VkSampler sampler)
 	{
 		Descriptor_Info(probe_samples.buffer, 0, VK_WHOLE_SIZE),
 		Descriptor_Info(sampler, envmap->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
-		Descriptor_Info(scene->tlas.value().acceleration_structure)
+		Descriptor_Info(scene->tlas.value().acceleration_structure),
+		Descriptor_Info(constant_buffer->buffer, 0, VK_WHOLE_SIZE)
 	};
 
 	struct
@@ -99,11 +104,13 @@ void Probe_System::debug_render(VkCommandBuffer cmd)
 		glm::uvec3 probe_counts;
 		float probe_spacing;
 		glm::vec3 probe_min;
+		float render_scale;
 	} pc;
 
 	pc.probe_counts = probe_counts;
 	pc.probe_spacing = probe_spacing;
 	pc.probe_min = bbmin;
+	pc.render_scale = 0.01f;
 	vkCmdPushConstants(cmd, sh_debug_rendering_pipeline.layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
 	vkCmdBindIndexBuffer(cmd, debug_mesh.index_buffer.buffer, 0, VK_INDEX_TYPE_UINT32);
 	vkCmdPushDescriptorSetWithTemplateKHR(cmd, sh_debug_rendering_pipeline.update_template, sh_debug_rendering_pipeline.layout, 0, descriptor_info);

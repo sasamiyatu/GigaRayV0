@@ -4,6 +4,7 @@
 #extension GL_EXT_scalar_block_layout : enable
 
 #include "sh.glsl"
+#include "misc.glsl"
 
 layout (location = 0) in vec3 normal;
 layout (location = 1) flat in uint probe_index;
@@ -21,7 +22,7 @@ void main()
     vec3 N = normalize(normal);
     vec3 evaluated_sh = eval_sh(probe, N);
 
-    //out_color = vec4(N * 0.5 + 0.5, 1.0);
+    evaluated_sh = linear_to_srgb(evaluated_sh);
     out_color = vec4(evaluated_sh, 1.0);
 
     //if (probe_index > 20)

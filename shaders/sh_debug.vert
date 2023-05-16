@@ -25,6 +25,7 @@ layout( push_constant ) uniform constants
     uvec3 probe_counts;
     float probe_spacing;
     vec3 probe_min;
+    float render_scale;
 } control;
 
 layout (location = 0) out vec3 normal;
@@ -51,7 +52,7 @@ void main()
 
     probe_index = linear_idx;
     mat4 xform = camera_data.proj * camera_data.view;
-    vec3 pos = verts[gl_VertexIndex].pos + probe_pos;
+    vec3 pos = control.render_scale * verts[gl_VertexIndex].pos + probe_pos;
     normal = verts[gl_VertexIndex].normal;
     vec4 hpos = xform * vec4(pos, 1.0);
     gl_Position = hpos;

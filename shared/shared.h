@@ -83,6 +83,15 @@ struct Global_Constants_Data
     float stabilization_strength;
     uint use_ycocg_color_space;
     uint taa;
+    uint use_probe_normal_weight;
+    uint use_roughness_override;
+    float roughness_override;
+    float lobe_trim_factor;
+    uint demodulate_specular;
+    float spec_accum_base_power;
+    float spec_accum_curve;
+    uint indirect_diffuse;
+    uint indirect_specular;
 };
 
 // Screen output defines
@@ -97,3 +106,6 @@ struct Global_Constants_Data
 #define PRE_BLUR_CONSTANT_ID 0
 #define BLUR_CONSTANT_ID 1
 #define POST_BLUR_CONSTANT_ID 2
+
+#define BLUR_CHANNEL_DIFFUSE 0
+#define BLUR_CHANNEL_SPECULAR 1

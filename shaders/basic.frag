@@ -19,7 +19,7 @@ layout(set = 0, binding = 5, scalar) buffer SH_sample_buffer
     SH_2 probes[];
 } SH_probes;
 layout(set = 0, binding = 6) uniform accelerationStructureEXT scene;
-layout(set = 0, binding = 7) readonly buffer global_constants_t
+layout(set = 0, binding = 7, scalar) readonly buffer global_constants_t
 {
     Global_Constants_Data data;
 } global_constants;
@@ -236,7 +236,8 @@ void main()
     MaterialProperties mat_props;
     mat_props.baseColor = albedo;
     mat_props.metalness = metallic_roughness.b;
-    mat_props.roughness = metallic_roughness.g;
+    //mat_props.roughness = metallic_roughness.g;
+    mat_props.roughness = global_constants.data.use_roughness_override == 1 ? global_constants.data.roughness_override : metallic_roughness.g;
     mat_props.emissive = vec3(0.0);
     mat_props.transmissivness = 0.0;
     mat_props.opacity = 0.0;
@@ -250,6 +251,7 @@ void main()
     //color = vec4(total + indirect, 1.0);
     color = vec4(total, base_color.a);
     //color = vec4(evaluated_sh, 1.0);
+    
     normal_roughness = vec4(encode_unit_vector(N, false), mat_props.roughness, 1.0);
     basecolor_metalness = vec4(mat_props.baseColor.rgb, mat_props.metalness);
     // if (gl_FragCoord.xy == vec2(0.5))

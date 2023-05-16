@@ -26,6 +26,11 @@ layout (binding = 0, set = 0, scalar) buffer SH_sample_buffer
 
 layout (binding = 1, set = 0) uniform samplerCube env_map;
 layout (binding = 2, set = 0) uniform accelerationStructureEXT scene;
+layout (binding = 3, set = 0, scalar) readonly buffer global_constants_t
+{
+    Global_Constants_Data data;
+} global_constants;
+
 
 layout (set = 1, binding = 0) uniform sampler2D textures[];
 layout (set = 1, binding = 1, scalar) readonly buffer vertex_buffer_array_t
@@ -131,7 +136,7 @@ shared SH_2[8] subgroup_SH;
 
 void main()
 {
-    const vec3 L = normalize(vec3(0.0, 1.0, 0.2));
+    const vec3 L = global_constants.data.sun_direction;
     uvec4 seed = uvec4(420, control.samples_accumulated, gl_SubgroupID, gl_LocalInvocationID);
     seed = pcg4d(seed);
     seed = pcg4d(seed);
@@ -182,7 +187,11 @@ void main()
             Vertex v = get_interpolated_vertex(custom_instance_id, primitive_id, barycentrics);
             ro = offset_ray(v.pos, v.geometric_normal);
             if (dot(v.geometric_normal, -dir) < 0.0) 
+            {
+                // If we hit a backface, push the ray through the surface and keep going
+                // This effectively makes each surface single sided
                 break;
+            }
 
 #ifdef NEE
             rayQueryEXT shadow_ray;
@@ -193,7 +202,7 @@ void main()
             if (rayQueryGetIntersectionTypeEXT(shadow_ray, true) == gl_RayQueryCommittedIntersectionNoneEXT)
             {
                 vec3 V = -dir;
-                radiance += throughput * eval_combined_brdf(v.normal, L, V, v.material);
+                radiance += throughput * eval_combined_brdf(v.normal, L, V, v.material) * global_constants.data.sun_intensity;
             }
 #endif
 
@@ -224,6 +233,8 @@ void main()
     vec3 n = first_dir;
     float pdf = 1.0 / 4.0; // Pi predivided
     radiance /= pdf;
+
+    //radiance = vec3(1.0);
 
     sh.coefs[0] += 0.282095f * radiance;
     sh.coefs[1] += -0.488603f * n.y * radiance;

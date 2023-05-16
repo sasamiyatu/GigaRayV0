@@ -28,6 +28,7 @@ layout(binding = 7, set = 0, scalar) uniform camera_buffer{
 layout(binding = 8, set = 0, rgba32f) uniform image2D debug_output;
 
 layout (constant_id = 0) const int BLUR_PASS = 1;
+layout (constant_id = 1) const int BLUR_CHANNEL = 0;
 
 layout( push_constant ) uniform constants
 {
@@ -74,12 +75,20 @@ void main()
         return;
     }
 
-    float accumulated_frames = imageLoad(history_length, p.xy).r * 255.0;
+    vec2 accum_frames = imageLoad(history_length, p.xy).rg * 255.0;
+    float accumulated_frames = BLUR_CHANNEL == BLUR_CHANNEL_DIFFUSE ? accum_frames.x : accum_frames.y;
     
     vec3 p0 = imageLoad(world_position, p.xy).xyz;
+    vec3 V = normalize(camera_data.current.inverse_view[3].xyz - p0);
     vec4 n0r0 = imageLoad(normal_roughness, p.xy);
     vec3 N = decode_unit_vector(n0r0.xy, false, true);
     float d0 = texelFetch(depth, p.xy, 0).r;
+
+    float roughness = 1.0;
+    if (BLUR_CHANNEL == BLUR_CHANNEL_SPECULAR)
+    {
+        roughness = n0r0.b * n0r0.b;
+    }
 
     if (d0 == 0.0)
     {
@@ -94,7 +103,7 @@ void main()
     vec3 X = (p0 - global_constants.data.camera_origin);
 
     float Z = control.depth_scale / d0;
-    float hit_dist_normalization = global_constants.data.hit_dist_params.x + global_constants.data.hit_dist_params.y * abs(Z);
+    float hit_dist_normalization = get_hit_distance_normalization(global_constants.data.hit_dist_params, Z, roughness);
     float frustum_size = global_constants.data.min_rect_dim_mul_unproject * abs(Z);
     float hit_t = center.a * hit_dist_normalization;
     float hit_dist_factor = clamp(hit_t / frustum_size, 0.0, 1.0);
@@ -121,10 +130,10 @@ void main()
         blur_radius *= control.blur_radius_scale;
     }
 
-    mat3 tbn = create_tangent_space(N);
+    mat3 tbn = get_kernel_basis(V, N, roughness);
     float world_radius = blur_radius * global_constants.data.unproject * Z;
 
-    float normal_weight_params = get_normal_weight_params(inv_accum_speed, global_constants.data.lobe_percentage);
+    float normal_weight_params = get_normal_weight_params(inv_accum_speed, global_constants.data.lobe_percentage, roughness);
 
     float plane_dist_norm = global_constants.data.plane_dist_norm_scale / (1.0 + Z * global_constants.data.unproject);
     vec3 Xv = (camera_data.current.view * vec4(p0, 1.0)).xyz;

@@ -654,4 +654,40 @@ namespace vkinit
 		return desc;
 	}
 
+	inline VkRect2D rect_2d(i32 x, i32 y, u32 w, u32 h)
+	{
+		VkRect2D rect = {};
+		rect.extent = { w, h };
+		rect.offset = { x, y };
+
+		return rect;
+	}
+
+	inline VkImageSubresourceRange image_subresource_range(
+		VkImageAspectFlags aspect_mask, 
+		u32 base_array_layer = 0, u32 array_layers = 1, 
+		u32 base_mip_level = 0, u32 mip_levels = 1)
+	{
+		VkImageSubresourceRange range = {};
+		range.aspectMask = aspect_mask;
+		range.baseArrayLayer = base_array_layer;
+		range.layerCount = array_layers;
+		range.baseMipLevel = base_mip_level;
+		range.levelCount = mip_levels;
+
+		return range;
+	}
+
+	inline VkViewport viewport(float x, float y, float w, float h, float min_depth, float max_depth, bool flip_y = true)
+	{
+		VkViewport vp = {};
+		vp.x = x;
+		vp.y = flip_y ? h - y : y;
+		vp.width = w;
+		vp.height = flip_y ? -h : h;
+		vp.minDepth = min_depth;
+		vp.maxDepth = max_depth;
+
+		return vp;
+	}
 }

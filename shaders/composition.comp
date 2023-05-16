@@ -6,6 +6,7 @@
 #include "math.glsl"
 #include "../shared/shared.h"
 #include "misc.glsl"
+#include "sh.glsl"
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -25,14 +26,85 @@ layout(binding = 10, set = 0, scalar) readonly buffer global_constants_t
 } global_constants;
 layout(binding = 11, set = 0, rgba32f) uniform image2D history_length;
 layout(binding = 12, set = 0, rgba32f) uniform image2D debug_output;
+layout(binding = 13, set = 0, scalar) buffer SH_sample_buffer
+{
+    SH_2 probes[];
+} SH_probes;
+layout(binding = 14, set = 0, rgba32f) uniform image2D world_position;
+layout(binding = 15, set = 0, rgba32f) uniform image2D indirect_specular;
+layout(binding = 16, set = 0, rgba32f) uniform image2D denoised_specular;
 
 layout( push_constant ) uniform constants
 {
-    mat4 inv_proj;
     ivec2 size;
     float image_split_pos;
     uint history_lod;
+    vec3 probe_min;
+    float probe_spacing;
+    ivec3 probe_counts;
 } control;
+
+uint get_probe_linear_index(ivec3 p)
+{
+    return control.probe_counts.x * control.probe_counts.y * p.z + 
+        control.probe_counts.x * p.y + p.x;
+}
+
+vec3 get_probe_irradiance(vec3 P, vec3 N, vec3 probe_min, float probe_spacing, uvec3 probe_counts)
+{
+    vec3 pos_relative = (P - probe_min) / probe_spacing;
+    ivec3 nearest = ivec3(round(pos_relative));
+    ivec3 lower = ivec3(floor(pos_relative));
+
+    vec3 t = fract(pos_relative);
+
+    float w_total = 0.0;
+    SH_2 result;
+
+    for (int i = 0; i < 9; ++i)
+        result.coefs[i] = vec3(0.0);
+
+    for (int z = 0; z < 2; ++z)
+    {
+        for (int y = 0; y < 2; ++y)
+        {
+            for (int x = 0; x < 2; ++x)
+            {
+                vec3 steps = step(vec3(0.5), vec3(x, y, z));
+                steps = steps * -2.0 + 1.0;
+                vec3 weights = steps * (0.5 - t) + 0.5;
+                float w = weights.x * weights.y * weights.z;
+
+                vec3 probe_pos = (lower + ivec3(x, y, z)) * probe_spacing + probe_min;
+                vec3 dir = probe_pos - P;
+                float dist = length(dir);
+                dir /= dist;
+
+                float vis = 1.0;
+
+                if (global_constants.data.use_probe_normal_weight == 1)
+                {
+                    vis = max(0.0, dot(N, dir));
+                }
+
+                w *= vis;
+
+                SH_2 probe = SH_probes.probes[get_probe_linear_index(lower + ivec3(x, y, z))];
+                w_total += w;
+
+                for (int i = 0; i < 9; ++i)
+                    result.coefs[i] += w * probe.coefs[i];
+            }
+        }
+    }
+
+    for (int i = 0; i < 9; ++i)
+        result.coefs[i] /= w_total;
+
+    vec3 evaluated_sh = eval_sh(result, N);
+
+    return evaluated_sh;
+}
 
 void main()
 {
@@ -41,7 +113,6 @@ void main()
         return;
     
     int split_pixel = int(float(control.size.x) * control.image_split_pos);
-    const float exposure = 1.0;
     vec4 color = vec4(0.0);
     if (p.x < split_pixel)
         color = imageLoad(path_tracer_input_image, p.xy);
@@ -50,10 +121,16 @@ void main()
     vec2 uv = vec2(p.xy + 0.5) / vec2(control.size);
 
     vec4 normal_roughness = imageLoad(normal_roughness, p.xy);
+    float linear_roughness = normal_roughness.b * normal_roughness.b;
+    
     vec4 basecolor = imageLoad(basecolor_metalness, p.xy);
     //color.rgb = v.rgb;
     vec3 normal = decode_unit_vector(normal_roughness.rg, false, true);
     float depth = texelFetch(depth, p.xy, 0).r;
+
+    vec3 X = imageLoad(world_position, p.xy).xyz;
+    vec3 V = normalize(global_constants.data.camera_origin - X);
+    float NoV = dot(V, normal);
     vec4 indirect_diffuse = imageLoad(indirect_diffuse, p.xy);
     vec4 denoised = imageLoad(denoiser_output, p.xy);
 
@@ -71,11 +148,20 @@ void main()
     if (control.history_lod == 0)
         history_fix = denoised;
 
-    //vec3 F0 = mix(vec3(0.04), basecolor.rgb, basecolor.a);
+    vec3 F0 = mix(vec3(0.04), basecolor.rgb, basecolor.a);
     //albedo = albedo * (1.0 - F0) + F0;
+    vec3 Fenv = environment_term_rtg(F0, NoV, linear_roughness);
+
+    vec3 specular = imageLoad(denoised_specular, p.xy).rgb;
+    vec3 spec_demod = Fenv * 0.99 + 0.01;
+    specular *= spec_demod;
+    vec3 diffuse = denoised.rgb * albedo * (1.0 - Fenv);
 
     if (split_pixel == 0)
-        color.rgb += denoised.rgb * albedo;
+    {
+        if (global_constants.data.indirect_diffuse == 1) color.rgb += diffuse;
+        if (global_constants.data.indirect_specular == 1) color.rgb += specular;
+    }
 
     //vec3 gamma_corrected = color.rgb;
 
@@ -85,14 +171,10 @@ void main()
     ndc = ndc * 2.0 - 1.0;
     vec4 screen_space = vec4(ndc, depth, 1.0);
 
-    // These work
-    vec4 view_space = control.inv_proj * screen_space;
-    view_space.xyz /= view_space.w;
-    float view_z = 1.0 / (control.inv_proj[2][3] * depth);
-
     float history_fix_z = textureLod(history_fix_depth, uv, control.history_lod).r;
 
     vec3 final_output = vec3(0.0);
+
 
     switch (global_constants.data.screen_output)
     {
@@ -119,6 +201,30 @@ void main()
             break;
         case 7:
             final_output = albedo;
+            break;
+        case 8: 
+            final_output = get_probe_irradiance(X, normal, control.probe_min, control.probe_spacing, control.probe_counts) * (albedo * (1.0 - F0) + F0);
+            break;
+        case 9:
+            final_output = imageLoad(indirect_specular, p.xy).rgb;
+            break;
+        case 10:
+            final_output = imageLoad(denoised_specular, p.xy).rgb;
+            break;
+        case 11:
+            final_output = imageLoad(denoised_specular, p.xy).aaa;
+            break;
+        case 12:
+            final_output = viridis_quintic(1.0 - imageLoad(history_length, p.xy).g * 255.0 / 32.0);
+            break;
+        case 13:
+            final_output = specular;
+            break;
+        case 14:
+            final_output =  basecolor.aaa;
+            break;
+        case 15:
+            final_output = normal_roughness.bbb;
             break;
         default:
             break;

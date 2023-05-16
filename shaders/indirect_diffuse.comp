@@ -35,12 +35,6 @@ layout( push_constant ) uniform constants
 
 #define MAX_BOUNCES 1
 
-float pow5(float x)
-{
-    float clamped = clamp(x, 0.0, 1.0);
-    return pow(1.0 - clamped, 5.0);
-}
-
 void main()
 {
     ivec3 p = ivec3(gl_GlobalInvocationID);
@@ -121,7 +115,7 @@ void main()
             }
 
             float frustum_size = global_constants.data.min_rect_dim_mul_unproject * abs(view_space.z);
-            float hit_dist_normalization = global_constants.data.hit_dist_params.x + global_constants.data.hit_dist_params.y * abs(view_space.z);
+            float hit_dist_normalization = get_hit_distance_normalization(global_constants.data.hit_dist_params, view_space.z, 1.0);
             float normalized_hit_dist = clamp(hit_t / hit_dist_normalization, 0.0, 1.0);
             hit_dist = normalized_hit_dist;
             float reconstructed_hit_t = normalized_hit_dist * hit_dist_normalization;

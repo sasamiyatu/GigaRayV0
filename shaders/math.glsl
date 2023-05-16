@@ -129,4 +129,27 @@ vec3 decode_unit_vector(vec2 p, bool signed, bool should_normalize)
     return should_normalize ? normalize(n) : n;
 }
 
+float pow5(float x)
+{
+    float clamped = clamp(x, 0.0, 1.0);
+    return pow(1.0 - clamped, 5.0);
+}
+
+vec3 get_specular_dominant_direction(vec3 N, vec3 V, float linear_roughness)
+{
+    float f = (1.0 - linear_roughness) * (sqrt(1.0 - linear_roughness) + linear_roughness);
+    vec3 R = reflect(-V, N);
+    vec3 dir = mix(N, R, f);
+
+    return normalize(dir);
+}
+
+
+float get_specular_dominant_factor(float NoV , float roughness)
+{
+    float a = 0.298475 * log (39.4115 - 39.0029 * roughness);
+    float f = pow(clamp (1.0 - NoV, 0.0, 1.0), 10.8649) * (1.0 - a) + a;
+    return clamp(f, 0.0, 1.0);
+}
+
 #endif

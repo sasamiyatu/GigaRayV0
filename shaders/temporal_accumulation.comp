@@ -7,6 +7,7 @@
 #include "../shared/shared.h"
 #include "math.glsl"
 #include "misc.glsl"
+#include "blur_common.glsl"
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -33,6 +34,9 @@ layout(binding = 12, set = 0, scalar) readonly buffer global_constants_t
 layout(binding = 13, set = 0) uniform sampler2D previous_history_length;
 layout(binding = 14, set = 0, rgba32f) uniform image2D out_history_length;
 layout(binding = 15, set = 0, r8ui) uniform uimage2D occlusion_data;
+layout(binding = 16, set = 0, rgba32f) uniform image2D noisy_specular;
+layout(binding = 17, set = 0, rgba32f) uniform image2D accumulated_specular;
+layout(binding = 18, set = 0) uniform sampler2D specular_history;
 
 layout( push_constant ) uniform constants
 {
@@ -41,6 +45,84 @@ layout( push_constant ) uniform constants
     uint frames_accumulated;
 } control;
 
+#define MAX_ACCUM_FRAME_NUM 32
+
+// NOTE: X and Xprev should be in camera relative space
+float compute_parallax(vec3 X, vec3 Xprev, vec3 camera_delta)
+{
+    vec3 V = normalize(X);
+    vec3 Vprev = normalize(Xprev - camera_delta);
+    float cosa = clamp(dot(V, Vprev), 0.0, 1.0);
+    float parallax = sqrt(1.0 - cosa * cosa) / max(cosa, 1e-6);
+    parallax *= 60.0; // Optionally normalized to 60 fps
+
+    return parallax;
+}
+
+vec2 get_screen_uv(mat4 world_to_clip, vec3 X)
+{
+    vec4 clip = world_to_clip * vec4(X, 1.0);
+    clip /= clip.w;
+    clip.y = -clip.y;
+    vec2 uv = clip.xy * 0.5 + 0.5;
+    return uv;
+}
+
+// MAX_ACCUM_FRAME_NUM = 32-64
+// SPEC_ACCUM_BASE_POWER = 0.5 -1.0 (greater values lead to less aggressive accumulation)
+// SPEC_ACCUM_CURVE = 1.0 (aggressiveness of history rejection depending on 
+// viewing angle: 1 = low , 0.66 = medium , 0.5 = high)
+float get_spec_accum_speed(float amax, float roughness, float NoV, float parallax)
+{
+    float acos01sq = 1.0 - NoV;
+
+    float a = pow(clamp(acos01sq, 0.0, 1.0), global_constants.data.spec_accum_curve);
+    float b = 1.1 + roughness * roughness;
+    float parallax_sensitivity = (b + a) / (b - a);
+    float power_scale = 1.0 + parallax * parallax_sensitivity;
+    float f = 1.0 - exp2(-200.0 * roughness * roughness);
+    f *= pow(roughness, global_constants.data.spec_accum_base_power * power_scale);
+    float A = MAX_ACCUM_FRAME_NUM * f;
+
+    return min(A, amax);
+}
+
+vec3 get_x_virtual(vec3 X, vec3 V, float NoV, float roughness, float hit_dist)
+{
+    float f = get_specular_dominant_factor(NoV, roughness);
+    return X - V * hit_dist * f;
+}
+
+float get_normal_weight(float roughness, vec3 N, vec3 Nprev)
+{
+    float w_params = get_normal_weight_params(1.0, 0.5, roughness);
+    float cosa = dot(N, Nprev);
+    float angle = acos(cosa);
+
+    return clamp(1.0 - angle * w_params, 0.0, 1.0);
+}
+
+vec4 get_bilinear_weights(Bilinear bilinear)
+{
+    vec4 bilinear_weights = {
+        (1.0 - bilinear.weights.x) * (1.0 - bilinear.weights.y), (bilinear.weights.x) * (1.0 - bilinear.weights.y),
+        (1.0 - bilinear.weights.x) * (bilinear.weights.y), (bilinear.weights.x) * (bilinear.weights.y)
+    };
+
+    return bilinear_weights;
+}
+
+vec4 apply_bilinear_filter(image2D image, Bilinear bilinear)
+{
+    vec4 w = get_bilinear_weights(bilinear);
+
+    vec4 s00 = imageLoad(image, ivec2(bilinear.origin + vec2(0, 0)));
+    vec4 s10 = imageLoad(image, ivec2(bilinear.origin + vec2(1, 0)));
+    vec4 s01 = imageLoad(image, ivec2(bilinear.origin + vec2(0, 1)));
+    vec4 s11 = imageLoad(image, ivec2(bilinear.origin + vec2(1, 1)));
+
+    return s00 * w.x + s10 * w.y + s01 * w.z + s11 * w.w;
+}
 
 void main()
 {
@@ -49,21 +131,26 @@ void main()
         return;
 
     vec4 radiance = imageLoad(noisy_input, p.xy);
+    vec4 specular_radiance = imageLoad(noisy_specular, p.xy);
+    float spec_hit_dist = specular_radiance.w;
 
     if (global_constants.data.temporal_accumulation == 0)
     {
         imageStore(accumulated_output, p.xy, radiance);
+        imageStore(accumulated_specular, p.xy, specular_radiance);
         imageStore(out_history_length, p.xy, vec4(1.0 / 255.0));
         return;
     }
 
     vec4 curr_normal_roughness = imageLoad(current_normal_roughness, p.xy);
+    float roughness = curr_normal_roughness.b * curr_normal_roughness.b;
     vec3 curr_normal = decode_unit_vector(curr_normal_roughness.xy, false, true);
     float curr_depth = texelFetch(current_depth, p.xy, 0).r;
 
     if (curr_depth == 0.0)
     {
         imageStore(accumulated_output, p.xy, vec4(0.0));
+        imageStore(accumulated_specular, p.xy, vec4(0.0));
         imageStore(out_history_length, p.xy, vec4(1.0 / 255.0));
         return;
     }
@@ -73,7 +160,9 @@ void main()
     ndc = ndc * 2.0 - 1.0;
 
     vec3 Xv = get_view_pos(vec3(ndc, curr_depth), camera_data.current.proj);
+    float hit_distance_scale = get_hit_distance_normalization(global_constants.data.hit_dist_params, Xv.z, roughness);
     vec3 X = (camera_data.current.inverse_view * vec4(Xv, 1.0)).xyz;
+    vec3 V = normalize(camera_data.current.inverse_view[3].xyz - X);
 
     vec4 X_clip_prev = (camera_data.previous.viewproj * vec4(X, 1.0));
     X_clip_prev /= X_clip_prev.w;
@@ -81,17 +170,14 @@ void main()
     vec2 X_clip_uv = X_clip_prev.xy * 0.5 + 0.5;
     X_clip_uv.y = 1.0 - X_clip_uv.y;
     Bilinear bilinear = get_bilinear_filter(X_clip_uv, vec2(control.size));
-    vec4 bilinear_weights = {
-        (1.0 - bilinear.weights.x) * (1.0 - bilinear.weights.y), (bilinear.weights.x) * (1.0 - bilinear.weights.y),
-        (1.0 - bilinear.weights.x) * (bilinear.weights.y), (bilinear.weights.x) * (bilinear.weights.y)
-    };
+    vec4 bilinear_weights = get_bilinear_weights(bilinear);
 
     float frustum_size = global_constants.data.min_rect_dim_mul_unproject * abs(Xv.z);
     float inv_dist_to_point = 1.0 / frustum_size;
     const float occlusion_threshold = 0.005;
 
     vec3 X_prev = X; // This should take motion vectors into account, but for now our scene is static.
-    vec3 X_prev_cam_rel = (X - camera_data.current.inverse_view[3].xyz);
+    vec3 X_prev_cam_rel = (X_prev - camera_data.current.inverse_view[3].xyz);
     vec3 Xv_prev = (camera_data.previous.view * vec4(X_prev, 1.0)).xyz;
 
     float is_in_screen = float(X_clip_uv == clamp(X_clip_uv, 0.0, 1.0));
@@ -131,16 +217,24 @@ void main()
     vec4 occlusion_weights = bilinear_weights * valids;
     float w_sum = dot(occlusion_weights, vec4(1.0));
 
-    vec4 history_lengths = textureGather(previous_history_length, vec2(X_clip_uv)).wzxy * 255.0;
-    float history_length = dot(history_lengths, occlusion_weights);
-    history_length = w_sum < 0.001 ? 0.0 : history_length / w_sum;
+    vec4 history_lengths_diff = textureGather(previous_history_length, vec2(X_clip_uv), 0).wzxy * 255.0;
+    vec4 history_lengths_spec = textureGather(previous_history_length, vec2(X_clip_uv), 1).wzxy * 255.0;
+    float history_length_diff = dot(history_lengths_diff, occlusion_weights);
+    float history_length_spec = dot(history_lengths_spec, occlusion_weights);
+    vec2 history_length = vec2(history_length_diff, history_length_spec);
+
+    history_length = w_sum < 0.001 ? vec2(0.0) : history_length / w_sum;
 
     vec4 prev_color = vec4(0.0);
-    if (allow_bicubic)
+    vec4 prev_specular = vec4(0.0);
+    if (false && allow_bicubic)
     {
         vec4 rt_params = vec4(1.0 / vec2(control.size), vec2(control.size));
         prev_color = bicubic_filter(history, X_clip_uv, rt_params);
         prev_color = clamp_negative_to_zero(prev_color, bool(global_constants.data.use_ycocg_color_space));
+
+        prev_specular = bicubic_filter(specular_history, X_clip_uv, rt_params);
+        prev_specular = clamp_negative_to_zero(prev_specular, bool(global_constants.data.use_ycocg_color_space));
     }
     else
     {        
@@ -149,8 +243,25 @@ void main()
         vec4 s01 = texelFetch(history, ivec2(bilinear.origin + vec2(0, 1)), 0);
         vec4 s11 = texelFetch(history, ivec2(bilinear.origin + vec2(1, 1)), 0);
 
+        vec4 s00_s = texelFetch(specular_history, ivec2(bilinear.origin + vec2(0, 0)), 0);
+        vec4 s10_s = texelFetch(specular_history, ivec2(bilinear.origin + vec2(1, 0)), 0);
+        vec4 s01_s = texelFetch(specular_history, ivec2(bilinear.origin + vec2(0, 1)), 0);
+        vec4 s11_s = texelFetch(specular_history, ivec2(bilinear.origin + vec2(1, 1)), 0);
+
+        vec2 h00 = texelFetch(previous_history_length, ivec2(bilinear.origin + vec2(0, 0)), 0).rg * 255.0;
+        vec2 h10 = texelFetch(previous_history_length, ivec2(bilinear.origin + vec2(1, 0)), 0).rg * 255.0;
+        vec2 h01 = texelFetch(previous_history_length, ivec2(bilinear.origin + vec2(0, 1)), 0).rg * 255.0;
+        vec2 h11 = texelFetch(previous_history_length, ivec2(bilinear.origin + vec2(1, 1)), 0).rg * 255.0;
+
         prev_color = s00 * occlusion_weights.x + s10 * occlusion_weights.y + s01 * occlusion_weights.z + s11 * occlusion_weights.w;
+        prev_specular = s00_s * occlusion_weights.x + s10_s * occlusion_weights.y + s01_s * occlusion_weights.z + s11_s * occlusion_weights.w;
+
+        history_length = h00 * occlusion_weights.x + h10 * occlusion_weights.y + h01 * occlusion_weights.z + h11 * occlusion_weights.w;
+        
         prev_color = w_sum < 0.001 ? vec4(0.0) : prev_color / w_sum;
+        prev_specular = w_sum < 0.001 ? vec4(0.0) : prev_specular / w_sum;
+
+        history_length = w_sum < 0.001 ? vec2(0.0) : history_length / w_sum;
     }
 
     NoVprev = abs(dot(normalize(camera_data.previous.inverse_view[3].xyz - X), curr_normal));
@@ -163,19 +274,83 @@ void main()
     footprint_quality *= size_quality;
 
     vec4 final_color = prev_color;
-    float accum_speed_prev = history_length;
+    vec2 accum_speed_prev = history_length;
 
-    float accum_speed = min(accum_speed_prev, 32.0);
-    accum_speed *= mix(footprint_quality, 1.0, 1.0 / (accum_speed + 1.0));
+    vec2 accum_speed = min(accum_speed_prev, vec2(32.0));
+    accum_speed *= mix(vec2(footprint_quality), vec2(1.0), 1.0 / (accum_speed + 1.0));
+
+    vec3 Xc =  (X - camera_data.current.inverse_view[3].xyz);
+    vec3 camera_delta = (camera_data.previous.inverse_view[3].xyz - camera_data.current.inverse_view[3].xyz);
+    float parallax = compute_parallax(Xc, Xc, camera_delta);
+    float A = accum_speed.y;
+    accum_speed.y = get_spec_accum_speed(accum_speed.y, roughness, NoV, parallax);
+    float Asurf = accum_speed.y;
+
     accum_speed += 1.0;
 
-    float alpha = 1.0 / accum_speed;
+    spec_hit_dist *= hit_distance_scale;
 
-    radiance = mix(final_color, radiance, alpha);
+    float Ahitdist = min(accum_speed.y, 32.0);
+    vec4 current_surf = mix(prev_specular, specular_radiance, 1.0 / accum_speed.y);
+
+    vec3 Xvirt = get_x_virtual(X, V, NoV, roughness, spec_hit_dist);
+
+    vec2 uv_prev_virt = get_screen_uv(camera_data.previous.viewproj, Xvirt);
+    vec4 history_virt = texture(specular_history, uv_prev_virt);
+
+    float is_in_screen_virtual = float(uv_prev_virt == clamp(uv_prev_virt, vec2(0.0), vec2(1.0)));
+    float confidence = is_in_screen_virtual;
+
+    Bilinear bilinear_virt = get_bilinear_filter(uv_prev_virt,  vec2(control.size));
+    vec3 N_prev_virt;
+    {
+        vec4 w = get_bilinear_weights(bilinear_virt);
+
+        vec4 s00 = imageLoad(previous_normal_roughness, ivec2(bilinear_virt.origin + vec2(0, 0)));
+        vec4 s10 = imageLoad(previous_normal_roughness, ivec2(bilinear_virt.origin + vec2(1, 0)));
+        vec4 s01 = imageLoad(previous_normal_roughness, ivec2(bilinear_virt.origin + vec2(0, 1)));
+        vec4 s11 = imageLoad(previous_normal_roughness, ivec2(bilinear_virt.origin + vec2(1, 1)));
+
+        vec4 prevN_R = s00 * w.x + s10 * w.y + s01 * w.z + s11 * w.w;
+
+        N_prev_virt = decode_unit_vector(prevN_R.xy, false, true);
+    }
+
+    float hit_dist = current_surf.w * hit_distance_scale;
+    confidence *= get_normal_weight(roughness, curr_normal, N_prev_virt);
+    float hit_dist_virtual = history_virt.w * hit_distance_scale;
+    float hit_dist_max = max(hit_dist_virtual, hit_dist);
+    float hit_dist_delta = abs(current_surf.w - history_virt.w);
+    float threshold_min = 0.02 * smoothstep(0.2, 0.01, parallax);
+    float threshold_max = mix(0.01, 0.25, roughness * roughness) + threshold_min;
+    confidence *= smoothstep(threshold_max, threshold_min, hit_dist_delta);
+
+    float amount = get_specular_dominant_factor(NoV, roughness);
+    amount *= is_in_screen_virtual;
+
+    float Avirt = get_spec_accum_speed(A, roughness, NoV, 0);
+    float Amin = min(Avirt, 3.0 * sqrt(roughness));
+    float a = mix(1.0 / (1.0 + Amin), 1.0 / (1.0 + Avirt), confidence);
+    Avirt = 1.0 / a - 1.0;
+
+    vec4 current_virt = mix(history_virt, specular_radiance, 1.0 / (1.0 + Avirt));
+
+    vec4 current_result = mix(current_surf, current_virt, amount);
+    a = mix(1.0 / (1.0 + Asurf), 1.0 / (1.0 + Avirt), amount);
+    float Acurr = 1.0 / a;
+
+    //if (p.xy == ivec2(640, 360)) debugPrintfEXT("a curr: %f, parallax: %f, confidence: %f, hit dist delta: %f", Acurr, parallax, confidence, hit_dist_delta);
+
+    vec2 alpha = 1.0 / accum_speed;
+
+    radiance = mix(final_color, radiance, alpha.x);
+    //specular_radiance = mix(history_virt, specular_radiance, alpha.x);
+    specular_radiance = current_result;
 
     uint packed_occlusion_data = int(allow_bicubic) | (int(valids[0]) << 1) | (int(valids[1]) << 2) | (int(valids[2]) << 3) | (int(valids[3]) << 4);
 
-    imageStore(out_history_length, p.xy, vec4(accum_speed / 255.0));
+    imageStore(out_history_length, p.xy, vec4(accum_speed.x / 255.0, Acurr / 255.0, 0.0, 0.0));
     imageStore(accumulated_output, p.xy, radiance);
+    imageStore(accumulated_specular, p.xy, specular_radiance);
     imageStore(occlusion_data, p.xy, uvec4(packed_occlusion_data));
 }

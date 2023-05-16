@@ -6,7 +6,7 @@
 #extension GL_EXT_nonuniform_qualifier : require
 
 #define SQUARE_ROUGHNESS
-#define MAX_BOUNCES 4
+#define MAX_BOUNCES 2
 #define RAY_TRACING
 #define NEE
 #define USE_ENVMAP
@@ -257,7 +257,7 @@ void main()
             radiance += throughput;
 #else
             //radiance += throughput * sample_environment_map(rd, environment_map);
-            radiance += throughput * texture(envmap_cube, rd).rgb;
+            //radiance += throughput * texture(envmap_cube, rd).rgb;
 #endif
 #endif
             break;

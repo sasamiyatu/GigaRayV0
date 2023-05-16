@@ -1,0 +1,149 @@
+#version 460
+
+#extension GL_EXT_ray_tracing : enable
+#extension GL_EXT_ray_query : enable
+#extension GL_GOOGLE_include_directive : enable
+#extension GL_EXT_debug_printf : enable
+
+#include "scene.glsl"
+#include "misc.glsl"
+#include "math.glsl"
+#include "brdf.h"
+#include "random.glsl"
+
+
+
+layout(binding = 0, set = 0, rgba32f) uniform image2D indirect_specular;
+layout(binding = 1, set = 0, rgba32f) uniform image2D normal_roughness;
+layout(binding = 3, set = 0) uniform sampler2D basecolor_metalness;
+layout(binding = 4, set = 0) uniform sampler2D depth;
+layout(binding = 5, set = 0) uniform accelerationStructureEXT scene;
+layout(binding = 6, set = 0) uniform samplerCube env_map;
+layout(binding = 7, set = 0) uniform sampler2D blue_noise;
+layout(binding = 8, set = 0, scalar) readonly buffer global_constants_t
+{
+    Global_Constants_Data data;
+} global_constants;
+layout(binding = 9, set = 0, rgba32f) uniform image2D world_position;
+
+layout( push_constant ) uniform constants
+{
+    ivec2 size;
+    uint frame_number;
+    uint frames_accumulated;
+} control;
+
+layout(local_size_x = 4, local_size_y = 8, local_size_z = 1) in;
+
+void main()
+{
+    ivec3 p = ivec3(gl_GlobalInvocationID);
+    if (any(greaterThanEqual(p.xy, control.size)))
+        return;
+
+    vec3 P = imageLoad(world_position, p.xy).xyz;
+    vec3 normal_and_roughness = imageLoad(normal_roughness, p.xy).xyz;
+    vec4 basecolor_metal = texelFetch(basecolor_metalness, p.xy, 0);
+    vec3 N = decode_unit_vector(normal_and_roughness.xy, false, true);
+    float R = normal_and_roughness.b * normal_and_roughness.b;
+    float alpha = R;
+    float alpha_squared = alpha * alpha;
+
+    vec3 Xv = (camera_data.current.view * vec4(P, 1.0)).xyz;
+    vec3 V = normalize(global_constants.data.camera_origin - P);
+
+    vec3 ray_origin = offset_ray(P, N);
+    float z_scale = 0.0003 + abs( Xv.z ) * 0.0005;
+    float NoV0 = abs( dot( N, V ) );
+    ray_origin += V * z_scale;
+    ray_origin += N * pow5( NoV0 ) * z_scale;
+
+    vec3 radiance = vec3(0.0);
+    vec3 throughput = vec3(0.0);
+
+    mat3 tbn = create_tangent_space(N);
+
+#if 0
+    uvec4 seed = uvec4(p.xy, control.frame_number, 42);
+    vec4 rand = vec4(pcg4d(seed)) *  ldexp(1.0, -32);
+    vec2 u = rand.xy;
+#else
+    ivec2 p_ = p.xy % textureSize(blue_noise, 0);
+    vec2 u = texelFetch(blue_noise, p_, 0).rg;
+#endif
+
+    u.x = clamp(u.x * global_constants.data.lobe_trim_factor, 0.0, 1.0);
+
+    vec3 Ve = V * tbn;
+    vec3 f0 = mix(vec3(0.04), basecolor_metal.rgb, basecolor_metal.a);
+    vec3 ray_dir = normalize(sampleSpecularMicrofacet(Ve, alpha, alpha_squared, f0, u, throughput));
+    ray_dir = tbn * ray_dir;
+
+    float hit_dist = 0.0;
+
+    rayQueryEXT rq;
+    rayQueryInitializeEXT(rq, scene, gl_RayFlagsOpaqueEXT, 0xFF, ray_origin, 0.0, ray_dir, 10000.0);
+    rayQueryProceedEXT(rq);
+    if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionTriangleEXT) 
+    {
+        const int primitive_id = rayQueryGetIntersectionPrimitiveIndexEXT(rq, true);
+        vec2 barycentrics = rayQueryGetIntersectionBarycentricsEXT(rq, true);
+        const int custom_instance_id = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
+        float hit_t = rayQueryGetIntersectionTEXT(rq, true);
+        Vertex v = get_interpolated_vertex(custom_instance_id, primitive_id, barycentrics);
+
+        float frustum_size = global_constants.data.min_rect_dim_mul_unproject * abs(Xv.z);
+        float hit_dist_normalization = get_hit_distance_normalization(global_constants.data.hit_dist_params, Xv.z, alpha);
+        float normalized_hit_dist = clamp(hit_t / hit_dist_normalization, 0.0, 1.0);
+        hit_dist = normalized_hit_dist;
+
+        ray_origin = offset_ray(v.pos, v.geometric_normal);
+
+        vec3 L = global_constants.data.sun_direction;
+        rayQueryEXT shadow_ray;
+        rayQueryInitializeEXT(shadow_ray, scene, gl_RayFlagsTerminateOnFirstHitEXT, 0xFF, ray_origin, 0.0, L, 10000.0);
+
+        rayQueryProceedEXT(shadow_ray);
+        if (rayQueryGetIntersectionTypeEXT(shadow_ray, true) == gl_RayQueryCommittedIntersectionNoneEXT)
+        {
+            MaterialProperties mat_props;
+            mat_props.baseColor = v.material.base_color.rgb;
+            mat_props.metalness = v.material.metallic;
+            mat_props.roughness = v.material.roughness;
+            mat_props.emissive = vec3(0.0);
+            mat_props.transmissivness = 0.0;
+            mat_props.opacity = 0.0;
+            const float light_intensity = global_constants.data.sun_intensity;
+
+            vec3 brdf = evalCombinedBRDF(N, L, V, mat_props) * light_intensity;
+            radiance += throughput * brdf;
+        }
+    }
+    else
+    {
+        //radiance += throughput * texture(env_map, ray_dir).rgb;
+        hit_dist = 1.0;
+    }
+
+    float NoV = abs( dot( N, V ) );
+    vec3 Fenv = environment_term_rtg( f0, NoV, alpha );
+    vec3 spec_demod = Fenv * 0.99 + 0.01;
+
+    if (global_constants.data.demodulate_specular == 1)
+        radiance /= spec_demod;
+
+    if (any(isnan(radiance)) || any(isinf(radiance)))
+        radiance = vec3(0.0);
+#if 0
+    if (control.frames_accumulated != 0)
+    {
+        vec4 prev_color = imageLoad(indirect_specular, p.xy);
+        float total = float(control.frames_accumulated) + 1.0;
+        //out_color = mix(out_color.rgb, prev_color.rgb, float(control.frames_accumulated) / total);
+        float alpha = max(0.10, 1.0 / total);
+        radiance = mix(prev_color.rgb, radiance.rgb, alpha);
+    }
+#endif
+
+    imageStore(indirect_specular, p.xy, vec4(radiance, hit_dist));
+}

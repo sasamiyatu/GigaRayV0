@@ -290,14 +290,40 @@ void UI_Overlay::update_and_render(VkCommandBuffer cmd, float dt)
 			ImGui::SliderFloat("Sun azimuth (deg)", &g_settings.sun_azimuth, 0.0f, 360.0f, "%.2f");
 			ImGui::SliderFloat("Sun zenith (deg)", &g_settings.sun_zenith, 0.0f, 180.0f, "%.2f");
 			ImGui::SliderFloat("Sun intensity", &g_settings.sun_intensity, 0.0f, 999.0f, "%.1f");
+			ImGui::Checkbox("Indirect diffuse", &g_settings.indirect_diffuse);
+			ImGui::Checkbox("Indirect specular", &g_settings.indirect_specular);
 		}
 		if (ImGui::CollapsingHeader("Indirect diffuse", ImGuiTreeNodeFlags_CollapsingHeader | ImGuiTreeNodeFlags_DefaultOpen))
 		{
 			ImGui::Checkbox("Animate noise", &g_settings.animate_noise);
 		}
+		if (ImGui::CollapsingHeader("Indirect specular", ImGuiTreeNodeFlags_CollapsingHeader | ImGuiTreeNodeFlags_DefaultOpen))
+		{
+			ImGui::Checkbox("Use roughness override", &g_settings.use_roughness_override);
+			ImGui::SliderFloat("Roughness override", &g_settings.roughness_override, 0.0f, 1.0f, "%.2f");
+			ImGui::SliderFloat("Lobe trim factor", &g_settings.lobe_trim_factor, 0.0f, 1.0f, "%.2f");
+			ImGui::Checkbox("Demodulate specular", &g_settings.demodulate_specular);
+		}
 		if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_CollapsingHeader | ImGuiTreeNodeFlags_DefaultOpen))
 		{
-			static const char* on_screen_modes[] = { "Final output", "Indirect diffuse", "Denoised", "Hit distance", "Blur radius", "History length", "Normal", "Albedo"};
+			static const char* on_screen_modes[] = { 
+				"Final output", 
+				"Indirect diffuse",
+				"Denoised", 
+				"Hit distance", 
+				"Blur radius", 
+				"History length",
+				"Normal", 
+				"Albedo",
+				"Probe irradiance",
+				"Indirect specular",
+				"Denoised specular",
+				"Specular hit distance",
+				"Specular history length",
+				"Remodulated denoised specular",
+				"Metalness",
+				"Roughness"
+			};
 			ImGui::SliderFloat("Exposure", &g_settings.exposure, 0.0f, 100.0f, "%.3f", ImGuiSliderFlags_Logarithmic);
 			ImGui::Combo("On screen", &g_settings.screen_output, on_screen_modes, (int)std::size(on_screen_modes));
 			ImGui::Checkbox("TAA", &g_settings.taa);
@@ -311,6 +337,8 @@ void UI_Overlay::update_and_render(VkCommandBuffer cmd, float dt)
 			ImGui::SliderFloat("blur radius", &g_settings.blur_radius, 0.0f, 100.0f, "%.1f");
 			ImGui::SliderFloat("post blur radius scale", &g_settings.post_blur_radius_scale, 0.0f, 5.0f, "%.1f");
 			ImGui::Checkbox("Temporal accumulation", &g_settings.temporal_accumulation);
+			ImGui::SliderFloat("Spec accum base power", &g_settings.spec_accum_base_power, 0.5f, 1.0f, "%.2f");
+			ImGui::SliderFloat("Spec accum curve", &g_settings.spec_accum_curve, 0.5f, 1.0f, "%.2f");
 			ImGui::Checkbox("History fix", &g_settings.history_fix);
 			ImGui::Checkbox("Alternative history fix", &g_settings.use_alternative_history_fix);
 			ImGui::SliderFloat("Alt hist fix stride", &g_settings.history_fix_stride, 1.0f, 30.0f, "%.0f");
@@ -332,6 +360,13 @@ void UI_Overlay::update_and_render(VkCommandBuffer cmd, float dt)
 			ImGui::SliderFloat("Lobe percentage", &g_settings.lobe_percentage, 0.01f, 1.0f, "%.2f");
 			ImGui::SliderFloat("Hit distance scale", &g_settings.hit_distance_scale, 0.01f, 10.0f, "%.2f");
 			ImGui::SliderFloat("Stabilization strength", &g_settings.stabilization_strength, 0.0f, 1.0f, "%.2f");
+
+		}
+
+		if (ImGui::CollapsingHeader("Probes", ImGuiTreeNodeFlags_CollapsingHeader))
+		{
+			ImGui::Checkbox("Show probes", &g_settings.visualize_probes);
+			ImGui::Checkbox("Normal weight", &g_settings.use_probe_normal_weight);
 		}
 
 		ImGui::PopItemWidth();

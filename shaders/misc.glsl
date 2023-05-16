@@ -158,20 +158,54 @@ vec4 clamp_negative_to_zero(vec4 color, bool ycocg_color_space)
 }
 
 
-    vec3 linear_to_srgb(vec3 color)
-    {
-        const vec4 consts = vec4(1.055, 0.41666, -0.055, 12.92);
-        color = clamp(color, 0.0, 1.0);
+vec3 linear_to_srgb(vec3 color)
+{
+    const vec4 consts = vec4(1.055, 0.41666, -0.055, 12.92);
+    color = clamp(color, 0.0, 1.0);
 
-        return mix(consts.x * pow(color, consts.yyy) + consts.zzz, consts.w * color, step(color, vec3(0.0031308)));
-    }
+    return mix(consts.x * pow(color, consts.yyy) + consts.zzz, consts.w * color, step(color, vec3(0.0031308)));
+}
 
-    vec3 srgb_to_linear(vec3 color)
-    {
-        const vec4 consts = vec4(1.0 / 12.92, 1.0 / 1.055, 0.055 / 1.055, 2.4);
-        color = clamp(color, 0.0, 1.0);
+vec3 srgb_to_linear(vec3 color)
+{
+    const vec4 consts = vec4(1.0 / 12.92, 1.0 / 1.055, 0.055 / 1.055, 2.4);
+    color = clamp(color, 0.0, 1.0);
 
-        return mix(color * consts.x, pow(color * consts.y + consts.zzz, consts.www), step(vec3(0.04045), color));
-    }
+    return mix(color * consts.x, pow(color * consts.y + consts.zzz, consts.www), step(vec3(0.04045), color));
+}
+
+// "Ray Tracing Gems", Chapter 32, Equation 4 - the approximation assumes GGX VNDF and Schlick's approximation
+vec3 environment_term_rtg(vec3 f0, float NoV, float linear_roughness)
+{
+    float m = linear_roughness * linear_roughness;
+
+    vec4 X;
+    X.x = 1.0;
+    X.y = NoV;
+    X.z = NoV * NoV;
+    X.w = NoV * X.z;
+
+    vec4 Y;
+    Y.x = 1.0;
+    Y.y = m;
+    Y.z = m * m;
+    Y.w = m * Y.z;
+
+    mat2 M1 = transpose(mat2( 0.99044, -1.28514, 1.29678, -0.755907 ));
+    mat3 M2 = transpose(mat3( 1.0, 2.92338, 59.4188, 20.3225, -27.0302, 222.592, 121.563, 626.13, 316.627 ));
+
+    mat2 M3 = transpose(mat2( 0.0365463, 3.32707, 9.0632, -9.04756 ));
+    mat3 M4 = transpose(mat3( 1.0, 3.59685, -1.36772, 9.04401, -16.3174, 9.22949, 5.56589, 19.7886, -20.2123 ));
+
+    float bias = dot( M1 * X.xy, Y.xy ) / ( dot( M2 * X.xyw, Y.xyw ) );
+    float scale = dot( M3 * X.xy, Y.xy ) / ( dot( M4 * X.xzw, Y.xyw ) );
+
+    return clamp( f0 * scale + bias, vec3(0.0), vec3(1.0) );
+}
+
+float get_hit_distance_normalization(vec4 hit_distance_params, float view_z, float roughness)
+{
+    return (hit_distance_params.x + hit_distance_params.y * abs(view_z)) * mix(1.0, hit_distance_params.z, exp2(hit_distance_params.w * roughness * roughness));
+}
 
 #endif
