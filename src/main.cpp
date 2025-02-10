@@ -1,3 +1,4 @@
+#define SDL_MAIN_HANDLED
 #include "SDL.h"
 #include "SDL_vulkan.h"
 #define VOLK_IMPLEMENTATION
@@ -32,6 +33,14 @@ constexpr int WINDOW_HEIGHT = 720;
 
 int main(int argc, char** argv)
 {
+	if (argc != 2)
+	{
+		printf("Usage: %s <scene.glb>\n", argv[0]);
+		return EXIT_FAILURE;
+	}
+
+	std::string scene_file = argv[1];
+
 	Timer timer;
 	Platform platform;
 	platform.init_window(WINDOW_WIDTH, WINDOW_HEIGHT, "GigaRay");
@@ -41,14 +50,8 @@ int main(int argc, char** argv)
 	Resource_Manager<Material> material_manager;
 	Renderer renderer(&ctx, &platform, &mesh_manager, &texture_manager, &material_manager, &timer);
 
-	//lm::Lightmap_Renderer lightmap_renderer(&ctx, (u32)WINDOW_WIDTH, (u32)WINDOW_HEIGHT);
-	//lightmap_renderer.init_scene("data/cube/Cube.gltf");
-	//lightmap_renderer.init_scene("data/cornellbox/scene.gltf");
-	//lightmap_renderer.init_scene("data/cornellbox_emissive/cornellbox.gltf");
-	//lightmap_renderer.init_scene("data/sphere/sphere.gltf");
-
 	//Mesh2 gltf = load_gltf_from_file("data/cube/Cube.gltf", &ctx, &texture_manager, &material_manager);
-	Mesh2 gltf = load_gltf_from_file("data/sponza/Sponza.gltf", &ctx, &texture_manager, &material_manager);
+	Mesh2 gltf = load_gltf_from_file(scene_file.c_str(), &ctx, &texture_manager, &material_manager);
 	//Mesh2 gltf = load_gltf_from_file("data/cornellbox/scene.gltf", &ctx, &texture_manager, &material_manager, true);
 	std::vector<Mesh> meshes(gltf.meshes.size());
 	create_from_mesh2(&gltf, (u32)gltf.meshes.size(), meshes.data());
@@ -107,6 +110,7 @@ int main(int argc, char** argv)
 	//lightmap_renderer.set_camera(ecs.get_component<Camera_Component>(game_state.player_entity));
 	renderer.init_scene(&ecs);
 
+	bool camera_locked = false;
 	bool quit = false;
 	while (!quit)
 	{
@@ -137,10 +141,11 @@ int main(int argc, char** argv)
 						{
 						case SDL_SCANCODE_F1:
 							g_settings.rendering_mode = Rendering_Mode(((int)g_settings.rendering_mode + 1) % (int)Rendering_Mode::MAX_RENDER_MODES);
-							renderer.frames_accumulated = 0;
+							//renderer.frames_accumulated = 0;
+							renderer.change_render_mode(g_settings.rendering_mode);
 							break;
 						case SDL_SCANCODE_F2:
-							//renderer.render_mode = Renderer::SIDE_BY_SIDE;
+							camera_locked = !camera_locked;
 							break;
 						case SDL_SCANCODE_UP:
 							//renderer.magic_uint++;
@@ -172,18 +177,16 @@ int main(int argc, char** argv)
 
 		float dt = timer.update();
 
-		//ImGui_ImplSDL2_NewFrame(platform.window.window);
 		
-		game_state.simulate(dt);
+		if (!camera_locked)
+			game_state.simulate(dt);
 
 		renderer.do_frame(&ecs, dt);
-		//lightmap_renderer.render();
 
 		double end = timer.get_current_time();
 	}
 here:
 	vkDeviceWaitIdle(ctx.device);
-	//lightmap_renderer.shutdown();
 	renderer.cleanup();
 	g_garbage_collector->shutdown();
 

@@ -9,7 +9,7 @@
 #include "imgui/imgui_impl_vulkan.h"
 
 #define VSYNC 1
-#define VALIDATION_VERBOSE
+//#define VALIDATION_VERBOSE
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL debug_callback(
 	VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
@@ -524,7 +524,7 @@ Vk_Allocated_Image Vk_Context::allocate_image(VkExtent3D extent, VkFormat format
 	cinfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 	cinfo.mipLevels = mip_levels;
 	cinfo.samples = VK_SAMPLE_COUNT_1_BIT;
-	cinfo.usage = usage; //VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+	cinfo.usage = usage;
 	cinfo.tiling = tiling;
 	cinfo.flags = flags;
 
@@ -532,7 +532,7 @@ Vk_Allocated_Image Vk_Context::allocate_image(VkExtent3D extent, VkFormat format
 	allocinfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
 
 	Vk_Allocated_Image img;
-	vmaCreateImage(allocator, &cinfo, &allocinfo, &img.image, &img.allocation, nullptr);
+	VK_CHECK(vmaCreateImage(allocator, &cinfo, &allocinfo, &img.image, &img.allocation, nullptr));
 
 	VkImageViewCreateInfo view_info{ VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
 	view_info.format = cinfo.format;
@@ -543,7 +543,7 @@ Vk_Allocated_Image Vk_Context::allocate_image(VkExtent3D extent, VkFormat format
 	view_info.subresourceRange.baseArrayLayer = 0;
 	view_info.subresourceRange.layerCount = 1;
 	view_info.subresourceRange.aspectMask = aspect;
-	vkCreateImageView(device, &view_info, nullptr, &img.image_view);
+	VK_CHECK(vkCreateImageView(device, &view_info, nullptr, &img.image_view));
 
 	g_garbage_collector->push([=]()
 		{
@@ -1353,7 +1353,7 @@ Vk_Pipeline Vk_Context::create_raster_pipeline(const char* vertex_shader, const 
 
 Vk_Allocated_Image Vk_Context::load_texture(const char* filepath, bool flip_y, bool generate_mipmaps)
 {
-	constexpr int required_n_comps = 4; // GIVE ME 4 CHANNELS!!!
+	constexpr int required_n_comps = 4;
 
 	stbi_set_flip_vertically_on_load((int)flip_y);
 	int x, y, comp;

@@ -18,6 +18,7 @@
 #include "scene.h"
 #include "g_math.h"
 #include "uioverlay.h"
+#include "settings.h"
 
 #define VK_CHECK(x)                                                 \
 	do                                                              \
@@ -122,7 +123,6 @@ enum Samplers
 	BILINEAR_SAMPLER_WRAP,
 	BILINEAR_SAMPLER_CLAMP,
 	ANISOTROPIC_SAMPLER,
-	BICUBIC_SAMPLER,
 	CUBEMAP_SAMPLER,
 	SAMPLER_COUNT
 };
@@ -190,6 +190,8 @@ struct Renderer
 
 	Timer* timer;
 
+	bool needs_history_clear = false;
+
 	Renderer(Vk_Context* context, Platform* platform, 
 		Resource_Manager<Mesh>* mesh_manager, 
 		Resource_Manager<Texture>* texture_manager,
@@ -216,6 +218,8 @@ struct Renderer
 	void build_bottom_level_acceleration_structure(Mesh* mesh, VkCommandBuffer cmd);
 	void create_top_level_acceleration_structure(ECS* ecs, VkCommandBuffer cmd);
 	Vk_Allocated_Image prefilter_envmap(VkCommandBuffer cmd, Vk_Allocated_Image envmap);
+
+	void change_render_mode(Rendering_Mode new_mode);
 
 	void create_lookup_textures();
 	void create_cubemap_from_envmap();

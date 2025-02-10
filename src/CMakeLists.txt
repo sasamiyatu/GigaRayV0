@@ -6,7 +6,6 @@ add_executable(GigaRayV0
     defines.h
     ecs.h
     ecs.cpp
-    enumbuilder.h
     events.h
     events.cpp
     g_math.h
@@ -79,5 +78,5 @@ target_include_directories(GigaRayV0 PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_include_directories(GigaRayV0 PRIVATE "${PROJECT_SOURCE_DIR}/external")
 target_include_directories(GigaRayV0 PRIVATE ${Vulkan_INCLUDE_DIRS}) 
 target_link_libraries(GigaRayV0 vma tinyobjloader glm spirv-reflect xatlas)
-target_link_libraries(GigaRayV0 Vulkan::Vulkan sdl2)
+target_link_libraries(GigaRayV0 Vulkan::Vulkan SDL2::SDL2)
 add_dependencies(GigaRayV0 Shaders)

@@ -364,10 +364,6 @@ void Renderer::create_samplers()
 	cinfo.minFilter = VK_FILTER_NEAREST;
 	cinfo.magFilter = VK_FILTER_NEAREST;
 	vkCreateSampler(context->device, &cinfo, nullptr, &samplers[POINT_SAMPLER]);
-
-	cinfo.minFilter = VK_FILTER_CUBIC_IMG;
-	cinfo.magFilter = VK_FILTER_CUBIC_IMG;
-	vkCreateSampler(context->device, &cinfo, nullptr, &samplers[BICUBIC_SAMPLER]);
 }
 
 
@@ -527,6 +523,7 @@ void Renderer::initialize()
 	transition_swapchain_images(get_current_frame_command_buffer());
 	create_render_targets(get_current_frame_command_buffer());
 
+
 	pipelines[COMPOSITION_PIPELINE] = context->create_compute_pipeline("shaders/spirv/composition.comp.spv");
 	pipelines[TEMPORAL_ACCUMULATION] = context->create_compute_pipeline("shaders/spirv/temporal_accumulation.comp.spv");
 	pipelines[HISTORY_FIX_MIP_GEN] = context->create_compute_pipeline("shaders/spirv/history_fix_mip_gen.comp.spv");
@@ -573,6 +570,17 @@ void Renderer::initialize()
 
 	for (int i = 0; i < FRAMES_IN_FLIGHT; ++i)
 		query_pools[i] = context->create_query_pool();
+
+
+	{ // Reset query pools
+		VkCommandBuffer cmd = get_current_frame_command_buffer();
+		vk_begin_command_buffer(cmd);
+		for (int i = 0; i < FRAMES_IN_FLIGHT; ++i)
+			vkCmdResetQueryPool(cmd, query_pools[i], 0, 128);
+		vkEndCommandBuffer(cmd);
+		vk_command_buffer_single_submit(cmd);
+		vkQueueWaitIdle(context->graphics_queue);
+	}
 
 	platform->get_window_size(&window_width, &window_height);
 	aspect_ratio = (float)window_width / (float)window_height;
@@ -628,7 +636,7 @@ void Renderer::do_frame(ECS* ecs, float dt)
 // Loads the meshes from the scene and creates the acceleration structures
 void Renderer::init_scene(ECS* ecs)
 {
-	constexpr char* envmap_src = "D:/envmaps/piazza_bologni_4k.hdr";
+	constexpr char* envmap_src = "data/envmaps/piazza_bologni_4k.hdr";
 	//char* envmap_src = "data/golf_course_sunrise_4k.hdr";
 	//constexpr char* envmap_src = "data/kloppenheim_06_puresky_4k.hdr";
 	environment_map = context->load_texture_hdri(
@@ -1087,11 +1095,14 @@ void Renderer::end_frame()
 	
 	vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, query_pools[current_frame_index], 1);
 
+	VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+
 	VkSubmitInfo submit{ VK_STRUCTURE_TYPE_SUBMIT_INFO };
 	submit.commandBufferCount = 1;
 	submit.pCommandBuffers = &cmd;
 	submit.signalSemaphoreCount = 1;
 	submit.waitSemaphoreCount = 1;
+	submit.pWaitDstStageMask = &wait_stage;
 	submit.pWaitSemaphores = &context->frame_objects[current_frame_index].image_available_sem;
 	submit.pSignalSemaphores = &context->frame_objects[current_frame_index].render_finished_sem;
 
@@ -1189,7 +1200,7 @@ void Renderer::trace_rays(VkCommandBuffer cmd)
 {
 	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, pipelines[PATH_TRACER_PIPELINE].pipeline);
 
-	// Update descriptor set
+	// Push descriptors
 	u32 frame_index = frame_counter % FRAMES_IN_FLIGHT;
 	{
 		Descriptor_Info descriptor_info[] =
@@ -1226,7 +1237,6 @@ void Renderer::trace_rays(VkCommandBuffer cmd)
 
 	VkStridedDeviceAddressRegionKHR callable_region{};
 
-	//printf("Trace rays cmd at: %f\n", timer->get_current_time());
 	vkCmdTraceRaysKHR(
 		cmd,
 		&raygen_region,
@@ -1368,6 +1378,21 @@ void Renderer::rasterize(VkCommandBuffer cmd, ECS* ecs)
 		vkCmdClearColorImage(cmd, framebuffer.render_targets[DEBUG].images[current_frame_gbuffer_index].image, VK_IMAGE_LAYOUT_GENERAL, &clr, 1, &range);
 	}
 
+	if (needs_history_clear)
+	{
+		VkClearColorValue clr = {};
+		VkImageSubresourceRange range = {};
+		range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		range.baseArrayLayer = 0;
+		range.baseMipLevel = 0;
+		range.layerCount = 1;
+		range.levelCount = 1;
+
+		vkCmdClearColorImage(cmd, framebuffer.render_targets[DENOISER_HISTORY_LENGTH].images[previous_frame_gbuffer_index].image, VK_IMAGE_LAYOUT_GENERAL, &clr, 1, &range);
+
+		needs_history_clear = false;
+	}
+
 	VkClearValue clear_value{};
 	clear_value.color = { 0.2f, 0.5f, 0.1f };
 
@@ -1507,8 +1532,6 @@ void Renderer::rasterize(VkCommandBuffer cmd, ECS* ecs)
 		}
 	}
 	//probe_system.debug_render(cmd);
-
-end_rendering:
 
 	//ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
 
@@ -2365,7 +2388,7 @@ void Renderer::create_render_targets(VkCommandBuffer cmd)
 		denoiser_history_length.images[i] = context->allocate_image(
 			{ (u32)w, (u32)h, 1 },
 			denoiser_history_length.format,
-			VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+			VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
 			VK_IMAGE_ASPECT_COLOR_BIT
 		);
 	}
@@ -3103,6 +3126,12 @@ Vk_Allocated_Image Renderer::prefilter_envmap(VkCommandBuffer cmd, Vk_Allocated_
 
 
 	return prefiltered;
+}
+
+void Renderer::change_render_mode(Rendering_Mode new_mode)
+{
+	frames_accumulated = 0;
+	needs_history_clear = true;
 }
 
 void Renderer::create_lookup_textures()

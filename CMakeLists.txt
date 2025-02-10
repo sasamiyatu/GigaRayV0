@@ -4,6 +4,10 @@ project ("GigaRayV0")
 
 set(CMAKE_CXX_STANDARD 17)
 
+set(VULKAN_SDK_DIR $ENV{VULKAN_SDK})
+set(SDL2_DIR ${VULKAN_SDK_DIR}/cmake)
+
+find_package(SDL2 REQUIRED)
 find_package(Vulkan REQUIRED)
 
 add_subdirectory(external)

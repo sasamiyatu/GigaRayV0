@@ -40,7 +40,7 @@ struct Settings
     float post_blur_radius_scale = 2.0f;
     bool temporal_accumulation = true;
     bool history_fix = true;
-    int screen_output = 9; // Screen_Output
+    int screen_output = 0; // Screen_Output
     Temporal_Filtering_Mode temporal_filter = Temporal_Filtering_Mode::BICUBIC;
     float bicubic_sharpness = 0.5f;
     bool animate_noise = true;
@@ -73,7 +73,7 @@ struct Settings
     float spec_accum_base_power = 0.5f;
     float spec_accum_curve = 1.0;
     bool indirect_diffuse = true;
-    bool indirect_specular = true;
+    bool indirect_specular = false;
 };
 
 extern Settings g_settings;

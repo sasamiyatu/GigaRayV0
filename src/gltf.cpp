@@ -7,17 +7,7 @@
 #include "r_mesh.h"
 #include "resource_manager.h"
 #include "texture.h"
-
-template <typename T>
-static void read_data(cgltf_accessor* acc, u32 stride, const std::map<std::string, u8*>& buffer_data, T* out_data)
-{
-    assert(stride != 0);
-    u8* src_data = buffer_data.at(acc->buffer_view->buffer->uri);
-    u8* start = src_data + acc->buffer_view->offset + acc->offset;
-    u8* end = start + acc->stride * acc->count;
-    assert(stride == sizeof(T));
-    memcpy(out_data, start, acc->stride * acc->count);
-}
+#include <filesystem>
 
 Mesh2 load_gltf_from_file(const char* filepath, Vk_Context* ctx, Resource_Manager<Texture>* texture_manager, Resource_Manager<Material>* material_manager, bool swap_y_and_z)
 {
@@ -28,24 +18,10 @@ Mesh2 load_gltf_from_file(const char* filepath, Vk_Context* ctx, Resource_Manage
     cgltf_result result = cgltf_parse_file(&options, filepath, &data);
     assert(result == cgltf_result_success);
 
-    u32 str_length = (u32)strlen(filepath);
-    char* stripped = (char*)malloc(str_length + 1);
-    strcpy(stripped, filepath);
-    char* slashpos;
-    for (slashpos = stripped + str_length - 1; slashpos && *slashpos != '/'; --slashpos)
-        ;
-    *(slashpos + 1) = 0;
+	result = cgltf_load_buffers(&options, data, filepath);
+    assert(result == cgltf_result_success);
 
-    
-    std::map<std::string, u8*> buffers;
-    for (int i = 0; i < data->buffers_count; ++i)
-    {
-        u32 size = (u32)data->buffers[i].size;
-        std::string filepath = std::string(stripped) + std::string(data->buffers[i].uri);
-        buffers[data->buffers[i].uri] = nullptr;
-        u32 bytes_read = read_entire_file(filepath.c_str(), &buffers[data->buffers[i].uri]);
-        assert(size == bytes_read);
-    }
+	std::filesystem::path dir = std::filesystem::path(filepath).parent_path();
 
     std::map<cgltf_material*, int> local_material_map;
     for (int i = 0; i < data->materials_count; ++i)
@@ -60,7 +36,7 @@ Mesh2 load_gltf_from_file(const char* filepath, Vk_Context* ctx, Resource_Manage
                 cgltf_texture_view view = data->materials[i].pbr_metallic_roughness.base_color_texture;
                 cgltf_texture* tex = view.texture;
                 cgltf_image* img = tex->image;
-                std::string file_path = std::string(stripped) + std::string(img->uri);
+                std::string file_path = (dir / std::filesystem::path(img->uri)).string();
                 i32 id = texture_manager->get_id_from_string(file_path);
                 if (id == -1)
                 {
@@ -85,7 +61,7 @@ Mesh2 load_gltf_from_file(const char* filepath, Vk_Context* ctx, Resource_Manage
                 cgltf_texture_view view = data->materials[i].pbr_metallic_roughness.metallic_roughness_texture;
                 cgltf_texture* tex = view.texture;
                 cgltf_image* img = tex->image;
-                std::string file_path = std::string(stripped) + std::string(img->uri);
+                std::string file_path = (dir / std::filesystem::path(img->uri)).string();
                 i32 id = texture_manager->get_id_from_string(file_path);
                 if (id == -1)
                 {
@@ -94,7 +70,7 @@ Mesh2 load_gltf_from_file(const char* filepath, Vk_Context* ctx, Resource_Manage
                     id = texture_manager->register_resource(t, file_path);
                 }
 
-                new_mat.metallic_roughness = id;
+                new_mat.metallic_roughness = (int)cgltf_texture_index(data, tex);
             }
             else
             {
@@ -107,9 +83,6 @@ Mesh2 load_gltf_from_file(const char* filepath, Vk_Context* ctx, Resource_Manage
         i32 material_id = material_manager->register_resource(new_mat, name);
         local_material_map[&data->materials[i]] = material_id;
     }
-
-
-    free(stripped);
 
     for (int n = 0; n < data->nodes_count; ++n)
     {
@@ -124,33 +97,8 @@ Mesh2 load_gltf_from_file(const char* filepath, Vk_Context* ctx, Resource_Manage
                 cgltf_primitive* prim = &mesh->primitives[j];
                 // Read indices
                 std::vector<u32> indices(prim->indices->count);
-                cgltf_buffer_view* idx_buf_view = prim->indices->buffer_view;
-                i32 index_count = (i32)prim->indices->count;
-                i32 index_offset = (i32)prim->indices->offset;
-                u32 stride = (u32)prim->indices->stride;
-                cgltf_buffer* buffer = idx_buf_view->buffer;
-                u8* buf_data = buffers[buffer->uri];
-                u8* start = buf_data + idx_buf_view->offset + index_offset;
-                u8* end = start + idx_buf_view->size;
-                assert(stride != 1);
-
-                int index = 0;
-                for (u8* ptr = start; ptr != end && index < index_count; ptr += stride, index++)
-                {
-                    if (stride == 2)
-                    {
-                        u16 idx = *(u16*)ptr;
-                        indices[index] = (u32)idx;
-                    }
-                    else if (stride == 4)
-                    {
-                        indices[index] = *(u32*)ptr;
-                    }
-                    else
-                    {
-                        assert(false);
-                    }
-                }
+                cgltf_size indices_read = cgltf_accessor_unpack_indices(prim->indices, indices.data(), sizeof(uint32_t), indices.size());
+                assert(indices_read == indices.size());
 
                 std::vector<glm::vec3> normals;
                 std::vector<glm::vec3> positions;
@@ -167,7 +115,8 @@ Mesh2 load_gltf_from_file(const char* filepath, Vk_Context* ctx, Resource_Manage
                         assert(acc->count != 0);
                         assert(acc->component_type == cgltf_component_type_r_32f);
                         normals.resize(acc->count);
-                        read_data(acc, (u32)acc->stride, buffers, normals.data());
+                        cgltf_size num_floats = cgltf_accessor_unpack_floats(acc, nullptr, 0);
+						cgltf_accessor_unpack_floats(acc, glm::value_ptr(normals[0]), num_floats);
                     }
                     else if (a.type == cgltf_attribute_type_position)
                     {
@@ -175,7 +124,8 @@ Mesh2 load_gltf_from_file(const char* filepath, Vk_Context* ctx, Resource_Manage
                         assert(acc->count != 0);
                         assert(acc->component_type == cgltf_component_type_r_32f);
                         positions.resize(acc->count);
-                        read_data(acc, (u32)acc->stride, buffers, positions.data());
+                        cgltf_size num_floats = cgltf_accessor_unpack_floats(acc, nullptr, 0);
+                        cgltf_accessor_unpack_floats(acc, glm::value_ptr(positions[0]), num_floats);
                     }
                     else if (a.type == cgltf_attribute_type_texcoord)
                     {
@@ -183,7 +133,8 @@ Mesh2 load_gltf_from_file(const char* filepath, Vk_Context* ctx, Resource_Manage
                         assert(acc->count != 0);
                         assert(acc->component_type == cgltf_component_type_r_32f);
                         texcoords.resize(acc->count);
-                        read_data(acc, (u32)acc->stride, buffers, texcoords.data());
+                        cgltf_size num_floats = cgltf_accessor_unpack_floats(acc, nullptr, 0);
+                        cgltf_accessor_unpack_floats(acc, glm::value_ptr(texcoords[0]), num_floats);
                     }
                     else if (a.type == cgltf_attribute_type_tangent)
                     {
@@ -191,7 +142,8 @@ Mesh2 load_gltf_from_file(const char* filepath, Vk_Context* ctx, Resource_Manage
                         assert(acc->count != 0);
                         assert(acc->component_type == cgltf_component_type_r_32f);
                         tangents.resize(acc->count);
-                        read_data(acc, (u32)acc->stride, buffers, tangents.data());
+                        cgltf_size num_floats = cgltf_accessor_unpack_floats(acc, nullptr, 0);
+                        cgltf_accessor_unpack_floats(acc, glm::value_ptr(tangents[0]), num_floats);
                     }
                     else
                     {
@@ -222,11 +174,6 @@ Mesh2 load_gltf_from_file(const char* filepath, Vk_Context* ctx, Resource_Manage
                 ret.meshes.push_back(vg);
             }
         }
-    }
-
-    for (auto& pair : buffers)
-    {
-        free(pair.second);
     }
 
     cgltf_free(data);
